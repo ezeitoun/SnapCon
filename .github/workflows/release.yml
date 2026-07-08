@@ -12,7 +12,7 @@ name: release
 # release. It attaches its binary to the already-published release if/when it runs;
 # if it never gets a runner, the release still ships with the other three.
 #
-#   git tag v1.5.2 && git push origin v1.5.2
+#   git tag v0.0.7 && git push origin v0.0.7
 
 on:
   push:

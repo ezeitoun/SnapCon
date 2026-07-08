@@ -6,12 +6,20 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||'Unknown Error'), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.0.5";
+const VERSION = "0.0.7";
 const getJSON = url => fetch(url).then(r => r.json());
 const postJSON = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)});
 let FILES = [], FOLDERS = [], CURRENT_SUB = "", SELECTED = null, MAP = null, FLEET = [], MAPSEL = {};
 let USE_T_NOTATION = false, FILAMENT_COST = 0, ELECTRICITY_RATE = 0;
 let ALLOW_MAPPING = true, SUGGEST_MATCHING = true;
+
+// ---- /orca/<printer name> deep link — "_" = space, case-insensitive — shows
+// only that printer's fleet card. Read once at load; the path doesn't change
+// within a session.
+const URL_PRINTER_FILTER = (() => {
+  const m = location.pathname.match(/^\/orca\/(.+)$/i);
+  return m ? decodeURIComponent(m[1]).replace(/_/g, ' ').trim().toLowerCase() : null;
+})();
 
 // ---- File list sort ----
 let FILE_SORT = localStorage.getItem('snapcon-filesort') || 'new';
@@ -104,6 +112,9 @@ function headLabel(i){ return USE_T_NOTATION ? 'T'+i : String(i+1); }
 init();
 async function init(){
   wireUI();
+  // Single-printer deep link: the search box would just be dead weight since
+  // renderFleet() ignores it in this mode.
+  if(URL_PRINTER_FILTER && $("fleetSearch")) $("fleetSearch").style.display="none";
   await checkVersion(); await loadConfigUI(); await loadFiles(); await initialFleetLoad();
   // First fleet data is in (or failed) — fade the splash out and drop it.
   const splash=$("splash");
@@ -143,6 +154,8 @@ function wireUI(){
   $("elecLookup").addEventListener("click", doElecLookup);
   $("elecZip").addEventListener("keydown", e=>{ if(e.key==="Enter") doElecLookup(); });
   $("elecApply").addEventListener("click", ()=>{ closeElecModal(); });
+
+  wireFleetDrag();
 
   applySortUI();
   $("sortBtn").addEventListener("click", e=>{ e.stopPropagation(); $("sortMenu").classList.toggle("open"); });
@@ -578,7 +591,8 @@ function renderFleet(){
   all.forEach(p=>{ if(p.online) online++; });
   const pctMatch=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
   const isColor=q in COLOR_FAMILIES;
-  const fleet=!q ? all : all.filter(p=>{
+  const fleet=URL_PRINTER_FILTER ? all.filter(p=>(p.name||'').trim().toLowerCase()===URL_PRINTER_FILTER)
+    : !q ? all : all.filter(p=>{
     if(pctMatch){
       if(!p.online||p.progress==null) return false;
       const pct=p.progress*100, val=parseFloat(pctMatch[2]), op=pctMatch[1];
@@ -588,9 +602,11 @@ function renderFleet(){
     const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
     return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
   });
+  const dragEnabled=SORT_MODE==='none'&&!q;
   fleet.forEach(p=>{
     const card=document.createElement("div");
     card.className="pcard"+(p.online?"":" offline");
+    card.dataset.pid=p.id;
     // status pill
     let statusColor="#6A7180", statusTxt="Offline";
     if(p.online){
@@ -644,7 +660,7 @@ function renderFleet(){
       }
     }
     card.innerHTML=`
-      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete')&&p.filename?`<button class="pill-btn" data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge" style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete')&&p.filename?`<button class="pill-btn" data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
       ${p.online&&(p.errorCode||p.message)?(()=>{
         const e=lookupKlipperError(p.errorCode, p.message);
@@ -755,52 +771,134 @@ function renderFleet(){
   });
 }
 
+// ---- Fleet card reordering by drag (status pill = drag handle, "No Sort" only) ----
+// Polling must not touch the DOM while a drag is live (it'd yank the dragged
+// node out from under the browser's native drag and abort the gesture), and
+// must stay paused through the save round-trip so a stale poll can't flash
+// the pre-drop order back in before the new order lands.
+let FLEET_DRAGGING=false, FLEET_DRAG_SAVING=false;
+function wireFleetDrag(){
+  const wrap=$("fleet");
+  wrap.addEventListener("dragstart", e=>{
+    const handle=e.target.closest(".drag-handle");
+    const card=handle&&handle.closest(".pcard");
+    if(!card){ e.preventDefault(); return; }
+    FLEET_DRAGGING=true;
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed="move";
+    e.dataTransfer.setData("text/plain", card.dataset.pid);
+  });
+  wrap.addEventListener("dragover", e=>{
+    const dragging=wrap.querySelector(".pcard.dragging");
+    if(!dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect="move";
+    const over=e.target.closest(".pcard");
+    wrap.querySelectorAll(".pcard.drag-over").forEach(c=>{ if(c!==over) c.classList.remove("drag-over"); });
+    if(over&&over!==dragging) over.classList.add("drag-over");
+  });
+  wrap.addEventListener("drop", e=>{
+    const dragging=wrap.querySelector(".pcard.dragging");
+    wrap.querySelectorAll(".pcard.drag-over").forEach(c=>c.classList.remove("drag-over"));
+    if(!dragging) return;
+    e.preventDefault();
+    const target=e.target.closest(".pcard");
+    if(target&&target!==dragging){
+      // Dropping forward (dragging was before target) must land AFTER the
+      // target, not before it, or a forward drag becomes a no-op.
+      const forward=!!(dragging.compareDocumentPosition(target)&Node.DOCUMENT_POSITION_FOLLOWING);
+      wrap.insertBefore(dragging, forward?target.nextSibling:target);
+    }
+    else if(!target) wrap.appendChild(dragging);
+    const order=[...wrap.querySelectorAll(".pcard[data-pid]")].map(c=>parseInt(c.dataset.pid,10));
+    FLEET_DRAG_SAVING=true;
+    applyPrinterOrder(order).finally(()=>{ FLEET_DRAG_SAVING=false; });
+  });
+  wrap.addEventListener("dragend", ()=>{
+    FLEET_DRAGGING=false;
+    wrap.querySelectorAll(".pcard.dragging").forEach(c=>c.classList.remove("dragging"));
+    wrap.querySelectorAll(".pcard.drag-over").forEach(c=>c.classList.remove("drag-over"));
+  });
+}
+// order = new sequence expressed in old printer ids (indices into PRINTERS_CFG)
+async function applyPrinterOrder(order){
+  if(order.length!==PRINTERS_CFG.length||order.some(id=>!Number.isInteger(id)||id<0||id>=PRINTERS_CFG.length)) return;
+  const prows=[...$("setPrinters").children];
+  PRINTERS_CFG=order.map(id=>PRINTERS_CFG[id]);
+  order.forEach(id=>$("setPrinters").appendChild(prows[id]));
+  await saveConfig();
+}
+
 let PUSHES=0;
-async function pushTo(printer, start){
-  if(!SELECTED){ return; }
+// extraUI (optional): {statusEl, fillEl} — a row in the send-to-printers modal
+// that should mirror this job's progress alongside the fleet card/button.
+async function pushTo(printer, start, extraUI){
+  if(!SELECTED){ return false; }
   const map={};
   if(ALLOW_MAPPING) neededColors().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
   const mapped=Object.keys(map).length;
   const st=$("pst-"+printer);
   if(st){ st.className="pstatus"; st.textContent=""; }
+  if(extraUI) setRowUI(extraUI, 0, "", "Uploading…");
   // Capture the clicked button to animate its background as a fill bar
   const progressBtn=document.querySelector(`button[data-id="${printer}"][data-start="${start?'1':'0'}"]`);
   const btnOrigBg=progressBtn?progressBtn.style.background:'';
   if(progressBtn) progressBtn.disabled=true;
   PUSHES++;
+  let ok=false;
   try{
     const r=await postJSON("/api/print",{file:SELECTED,printer,start,map});
     const d=await r.json(); if(!r.ok||d.error||!d.jobId) throw new Error(d.error||("HTTP "+r.status));
-    await pollJob(d.jobId, st, start, mapped, progressBtn);
+    ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI);
   }catch(e){
     if(st){ st.className="pstatus err"; st.textContent=e.message; }
+    if(extraUI) setRowUI(extraUI, 100, "err", e.message);
     if(progressBtn){ progressBtn.style.background=btnOrigBg; progressBtn.disabled=false; }
   }
   finally{ PUSHES=Math.max(0,PUSHES-1); }
   loadFleet();
+  return ok;
 }
 function setBtnFill(btn, pct){
   if(!btn) return;
   btn.style.background=`linear-gradient(to right, rgba(167,139,250,0.55) ${pct}%, rgba(167,139,250,0.13) ${pct}%)`;
 }
-async function pollJob(jobId, st, start, mapped, btn){
+// Mirrors upload/print progress onto a send-modal row: fill width + status text/color.
+function setRowUI(extraUI, pct, cls, txt){
+  if(extraUI.fillEl){ extraUI.fillEl.style.width=pct+"%"; extraUI.fillEl.className="send-row-fill"+(cls?" "+cls:""); }
+  if(extraUI.statusEl){ extraUI.statusEl.className="send-status-txt"+(cls?" "+cls:""); extraUI.statusEl.textContent=txt; }
+}
+async function pollJob(jobId, st, start, mapped, btn, extraUI){
   for(;;){
     await new Promise(r=>setTimeout(r,400));
     let d;
     try{ d=await getJSON("/api/print-status?job="+encodeURIComponent(jobId)); }catch(e){ continue; }
     if(d.error){
       if(st){ st.className="pstatus err"; st.textContent=d.error; }
+      if(extraUI) setRowUI(extraUI, 100, "err", d.error);
       if(btn){ btn.style.background=''; btn.disabled=false; }
-      return;
+      return false;
     }
     // The button itself fills as the upload progress bar — no bar below.
-    if(d.phase==="upload" && d.total) setBtnFill(btn, Math.min(100,Math.round(d.sent/d.total*100)));
-    else if(d.phase==="mapping"){ if(st){ st.className="pstatus work"; st.textContent="Setting head mapping…"; } setBtnFill(btn,100); }
-    else if(d.phase==="starting"){ if(st){ st.className="pstatus work"; st.textContent="Starting print…"; } setBtnFill(btn,100); }
+    if(d.phase==="upload" && d.total){
+      const pct=Math.min(100,Math.round(d.sent/d.total*100));
+      setBtnFill(btn, pct);
+      if(extraUI) setRowUI(extraUI, pct, "work", "Uploading "+pct+"%");
+    }
+    else if(d.phase==="mapping"){
+      if(st){ st.className="pstatus work"; st.textContent="Setting head mapping…"; } setBtnFill(btn,100);
+      if(extraUI) setRowUI(extraUI, 100, "work", "Setting head mapping…");
+    }
+    else if(d.phase==="starting"){
+      if(st){ st.className="pstatus work"; st.textContent="Starting print…"; } setBtnFill(btn,100);
+      if(extraUI) setRowUI(extraUI, 100, "work", "Starting print…");
+    }
     if(d.done){
-      if(st){ st.className="pstatus ok"; st.textContent=(start?"Printing on "+((d.result&&d.result.printer)||""):"Uploaded")+(mapped?" — heads mapped":""); }
+      const doneTxt=(start?"Printing on "+((d.result&&d.result.printer)||""):"Uploaded")+(mapped?" — heads mapped":"");
+      if(st){ st.className="pstatus ok"; st.textContent=doneTxt; }
+      if(extraUI) setRowUI(extraUI, 100, "ok", doneTxt);
       if(btn){ btn.style.background=''; btn.disabled=false; }
-      return;
+      return true;
     }
   }
 }
@@ -833,10 +931,11 @@ function renderSendList(){
     const dot=p.online?(idle?'var(--ok)':'var(--busy)'):'var(--idle)';
     const statusTxt=p.online?(p.state||'online'):'offline';
     return `<label class="send-row">
+      <div class="send-row-fill" data-fill="${esc(p.id)}"></div>
       <input type="checkbox" class="send-chk" data-id="${esc(p.id)}" ${idle?'checked':''}>
       <span class="send-dot" style="background:${dot}"></span>
       <span class="send-name">${esc(p.name)}</span>
-      <span class="send-status-txt">${esc(statusTxt)}</span>
+      <span class="send-status-txt" data-rst="${esc(p.id)}">${esc(statusTxt)}</span>
     </label>`;
   }).join('');
 }
@@ -845,19 +944,24 @@ function setSendBtnsDisabled(dis){
   ['doUpload','doUploadPrint','sendSelectAll','sendSelectIdle'].forEach(id=>{ const b=$(id); if(b) b.disabled=dis; });
 }
 
+function sendRowUI(id){
+  return {
+    statusEl: document.querySelector(`.send-status-txt[data-rst="${id}"]`),
+    fillEl: document.querySelector(`.send-row-fill[data-fill="${id}"]`)
+  };
+}
+
 async function doSendUpload(start){
   const checked=[...document.querySelectorAll('.send-chk:checked')].map(c=>c.dataset.id);
   if(!checked.length){ $('sendFooterStatus').textContent='Select at least one printer.'; return; }
   setSendBtnsDisabled(true);
-  $('sendFooterStatus').textContent=`Sending to ${checked.length} printer${checked.length>1?'s':''}…`;
-  try{
-    await Promise.all(checked.map(id=>pushTo(id,start)));
-    $('sendFooterStatus').textContent='Done.';
-    setTimeout(closeSendModal,1200);
-  }catch(e){
-    $('sendFooterStatus').textContent='Error: '+e.message;
-    setSendBtnsDisabled(false);
-  }
+  $('sendFooterStatus').textContent='';
+  const results=await Promise.all(checked.map(id=>pushTo(id,start,sendRowUI(id))));
+  const ok=results.filter(Boolean).length;
+  $('sendFooterStatus').textContent=ok===checked.length
+    ? `Done — ${ok}/${checked.length} succeeded.`
+    : `Finished with errors — ${ok}/${checked.length} succeeded.`;
+  setSendBtnsDisabled(false);
 }
 
 async function doEstop(printerId){
@@ -1571,7 +1675,7 @@ let FLEET_TIMER=null;
 function startFleetRefresh(){
   if(FLEET_TIMER) clearInterval(FLEET_TIMER);
   const ms=(parseInt($("setRefresh").value,10)||2)*1000;
-  FLEET_TIMER=setInterval(()=>{ if(document.hidden||PUSHES>0) return; const a=document.activeElement; if(a&&a.closest&&a.closest("#fleet")&&(a.tagName==="SELECT"||a.tagName==="INPUT")) return; loadFleet(); },ms);
+  FLEET_TIMER=setInterval(()=>{ if(document.hidden||PUSHES>0||FLEET_DRAGGING||FLEET_DRAG_SAVING) return; const a=document.activeElement; if(a&&a.closest&&a.closest("#fleet")&&(a.tagName==="SELECT"||a.tagName==="INPUT")) return; loadFleet(); },ms);
 }
 async function saveConfig(){
   const s=$("cfgStatus"); s.className="pstatus work"; s.textContent="Saving…";

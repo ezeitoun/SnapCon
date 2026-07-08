@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.0.6
+// server.js — SnapCon  ·  v0.0.7
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.0.5";
+const VERSION = "0.0.7";
 
 const express = require("express");
 const fs = require("fs");
@@ -43,6 +43,12 @@ app.use(express.static(path.join(ASSET_DIR, "public")));
 // Explicit index route so the UI is served even when running from a packaged
 // binary (where express.static from the snapshot can be unreliable).
 app.get("/", (req, res) => {
+  try { res.type("html").send(fs.readFileSync(path.join(ASSET_DIR, "public", "index.html"), "utf8")); }
+  catch (e) { res.status(500).send("index.html not found"); }
+});
+// /orca/<printer name> (case-insensitive, "_" = space) — same page; the client
+// reads the path and filters the fleet down to just that one printer's card.
+app.get(/^\/orca\/.+$/i, (req, res) => {
   try { res.type("html").send(fs.readFileSync(path.join(ASSET_DIR, "public", "index.html"), "utf8")); }
   catch (e) { res.status(500).send("index.html not found"); }
 });
@@ -240,12 +246,15 @@ app.post("/api/print", (req, res) => {
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
 
-  // map is { logicalToolIndex: physicalHeadIndex }. Reject two tools → same head.
+  // map is { logicalToolIndex: physicalHeadIndex }. Reject two tools → same head —
+  // but only when actually starting a print. A plain upload just stages the file
+  // on the printer; the mapping isn't acted on until print start, so a conflicting
+  // (or mismatched-material) mapping shouldn't block getting the file there.
   let tools = [];
   if (map && Object.keys(map).length) {
     tools = Object.keys(map).map(Number).sort((a, b) => a - b);
     const heads = tools.map(t => map[t]);
-    if (new Set(heads).size !== heads.length) {
+    if (start && new Set(heads).size !== heads.length) {
       return res.status(400).json({ error: "Two colors are mapped to the same head — give each its own head." });
     }
   }
