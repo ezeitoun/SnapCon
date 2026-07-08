@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" role="img">
+  <title>FS — Full Spectrum</title>
+  <defs>
+    <linearGradient id="prism" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#ff0080"/>
+      <stop offset="20%"  stop-color="#ff4400"/>
+      <stop offset="40%"  stop-color="#ffcc00"/>
+      <stop offset="60%"  stop-color="#00dd88"/>
+      <stop offset="80%"  stop-color="#0088ff"/>
+      <stop offset="100%" stop-color="#aa00ff"/>
+    </linearGradient>
+    <style>
+      .spin { animation: hue 3s linear infinite; transform-origin: 10px 10px; }
+      @keyframes hue { from { filter: hue-rotate(0deg); } to { filter: hue-rotate(360deg); } }
+    </style>
+  </defs>
+  <g class="spin">
+    <circle cx="10" cy="10" r="10" fill="url(#prism)"/>
+    <text x="10" y="14" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="800" font-size="9" fill="white" letter-spacing="0.5">FS</text>
+  </g>
+</svg>

@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<!-- SnapCon — index v0.0.6 -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SnapCon</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="splash" id="splash">
+  <img src="/snapcon-icon-large.svg" alt="SnapCon">
+  <div class="splash-sub" id="splashsub">connecting to printers…</div>
+</div>
+<div class="shell">
+  <aside class="side">
+    <div class="head">
+      <div class="sort-wrap">
+        <button class="refresh" id="fileSortBtn">↕ Newest</button>
+        <div class="sort-menu left" id="fileSortMenu">
+          <button class="sort-opt" data-fsort="new"><span class="sort-check" id="fsc-new"></span>Newest</button>
+          <button class="sort-opt" data-fsort="old"><span class="sort-check" id="fsc-old"></span>Oldest</button>
+          <button class="sort-opt" data-fsort="az"><span class="sort-check" id="fsc-az"></span>A–Z</button>
+          <button class="sort-opt" data-fsort="za"><span class="sort-check" id="fsc-za"></span>Z–A</button>
+          <button class="sort-opt" data-fsort="big"><span class="sort-check" id="fsc-big"></span>Largest</button>
+          <button class="sort-opt" data-fsort="small"><span class="sort-check" id="fsc-small"></span>Smallest</button>
+        </div>
+      </div>
+      <button class="refresh" id="refresh">Refresh</button>
+    </div>
+    <div class="folderline" id="folderline">…</div>
+    <div class="filter"><input id="filter" placeholder="Filter files…" /></div>
+    <div class="list" id="list"></div>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div class="topbar-brand">
+        <img src="/snapcon-icon-small.svg" alt="SnapCon">
+        <span class="topbar-brand-name">SnapCon</span>
+        <span class="vbadge" id="vbadge"></span>
+      </div>
+      <input id="fleetSearch" class="fleet-search" placeholder="Search printers…" autocomplete="off">
+      <button class="gear" id="filesBtn" title="Show file list"><img src="/folder.svg" class="topbar-icon" alt="Files"></button>
+      <div class="sort-wrap">
+        <button class="gear" id="sortBtn" title="Sort printers"><img src="/sort.svg" class="topbar-icon" alt="Sort"></button>
+        <div class="sort-menu" id="sortMenu">
+          <button class="sort-opt" data-sort="none"><span class="sort-check" id="sc-none"></span>No sort</button>
+          <button class="sort-opt" data-sort="status"><span class="sort-check" id="sc-status"></span>By status</button>
+          <button class="sort-opt" data-sort="time"><span class="sort-check" id="sc-time"></span>By time remaining</button>
+        </div>
+      </div>
+      <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
+      <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
+    </div>
+    <div class="setup" id="setup">
+      <div class="sechead"><h2>Settings</h2><span class="count" id="setupmsg"></span></div>
+
+      <div class="set-tabs">
+        <button class="set-tab active" data-tab="general">General</button>
+        <button class="set-tab" data-tab="notif">Notifications</button>
+        <button class="set-tab" data-tab="printers">Printers</button>
+        <button class="set-tab" data-tab="firmware">Firmware</button>
+      </div>
+
+      <div class="set-panel" id="tab-general">
+      <div class="setcard">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="pi-lbl">G-code folder</span>
+          <input class="field" id="setFolder" placeholder="e.g. C:/Users/you/gcode" style="flex:1" />
+          <button class="btn ghost" id="browseBtn" style="flex:none;white-space:nowrap">Browse…</button>
+        </div>
+
+        <label class="fl" style="margin-top:14px">Refresh interval <span class="hint">seconds between fleet updates</span></label>
+        <input class="field" id="setRefresh" type="number" min="1" max="60" placeholder="2" style="max-width:100px" />
+
+        <label class="fl" style="margin-top:14px">Avg. filament cost <span class="hint">$ per spool</span></label>
+        <input class="field" id="setFilamentCost" type="number" min="0" placeholder="20" style="max-width:100px" />
+
+        <label class="fl" style="margin-top:14px">Electricity rate <span class="hint">$/kWh – for energy cost estimates</span></label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input class="field" id="setElectricityRate" type="number" min="0" step="0.001" placeholder="0.13" style="max-width:100px" />
+          <button class="btn ghost" id="elecSearch" title="Look up average rate by ZIP code" style="padding:5px 10px;display:flex;align-items:center;gap:4px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> ZIP
+          </button>
+        </div>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setTNotation"> Use T0/T1/T2/T3 notation <span class="hint">default: 1–4</span></label>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setOpenCompact"> Open in Compact Mode <span class="hint">start the page in compact view</span></label>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setAllowMapping"> Enable Head Mapping <span class="hint">show color-to-head assignment UI when sending prints</span></label>
+        <label style="margin-top:6px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setSuggestMatching"> Auto-Match Colors <span class="hint">suggest the closest head color; uncheck for T1→T1 order</span></label>
+      </div>
+
+      </div>
+
+      <div class="set-panel" id="tab-notif" style="display:none">
+      <div class="setcard">
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfEnabled"> Enable Notifications</label>
+        <div class="ntf-body" id="ntfBody">
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfEvents"> Notify on events <span class="hint">start / pause / error / complete</span></label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfIntervals"> Interval notifications <span class="hint">25% / 50% / 75%</span></label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfImage"> Include image</label>
+          <div class="ntf-services">
+            <label style="display:flex;align-items:center;gap:6px">
+              <input type="radio" name="ntfService" id="ntfSvcNtfy" value="ntfy" checked> ntfy.sh
+              <span class="pi-lbl" style="margin-left:10px">Topic</span>
+              <input class="field" id="ntfTopic" placeholder="my-printfarm" style="max-width:220px">
+              <button class="btn ghost" type="button" id="ntfGenTopic" style="flex:none;white-space:nowrap">Generate</button>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px">
+              <input type="radio" name="ntfService" id="ntfSvcTelegram" value="telegram"> Telegram
+              <span class="pi-lbl" style="margin-left:10px">Chat ID</span>
+              <input class="field" id="ntfChatId" placeholder="123456789" style="max-width:220px">
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+            <button class="btn ghost" type="button" id="ntfTest">Test Notification</button>
+            <span class="pstatus" id="ntfTestStatus"></span>
+          </div>
+        </div>
+      </div>
+
+      </div>
+
+      <div class="set-panel" id="tab-printers" style="display:none">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+        <input class="field" id="printerSearch" placeholder="Search printers…" style="max-width:220px" />
+        <button class="btn ghost" id="collapseAll" style="white-space:nowrap;flex:none">Collapse All</button>
+      </div>
+      <div id="setPrinters"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn ghost" id="addPrinter">+ Add</button>
+        <button class="btn ghost" id="discover">⟳ Discover local</button>
+        <button class="btn ghost" id="discoverSubnet">⟳ Discover subnet</button>
+      </div>
+      <div id="discwrap" class="discwrap"></div>
+      </div>
+
+      <div class="set-panel" id="tab-firmware" style="display:none">
+        <div class="setcard">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <button class="btn ghost" id="fwGet">Get Firmware</button>
+            <button class="btn ghost" id="fwSelect">Select Firmware</button>
+            <button class="btn primary" id="fwDeploy">Deploy Firmware</button>
+            <span class="hint">reads idle printers only</span>
+            <span class="pstatus" id="fwStatus"></span>
+          </div>
+          <div id="fwResults" style="margin-top:14px"></div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:16px">
+        <button class="btn primary" id="saveCfg">Save</button>
+        <button class="btn primary" id="addAllSave" style="display:none">Add All &amp; Save</button>
+        <span class="pstatus" id="cfgStatus"></span>
+      </div>
+    </div>
+
+    <div class="sechead" id="jobsechead" style="display:none"><h2>Selected Model</h2><span class="count" id="needcount"></span></div>
+    <div class="jobloading" id="jobloading"><div class="jlname" id="jlname"></div><div class="jlbar"><div class="jlfill"></div></div></div>
+    <div class="jobcard" id="jobcard">
+      <div class="jobcard-hdr">
+        <img id="jthumb" class="jthumb" alt="Preview" style="display:none">
+        <div class="jobcard-hdr-text">
+          <div class="jt-row">
+            <div class="jt" id="jt"></div>
+            <div class="jcard-actions">
+              <button class="jcard-btn" id="jobEject" title="Deselect job">⏏</button>
+              <button class="jcard-btn" id="jobSend" title="Send to printers"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button>
+            </div>
+          </div>
+          <div class="jmeta" id="jmeta"></div>
+          <div class="jcompat" id="jcompat" style="display:none"></div>
+          <div class="needstrip" id="needstrip"></div>
+          <div class="nohint" id="nohint"></div>
+          <div class="warn" id="warn"></div>
+        </div>
+      </div>
+    </div>
+    <div class="sechead"><h2>Fleet</h2><span class="count" id="fleetcount"></span></div>
+    <div id="fleet-wrap">
+      <div class="fleet" id="fleet"></div>
+    </div>
+  </main>
+
+  <div class="modal" id="platemodal">
+    <div class="modalbox plate-box">
+      <div class="modalhdr"><span id="platetitle">Plate</span><button class="modalx" id="platex">✕</button></div>
+      <div class="plate-layout">
+        <div class="plate-left">
+          <div class="platewrap" id="platewrap"></div>
+        </div>
+        <div class="plate-side">
+          <div class="plate-list" id="platelist"></div>
+          <div class="plate-actions">
+            <button class="btn-base btn-pause plate-skip-btn" id="plateSkip" disabled>Skip</button>
+            <span class="pstatus" id="plateStatus"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="thumbmodal">
+    <div class="modalbox" style="text-align:center">
+      <div class="modalhdr"><span id="thumbtitle">Preview</span><button class="modalx" id="thumbx">✕</button></div>
+      <div id="thumbwrap" style="min-height:100px"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="unloadmodal">
+    <div class="modalbox" style="text-align:center;max-width:360px">
+      <div class="modalhdr"><span id="unloadtitle">Unload Filament</span><button class="modalx" id="unloadx">✕</button></div>
+      <p style="color:var(--ink-dim);font-size:13px;margin:12px 0 18px" id="unloadmsg"></p>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <button class="btn primary" id="unloadYes">Yes</button>
+        <button class="btn ghost" id="unloadNo">No</button>
+        <button class="btn ghost" id="unloadAll">Unload All</button>
+      </div>
+      <div class="pstatus" id="unloadStatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="bedmodal">
+    <div class="modalbox" style="text-align:center;max-width:340px">
+      <div class="modalhdr"><span id="bedmodaltitle">Set Bed Temperature</span><button class="modalx" id="bedmodalx">✕</button></div>
+      <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px">Enter target temperature (0–100°C, 0 to turn off)</p>
+      <input class="field" id="bedmodalinput" type="number" min="0" max="100" placeholder="60" style="text-align:center;font-size:18px;max-width:120px;margin:0 auto">
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+        <button class="btn primary" id="bedmodalset">Set</button>
+        <button class="btn ghost" id="bedmodaloff">Off</button>
+        <button class="btn ghost" id="bedmodalcancel">Cancel</button>
+      </div>
+      <div class="pstatus" id="bedmodalstatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="maintmodal">
+    <div class="modalbox" style="max-width:480px">
+      <div class="modalhdr"><span id="mainttitle">Maintenance</span><button class="modalx" id="maintx">✕</button></div>
+      <div class="maint-hours-label">Printer Hours</div>
+      <div class="maint-hours" id="maintHours">—</div>
+      <div id="maintHistory"></div>
+      <div class="maint-form">
+        <label>Date <input class="field" id="maintDate" type="date" style="max-width:170px"></label>
+        <label>Comment <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea></label>
+        <div><button class="btn primary" id="maintSave">Save</button> <span class="pstatus" id="maintStatus"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="browsemodal">
+    <div class="modalbox" style="max-width:520px">
+      <div class="modalhdr"><span>Browse for Folder</span><button class="modalx" id="browsex">✕</button></div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input class="field" id="browsepath" style="flex:1;font-family:var(--mono);font-size:12px" placeholder="Type a path or network location…">
+        <button class="btn ghost" id="browsego" style="white-space:nowrap;flex:none">Go</button>
+      </div>
+      <div id="browselist" style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;max-height:340px;overflow:auto;min-height:60px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
+        <span style="font-size:11px;color:var(--ink-faint);flex:1">For network paths type the address and press Go</span>
+        <button class="btn ghost" id="browsecancel">Cancel</button>
+        <button class="btn primary" id="browseok">Select</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="elecmodal">
+    <div class="modalbox" style="max-width:380px">
+      <div class="modalhdr"><span>Look up electricity rate</span><button class="modalx" id="elecmodalx">✕</button></div>
+      <label class="fl" style="margin-bottom:8px">US ZIP code</label>
+      <div style="display:flex;gap:8px">
+        <input class="field" id="elecZip" placeholder="e.g. 33301" maxlength="5" style="max-width:130px">
+        <button class="btn primary" id="elecLookup">Look up</button>
+      </div>
+      <div id="elecResult" style="margin-top:14px;min-height:36px;font-size:13px;line-height:1.5"></div>
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
+        <button class="btn ghost" id="elecmodalcancel">Cancel</button>
+        <button class="btn primary" id="elecApply" style="display:none">Apply rate</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="snapmodal">
+    <div class="modalbox" style="max-width:680px;text-align:center">
+      <div class="modalhdr">
+        <span id="snaptitle">Camera Snapshot</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="btn ghost" id="snaprefresh" style="padding:4px 10px;font-size:11px">↺ Refresh</button>
+          <button class="modalx" id="snapx">✕</button>
+        </div>
+      </div>
+      <div id="snapwrap" style="min-height:200px;display:flex;align-items:center;justify-content:center;padding:4px 0"></div>
+      <div style="margin-top:6px;font-size:11px;color:var(--ink-faint)" id="snapts"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="pfilemodal">
+    <div class="modalbox" style="max-width:760px">
+      <div class="modalhdr"><span id="pfiletitle">Print from printer</span><button class="modalx" id="pfilex">✕</button></div>
+      <div class="pfile-body">
+        <div class="pfile-left">
+          <input class="field" id="pfileSearch" placeholder="Search files…" style="width:100%;margin-bottom:8px">
+          <div class="pfile-list" id="pfilelist"></div>
+        </div>
+        <div class="pfile-right">
+          <div id="pfileinfo"></div>
+          <div id="pfilemap"></div>
+        </div>
+      </div>
+      <div class="send-footer">
+        <span class="send-footer-status" id="pfileStatus"></span>
+        <button class="btn-base btn-cancel" id="pfilecancel">Cancel</button>
+        <button class="btn-base btn-start" id="pfilego" disabled>Print</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="sendmodal">
+    <div class="modalbox" style="max-width:440px">
+      <div class="modalhdr"><span id="sendtitle">Send to Printers</span><button class="modalx" id="sendmodalx">✕</button></div>
+      <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);word-break:break-all" id="sendfilename"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px">
+        <span style="font-size:12px;color:var(--ink-faint)">Printers</span>
+        <button class="btn ghost" id="sendSelectAll" style="padding:3px 9px;font-size:11px">Select all</button>
+        <button class="btn ghost" id="sendSelectIdle" style="padding:3px 9px;font-size:11px">Idle only</button>
+      </div>
+      <div class="send-list" id="sendlist"></div>
+      <div class="send-footer">
+        <span class="send-footer-status" id="sendFooterStatus"></span>
+        <button class="btn ghost" id="sendmodalcancel">Cancel</button>
+        <button class="btn ghost" id="doUpload">Upload</button>
+        <button class="btn primary" id="doUploadPrint">Upload &amp; Print</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/error-codes.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+<svg width="512" height="660" viewBox="0 0 512 660" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>SnapCon icon large</title>
+  <desc>SnapCon app icon with wordmark</desc>
+
+  <rect width="512" height="512" rx="102" fill="#1A1A2E"/>
+
+  <line x1="154" y1="128" x2="230" y2="128" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="282" y1="128" x2="358" y2="128" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="154" y1="256" x2="216" y2="256" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="296" y1="256" x2="358" y2="256" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="154" y1="384" x2="230" y2="384" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="282" y1="384" x2="358" y2="384" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="128" y1="154" x2="128" y2="230" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="128" y1="282" x2="128" y2="358" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="256" y1="154" x2="256" y2="216" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="256" y1="296" x2="256" y2="358" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="384" y1="154" x2="384" y2="230" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+  <line x1="384" y1="282" x2="384" y2="358" stroke="#4A90D9" stroke-width="7" opacity="0.35"/>
+
+  <circle cx="128" cy="128" r="26" fill="#4A90D9"/>
+  <circle cx="256" cy="128" r="26" fill="#4A90D9"/>
+  <circle cx="384" cy="128" r="26" fill="#4A90D9"/>
+  <circle cx="128" cy="256" r="26" fill="#4A90D9"/>
+  <circle cx="384" cy="256" r="26" fill="#4A90D9"/>
+  <circle cx="128" cy="384" r="26" fill="#4A90D9"/>
+  <circle cx="256" cy="384" r="26" fill="#4A90D9"/>
+  <circle cx="384" cy="384" r="26" fill="#4A90D9"/>
+
+  <circle cx="256" cy="256" r="42" fill="#7BB8F0"/>
+  <circle cx="256" cy="256" r="20" fill="#C8E4FF"/>
+
+  <text x="35" y="604"
+    font-family="Montserrat, 'Arial Black', Arial, sans-serif"
+    font-size="88"
+    font-weight="700"
+    fill="#FFFFFF">Snap</text>
+  <text x="282" y="604"
+    font-family="Montserrat, 'Arial Black', Arial, sans-serif"
+    font-size="88"
+    font-weight="700"
+    fill="#4A90D9">Con</text>
+</svg>

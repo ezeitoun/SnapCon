@@ -1,0 +1,30 @@
+{
+  "port": 4545,
+  "gcodeFolder": "./gcode",
+  "refreshInterval": 2,
+  "filamentCost": 25,
+  "electricityRate": 0.12,
+  "notifications": {
+    "enabled": false,
+    "onEvents": true,
+    "onIntervals": true,
+    "includeImage": true,
+    "service": "ntfy",
+    "ntfyTopic": "",
+    "telegramChatId": ""
+  },
+  "printers": [
+    {
+      "name": "Printer 1",
+      "url": "http://192.168.1.100",
+      "serial": "",
+      "costKwh": "0.12"
+    },
+    {
+      "name": "Printer 2",
+      "url": "http://192.168.1.101",
+      "serial": "",
+      "costKwh": "0.12"
+    }
+  ]
+}

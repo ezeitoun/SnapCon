@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Eject">
+  <defs>
+    <linearGradient id="bg" x1="10" y1="7" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2D3548"/>
+      <stop offset="1" stop-color="#121722"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="15" y1="10" x2="49" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#51A7FF"/>
+      <stop offset="1" stop-color="#7C4DFF"/>
+    </linearGradient>
+    <linearGradient id="accent-dim" x1="15" y1="15" x2="45" y2="35" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4A87D6"/>
+      <stop offset="1" stop-color="#6B49C9"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="3.5" stdDeviation="3.5" flood-color="#000" flood-opacity="0.42"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="1.3" stdDeviation="1.3" flood-color="#000" flood-opacity="0.30"/>
+    </filter>
+
+  </defs>
+  <circle cx="32" cy="32" r="27" fill="url(#bg)" filter="url(#shadow)"/>
+  <path d="M9.45 23.79 A24 24 0 0 1 54.55 23.79" fill="none" stroke="#fff" stroke-opacity="0.10" stroke-width="3" stroke-linecap="round"/>
+  <g filter="url(#soft)">
+    <g transform="translate(0 -3.93) scale(0.5)">
+      <path d="M64 31 L97 75 H31 Z" fill="url(#accent)"/>
+      <rect x="31" y="86" width="66" height="13" rx="6" fill="url(#accent)" opacity="0.94"/>
+      <path d="M64 42 L82 67 H46 Z" fill="#FFFFFF" opacity="0.25"/>
+    </g>
+  </g>
+</svg>

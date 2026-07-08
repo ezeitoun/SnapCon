@@ -1,0 +1,109 @@
+name: release
+
+# Build single-file executables and attach them to a GitHub Release on a v* tag.
+#
+# Each OS builds on its own NATIVE runner (no cross-compiling), which avoids the
+# "base binary not in remote cache" failure and lets macOS ad-hoc signing happen
+# on real macOS.
+#
+# The three reliable targets (Linux, Windows, Apple-Silicon mac) build and publish
+# the release promptly. Intel-Mac is a SEPARATE best-effort job: GitHub's free
+# macos-13 runners are often unavailable for a long time, so it must NOT block the
+# release. It attaches its binary to the already-published release if/when it runs;
+# if it never gets a runner, the release still ships with the other three.
+#
+#   git tag v1.5.2 && git push origin v1.5.2
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.out }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,  target: node22-linux-x64,    out: SnapCon-Linux-x64 }
+          - { runner: windows-latest, target: node22-win-x64,      out: SnapCon-Windows-x64.exe }
+          - { runner: macos-14,       target: node22-macos-arm64,  out: SnapCon-macOS-AppleSilicon }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install NASM (Windows source-build fallback)
+        if: runner.os == 'Windows'
+        run: choco install nasm -y
+      - name: Install dependencies
+        run: npm install
+      - name: Build executable
+        run: npx @yao-pkg/pkg . --targets ${{ matrix.target }} --output dist/${{ matrix.out }}
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Show what will be published
+        run: ls -la dist
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## SnapCon
+
+            Download the build for your OS, put it in its own folder, and run it —
+            no Node.js needed. A browser opens to the dashboard; use **Settings**
+            to add your printers.
+
+            **First-launch security warning (the apps are unsigned):**
+            - **Windows:** SmartScreen may say "Windows protected your PC" -> **More info -> Run anyway**.
+            - **macOS:** right-click the file -> **Open** (or run `xattr -dr com.apple.quarantine <file>` once).
+
+            If something on the default port 4545 is already running, close it first.
+
+            _(Intel-Mac build is best-effort and may attach a few minutes after the rest.)_
+
+  # Best-effort Intel-Mac build. Runs after the release exists and appends its
+  # binary to it. continue-on-error so a stuck/unavailable macos-13 runner never
+  # fails the overall release.
+  build-intel:
+    name: build SnapCon-macOS-Intel (best effort)
+    needs: release
+    runs-on: macos-13
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install
+      - name: Build executable
+        run: npx @yao-pkg/pkg . --targets node22-macos-x64 --output dist/SnapCon-macOS-Intel
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SnapCon-macOS-Intel

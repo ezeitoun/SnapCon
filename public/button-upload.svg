@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="154" height="58" viewBox="0 0 154 58" role="img" aria-label="Upload">
+  <defs>
+    <linearGradient id="bg" x1="13" y1="6" x2="141" y2="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2D3548"/>
+      <stop offset="1" stop-color="#121722"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="14" y1="12" x2="52" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#51A7FF"/>
+      <stop offset="1" stop-color="#7C4DFF"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-25%" width="120%" height="170%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.40"/>
+    </filter>
+    <filter id="soft" x="-20%" y="-40%" width="140%" height="180%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000" flood-opacity="0.30"/>
+    </filter>
+
+  </defs>
+  <rect x="4" y="4" width="146" height="50" rx="29" fill="url(#bg)" filter="url(#shadow)" />
+  <path d="M13 12 C38 4 116 4 141 12" fill="none" stroke="#fff" stroke-opacity="0.10" stroke-width="4" stroke-linecap="round"/>
+  <g filter="url(#soft)">
+    <g transform="translate(-1.2 -4.83) scale(0.55)" fill="none">
+      <path d="M64 30 L64 76" stroke="url(#accent)" stroke-width="11" stroke-linecap="round"/>
+      <path d="M45 49 L64 30 L83 49" stroke="url(#accent)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M40 84 V90 C40 95 44 98 49 98 H79 C84 98 88 95 88 90 V84" stroke="url(#accent)" stroke-width="9" stroke-linecap="round"/>
+    </g>
+  </g>
+  <text x="63" y="38" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="500" fill="#F2F4F8">Upload</text>
+</svg>

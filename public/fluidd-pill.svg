@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Fluidd">
+  <defs>
+    <linearGradient id="bg" x1="10" y1="7" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2D3548"/>
+      <stop offset="1" stop-color="#121722"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="15" y1="10" x2="49" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#51A7FF"/>
+      <stop offset="1" stop-color="#7C4DFF"/>
+    </linearGradient>
+    <linearGradient id="accent-dim" x1="15" y1="15" x2="45" y2="35" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4A87D6"/>
+      <stop offset="1" stop-color="#6B49C9"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="3.5" stdDeviation="3.5" flood-color="#000" flood-opacity="0.42"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="1.3" stdDeviation="1.3" flood-color="#000" flood-opacity="0.30"/>
+    </filter>
+
+  </defs>
+  <circle cx="32" cy="32" r="27" fill="url(#bg)" filter="url(#shadow)"/>
+  <path d="M9.45 23.79 A24 24 0 0 1 54.55 23.79" fill="none" stroke="#fff" stroke-opacity="0.10" stroke-width="3" stroke-linecap="round"/>
+  <g filter="url(#soft)">
+    <g transform="translate(15.0 17.4) scale(0.0664)">
+      <path d="M135.8 308.6 242 397c1.2 1 2.5 1.9 3.8 2.6l.4.2.2.1.3.1.3.1.2.1.3.1h.1c2.4 1 4.9 1.6 7.5 1.7h2c2.5-.1 5.1-.7 7.5-1.7h.1l.4-.2.1-.1.3-.1.3-.1.1-.1.4-.2c1.3-.7 2.6-1.6 3.8-2.6l99.3-82.6 51.6 34.1L256 512 84.5 341.9zm3.7-132.1L244 243.7c3.7 2.4 7.9 3.7 12 3.7s8.3-1.2 12-3.7l104.5-67.2 79.9 40.8L256 380.6 59.7 217.3zM256 0l223.3 82.2L256 225.8 32.7 82.2z" fill="url(#accent-dim)"/>
+      <path d="m256 0 223.3 82.2-223.2 143.5V.5h-1.4zm116.5 176.5 79.9 40.8-196.3 163.2V247.4c3.9 0 7.8-1.1 11.3-3.3l.5-.3zm-3.2 137.9 51.6 34.1-164.8 163.4V402.1h.8c2.5-.1 5.1-.7 7.5-1.7h.1l.4-.2.1-.1.3-.1.3-.1.1-.1.4-.2c1.3-.7 2.6-1.6 3.8-2.6z" fill="url(#accent)"/>
+    </g>
+  </g>
+</svg>
