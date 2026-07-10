@@ -13,6 +13,7 @@ const os = require("os");
 const readline = require("readline");
 const { Transform } = require("stream");
 const { parseGcodeMap, parseGcodeMapLines, normHex } = require("./parser");
+const auth = require("./auth");
 
 // When packaged as a single executable (pkg), __dirname points inside the
 // read-only bundle. User-editable files (config.json, the gcode folder) must
@@ -23,6 +24,7 @@ const BASE_DIR = IS_PKG ? path.dirname(process.execPath) : __dirname;
 const ASSET_DIR = __dirname;
 
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
+const USERS_PATH = path.join(BASE_DIR, "users.json");
 const DEFAULT_CFG = { gcodeFolder: "./gcode", port: 4545, printers: [] };
 
 // Live config — editable from the Settings page, no restart needed.
@@ -36,6 +38,19 @@ function loadConfig() {
 }
 loadConfig();
 const PORT = CFG.port || 4545;
+
+// Users for the optional User Access Management feature. No file exists until
+// the first user is actually created — CFG.usersEnabled being true with zero
+// users is refused server-side (see POST /api/config).
+let USERS = [];
+function loadUsers() {
+  try { USERS = JSON.parse(fs.readFileSync(USERS_PATH, "utf8")).users || []; }
+  catch { USERS = []; }
+}
+function saveUsers() {
+  fs.writeFileSync(USERS_PATH, JSON.stringify({ users: USERS }, null, 2));
+}
+loadUsers();
 
 // ---- CLI notify mode ----
 // `SnapCon --load "C:\file.gcode" --printer "U1 White" --outputname "Nicer Name"`
@@ -71,6 +86,12 @@ if (CLI_LOAD_ARG !== -1) {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(ASSET_DIR, "public")));
+// Annotates req.user on every /api request; when usersEnabled is false this
+// always resolves to an implicit admin, so every route below behaves exactly
+// as it does today. Individual routes layer requireAuth/requireRegular/
+// requireAdmin on top where they need to actually enforce something.
+app.use("/api", auth.makeAuthMiddleware(() => CFG, () => USERS));
+const { requireAuth, requireRegular, requireAdmin } = auth;
 // Explicit index route so the UI is served even when running from a packaged
 // binary (where express.static from the snapshot can be unreliable).
 app.get("/", (req, res) => {
@@ -126,11 +147,11 @@ async function moonrakerPost(p, apiPath) {
 const sendGcode = (p, script) => moonrakerPost(p, "/printer/gcode/script?script=" + encodeURIComponent(script));
 
 
-app.get("/api/printers", (req, res) => {
+app.get("/api/printers", requireAuth, (req, res) => {
   res.json(PRINTERS.map((p, i) => ({ id: i, name: p.name })));
 });
 
-app.get("/api/files", (req, res) => {
+app.get("/api/files", requireAuth, (req, res) => {
   const sub = req.query.sub || "";
   const dir = sub ? safePath(sub) : FOLDER;
   if (!dir) return res.status(400).json({ error: "Invalid path" });
@@ -151,7 +172,7 @@ app.get("/api/files", (req, res) => {
   }
 });
 
-app.get("/api/map", async (req, res) => {
+app.get("/api/map", requireAuth, async (req, res) => {
   const fp = safePath(req.query.file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
   try {
@@ -186,7 +207,7 @@ app.get("/api/map", async (req, res) => {
 });
 
 // ---- Local gcode thumbnail (base64 PNG/JPG embedded by Orca in the header) ----
-app.get("/api/local-thumbnail", (req, res) => {
+app.get("/api/local-thumbnail", requireAuth, (req, res) => {
   const fp = safePath(req.query.file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).send("Not found");
   try {
@@ -270,7 +291,7 @@ setInterval(() => {
   for (const [id, job] of JOBS) if (job.done && job.ts < cutoff) JOBS.delete(id);
 }, 60 * 1000).unref();
 
-app.post("/api/print", (req, res) => {
+app.post("/api/print", requireRegular, (req, res) => {
   const { file, printer, start, map } = req.body || {};
   const fp = safePath(file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
@@ -319,7 +340,7 @@ app.post("/api/print", (req, res) => {
 });
 
 // Poll a print job's progress. Cleans the record up once a finished job is read.
-app.get("/api/print-status", (req, res) => {
+app.get("/api/print-status", requireAuth, (req, res) => {
   const job = JOBS.get(req.query.job);
   if (!job) return res.status(404).json({ error: "No such job" });
   const out = { phase: job.phase, sent: job.sent, total: job.total, done: job.done, error: job.error, result: job.result };
@@ -328,7 +349,7 @@ app.get("/api/print-status", (req, res) => {
 });
 
 // ---- Files stored on a printer + start one directly ----
-app.get("/api/printer-files", async (req, res) => {
+app.get("/api/printer-files", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   try {
@@ -346,7 +367,7 @@ app.get("/api/printer-files", async (req, res) => {
 // Palette of a file stored on the printer, from Moonraker's slicer metadata.
 // Per-color weights decide which palette slots the print actually uses — the
 // same rule parser.js applies to local files.
-app.get("/api/printer-file-meta", async (req, res) => {
+app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
@@ -391,7 +412,7 @@ app.get("/api/printer-file-meta", async (req, res) => {
   }
 });
 
-app.post("/api/printfile", async (req, res) => {
+app.post("/api/printfile", requireRegular, async (req, res) => {
   const { printer, filename, map } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -420,7 +441,7 @@ app.post("/api/printfile", async (req, res) => {
 });
 
 // ---- Print control: pause / resume / cancel (standard Klipper macros) ----
-app.post("/api/printctl", async (req, res) => {
+app.post("/api/printctl", requireRegular, async (req, res) => {
   const { printer, action } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -439,7 +460,7 @@ app.post("/api/printctl", async (req, res) => {
 });
 
 // ---- Exclude-object: live plate map + skip a single object mid-print ----
-app.get("/api/plate", async (req, res) => {
+app.get("/api/plate", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   try {
@@ -456,7 +477,7 @@ app.get("/api/plate", async (req, res) => {
   }
 });
 
-app.post("/api/exclude", async (req, res) => {
+app.post("/api/exclude", requireRegular, async (req, res) => {
   const { printer, name } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -623,7 +644,7 @@ setInterval(async () => {
   }
 }, PENDING_RETRY_MS).unref();
 
-app.get("/api/fleet", async (req, res) => {
+app.get("/api/fleet", requireAuth, async (req, res) => {
   // ?printer=N probes just that printer — the splash screen uses this to show
   // per-printer connect progress. No param = the whole fleet (normal polling).
   if (req.query.printer !== undefined) {
@@ -738,7 +759,7 @@ async function getSnapshot(idx, p) {
   return Buffer.from(await r.arrayBuffer());
 }
 
-app.get("/api/snapshot", async (req, res) => {
+app.get("/api/snapshot", requireAuth, async (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p   = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -753,7 +774,7 @@ app.get("/api/snapshot", async (req, res) => {
 });
 
 // ---- Thumbnail proxy: fetch gcode thumbnail from Moonraker ----
-app.get("/api/thumbnail", async (req, res) => {
+app.get("/api/thumbnail", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
@@ -775,7 +796,7 @@ app.get("/api/thumbnail", async (req, res) => {
 });
 
 // ---- Unload filament from extruder(s) ----
-app.post("/api/unload", async (req, res) => {
+app.post("/api/unload", requireRegular, async (req, res) => {
   const { printer, extruders } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -791,7 +812,7 @@ app.post("/api/unload", async (req, res) => {
 });
 
 // ---- Set bed temperature on a printer (M140 — standard, no wait) ----
-app.post("/api/bedtemp", async (req, res) => {
+app.post("/api/bedtemp", requireRegular, async (req, res) => {
   const { printer, temp } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -885,13 +906,13 @@ async function probeFirmware(p) {
   }
 }
 
-app.get("/api/firmware", async (req, res) => {
+app.get("/api/firmware", requireAuth, async (req, res) => {
   const out = await Promise.all(PRINTERS.map((p, i) => probeFirmware(p).then(r => ({ id: i, ...r }))));
   res.json(out);
 });
 
 // ---- Filesystem browser (for folder picker) ----
-app.get("/api/browse", (req, res) => {
+app.get("/api/browse", requireAdmin, (req, res) => {
   const isWin = process.platform === "win32";
 
   // Windows-only: list available drives
@@ -922,13 +943,13 @@ app.get("/api/browse", (req, res) => {
   res.json({ path: p, parent: atRoot ? null : up, entries, isWin, atRoot });
 });
 
-app.get("/api/inventory", async (req, res) => {
+app.get("/api/inventory", requireAuth, async (req, res) => {
   const out = await Promise.all(PRINTERS.map((p, i) => probeInfo(p).then(r => ({ id: i, ...r }))));
   res.json(out);
 });
 
 // ---- Printer hours: proxy Moonraker history/totals ----
-app.get("/api/printer-hours", async (req, res) => {
+app.get("/api/printer-hours", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   try {
@@ -942,14 +963,14 @@ app.get("/api/printer-hours", async (req, res) => {
 });
 
 // ---- Maintenance log per printer ----
-app.get("/api/maintenance", (req, res) => {
+app.get("/api/maintenance", requireAuth, (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   res.json(p.maintenance || []);
 });
 
-app.post("/api/maintenance", (req, res) => {
+app.post("/api/maintenance", requireRegular, (req, res) => {
   const { printer, entry } = req.body || {};
   const idx = parseInt(printer, 10);
   const p = PRINTERS[idx];
@@ -966,14 +987,44 @@ app.post("/api/maintenance", (req, res) => {
 });
 
 // ---- Settings: read/write config from the UI (no file editing) ----
-function publicCfg() {
-  return { gcodeFolder: CFG.gcodeFolder || "./gcode", folderResolved: FOLDER, refreshInterval: CFG.refreshInterval || 2, filamentCost: CFG.filamentCost || null, electricityRate: CFG.electricityRate || null, tNotation: CFG.tNotation || false, openCompact: CFG.openCompact || false, notifications: CFG.notifications || null, printers: PRINTERS, configured: PRINTERS.length > 0 };
+// Role-aware: non-Admin roles never see printers[] (and therefore never see
+// Moonraker tokens), notifications, or the Resend API key. This is the actual
+// fix for the plaintext-token leak that motivated keeping users.json separate
+// from config.json in the first place.
+function publicCfg(role) {
+  const base = {
+    gcodeFolder: CFG.gcodeFolder || "./gcode",
+    folderResolved: FOLDER,
+    refreshInterval: CFG.refreshInterval || 2,
+    filamentCost: CFG.filamentCost || null,
+    electricityRate: CFG.electricityRate || null,
+    tNotation: CFG.tNotation || false,
+    openCompact: CFG.openCompact || false,
+    allowMapping: CFG.allowMapping !== false,
+    suggestMatching: CFG.suggestMatching !== false,
+    usersEnabled: !!CFG.usersEnabled,
+    configured: PRINTERS.length > 0
+  };
+  if (role !== "admin") return base;
+  return {
+    ...base,
+    notifications: CFG.notifications || null,
+    printers: PRINTERS,
+    // The Resend API key never round-trips to the browser, even for Admin —
+    // unlike printer tokens (which do, into a masked <input>), this secret
+    // gets the stricter treatment since leaking it is exactly what this
+    // feature is partly meant to close off.
+    resend: { fromAddress: (CFG.resend && CFG.resend.fromAddress) || "", hasApiKey: !!(CFG.resend && CFG.resend.apiKey) }
+  };
 }
-app.get("/api/config", (req, res) => res.json(publicCfg()));
+app.get("/api/config", requireAuth, (req, res) => res.json(publicCfg(req.user.role)));
 app.get("/api/version", (req, res) => res.json({ version: VERSION }));
 
-app.post("/api/config", (req, res) => {
+app.post("/api/config", requireAdmin, (req, res) => {
   const b = req.body || {};
+  if (b.usersEnabled && !USERS.some(u => u.role === "admin")) {
+    return res.status(400).json({ error: "Create an Admin user before enabling User Access Management" });
+  }
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
     refreshInterval: (typeof b.refreshInterval === "number" && b.refreshInterval >= 1 && b.refreshInterval <= 60) ? b.refreshInterval : (CFG.refreshInterval || 2),
@@ -981,6 +1032,16 @@ app.post("/api/config", (req, res) => {
     electricityRate: (typeof b.electricityRate === "number" && b.electricityRate > 0) ? b.electricityRate : undefined,
     tNotation: b.tNotation ? true : undefined,
     openCompact: b.openCompact ? true : undefined,
+    // Unlike tNotation/openCompact (default off, "omit means false" is safe),
+    // these default ON — so absence must fall back to the previous stored
+    // value, not to false, or unchecking them would never persist.
+    allowMapping: (typeof b.allowMapping === "boolean") ? b.allowMapping : (CFG.allowMapping !== false),
+    suggestMatching: (typeof b.suggestMatching === "boolean") ? b.suggestMatching : (CFG.suggestMatching !== false),
+    usersEnabled: b.usersEnabled ? true : undefined,
+    resend: (b.resend && typeof b.resend === "object") ? {
+      apiKey: (typeof b.resend.apiKey === "string" && b.resend.apiKey.trim()) ? b.resend.apiKey.trim() : ((CFG.resend && CFG.resend.apiKey) || undefined),
+      fromAddress: String(b.resend.fromAddress || "").trim()
+    } : (CFG.resend || undefined),
     notifications: (b.notifications && typeof b.notifications === "object") ? {
       enabled: !!b.notifications.enabled,
       onEvents: !!b.notifications.onEvents,
@@ -1012,9 +1073,190 @@ app.post("/api/config", (req, res) => {
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
     loadConfig();
-    res.json({ ok: true, ...publicCfg() });
+    res.json({ ok: true, ...publicCfg(req.user.role) });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ---- User Access Management: session, login, OTP, user CRUD ----
+// Every route below is reachable even when usersEnabled is false (the client
+// never calls most of them in that case), but each checks CFG.usersEnabled
+// itself where it matters so a stray call can't do anything surprising.
+const LOGIN_NAME_RE = /^[a-zA-Z0-9_.-]{2,32}$/;
+const ROLES = ["view", "regular", "admin"];
+
+function publicUser(u) {
+  return { id: u.id, firstName: u.firstName || "", lastName: u.lastName || "", loginName: u.loginName, email: u.email || "", phone: u.phone || "", role: u.role, otpEnabled: !!u.otpEnabled, createdAt: u.createdAt, updatedAt: u.updatedAt };
+}
+function findUserByLoginName(loginName) {
+  const norm = String(loginName || "").trim().toLowerCase();
+  return norm ? USERS.find(u => u.loginNameLower === norm) : undefined;
+}
+// Admins remaining if `excludeId` were removed/demoted — used by the
+// last-admin guardrail on both PUT (demote) and DELETE.
+function adminCountExcluding(excludeId) {
+  return USERS.filter(u => u.role === "admin" && u.id !== excludeId).length;
+}
+
+app.get("/api/session", (req, res) => {
+  if (!CFG.usersEnabled) return res.json({ usersEnabled: false });
+  if (!req.user) return res.json({ usersEnabled: true, authenticated: false });
+  res.json({ usersEnabled: true, authenticated: true, user: { id: req.user.id, loginName: req.user.loginName, firstName: req.user.firstName, lastName: req.user.lastName, role: req.user.role } });
+});
+
+app.post("/api/login", async (req, res) => {
+  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
+  const { loginName, password } = req.body || {};
+  const u = findUserByLoginName(loginName);
+  if (!u) return res.status(401).json({ error: "Invalid login name or password" });
+  if (u.otpEnabled) return res.status(400).json({ error: 'This account signs in with an emailed code — use "Email me a code instead"' });
+  if (!(await auth.verifyPassword(String(password || ""), u.passwordHash))) return res.status(401).json({ error: "Invalid login name or password" });
+  const token = auth.createSession(u.id);
+  res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
+  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role } });
+});
+
+// Deliberately generic: whether the login name doesn't exist, isn't an OTP
+// account, or has no email on file all produce the same message, so this
+// can't be used to enumerate accounts.
+app.post("/api/login/otp/request", async (req, res) => {
+  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
+  if (!CFG.resend || !CFG.resend.apiKey || !CFG.resend.fromAddress) return res.status(500).json({ error: "Email login is not configured" });
+  const u = findUserByLoginName((req.body || {}).loginName);
+  if (!u || !u.otpEnabled || !u.email) return res.status(400).json({ error: "Could not send a code for that login name" });
+  const code = auth.setOtpCode(u.loginNameLower);
+  try {
+    await sendResendEmail({
+      apiKey: CFG.resend.apiKey, fromAddress: CFG.resend.fromAddress, to: u.email,
+      subject: "Your SnapCon login code",
+      text: "Your SnapCon login code is: " + code + "\n\nThis code expires in 10 minutes."
+    });
+  } catch (e) {
+    return res.status(502).json({ error: "Could not send the code: " + e.message });
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/login/otp/verify", (req, res) => {
+  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
+  const { loginName, code } = req.body || {};
+  const u = findUserByLoginName(loginName);
+  if (!u || !u.otpEnabled) return res.status(401).json({ error: "Incorrect code" });
+  const result = auth.verifyOtpCode(u.loginNameLower, code);
+  if (!result.ok) return res.status(401).json({ error: result.error });
+  const token = auth.createSession(u.id);
+  res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
+  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role } });
+});
+
+app.post("/api/logout", (req, res) => {
+  if (req.sessionToken) auth.destroySession(req.sessionToken);
+  res.clearCookie(auth.SESSION_COOKIE);
+  res.json({ ok: true });
+});
+
+app.get("/api/users", requireAdmin, (req, res) => {
+  res.json(USERS.map(publicUser));
+});
+
+app.post("/api/users", requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const loginName = String(b.loginName || "").trim();
+  if (!LOGIN_NAME_RE.test(loginName)) return res.status(400).json({ error: "Login name must be 2-32 characters (letters, numbers, _ . -)" });
+  const loginNameLower = loginName.toLowerCase();
+  if (USERS.some(u => u.loginNameLower === loginNameLower)) return res.status(400).json({ error: "That login name is already in use" });
+  if (!ROLES.includes(b.role)) return res.status(400).json({ error: "Invalid role" });
+  const otpEnabled = !!b.otpEnabled;
+  let passwordHash = null;
+  if (!otpEnabled) {
+    const password = String(b.password || "");
+    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    passwordHash = await auth.hashPassword(password);
+  }
+  const now = new Date().toISOString();
+  const u = {
+    id: auth.newUserId(),
+    firstName: String(b.firstName || "").trim(), lastName: String(b.lastName || "").trim(),
+    loginName, loginNameLower,
+    email: String(b.email || "").trim(), phone: String(b.phone || "").trim(),
+    role: b.role, otpEnabled, passwordHash,
+    createdAt: now, updatedAt: now
+  };
+  USERS.push(u);
+  try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true, user: publicUser(u) });
+});
+
+app.put("/api/users/:id", requireAdmin, async (req, res) => {
+  const u = USERS.find(x => x.id === req.params.id);
+  if (!u) return res.status(404).json({ error: "User not found" });
+  const b = req.body || {};
+
+  // Validate everything into locals first — nothing on the live `u` object
+  // (still referenced by any active session via authMiddleware) is mutated
+  // until every check below has passed, so a request that fails partway
+  // through can't leave in-memory state ahead of what's on disk.
+  let loginName, loginNameLower;
+  if (b.loginName !== undefined) {
+    loginName = String(b.loginName || "").trim();
+    if (!LOGIN_NAME_RE.test(loginName)) return res.status(400).json({ error: "Login name must be 2-32 characters (letters, numbers, _ . -)" });
+    loginNameLower = loginName.toLowerCase();
+    if (USERS.some(x => x.id !== u.id && x.loginNameLower === loginNameLower)) return res.status(400).json({ error: "That login name is already in use" });
+  }
+  if (b.role !== undefined) {
+    if (!ROLES.includes(b.role)) return res.status(400).json({ error: "Invalid role" });
+    if (u.role === "admin" && b.role !== "admin" && adminCountExcluding(u.id) === 0) return res.status(400).json({ error: "Cannot demote the last Admin" });
+  }
+  const nextOtpEnabled = b.otpEnabled !== undefined ? !!b.otpEnabled : u.otpEnabled;
+  if (b.password) {
+    if (nextOtpEnabled) return res.status(400).json({ error: "OTP-enabled accounts cannot have a password" });
+    if (String(b.password).length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+  }
+  const willHavePassword = nextOtpEnabled ? false : (b.password ? true : !!u.passwordHash);
+  if (!nextOtpEnabled && !willHavePassword) return res.status(400).json({ error: "Set a password, or enable OTP login" });
+  const newPasswordHash = b.password ? await auth.hashPassword(String(b.password)) : undefined;
+
+  // Every check passed — apply.
+  if (loginName !== undefined) { u.loginName = loginName; u.loginNameLower = loginNameLower; }
+  if (b.role !== undefined) u.role = b.role;
+  if (b.firstName !== undefined) u.firstName = String(b.firstName || "").trim();
+  if (b.lastName !== undefined) u.lastName = String(b.lastName || "").trim();
+  if (b.email !== undefined) u.email = String(b.email || "").trim();
+  if (b.phone !== undefined) u.phone = String(b.phone || "").trim();
+  u.otpEnabled = nextOtpEnabled;
+  if (nextOtpEnabled) u.passwordHash = null; // forced regardless of what the request body contains
+  else if (newPasswordHash) u.passwordHash = newPasswordHash;
+  u.updatedAt = new Date().toISOString();
+  try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true, user: publicUser(u) });
+});
+
+app.delete("/api/users/:id", requireAdmin, (req, res) => {
+  const idx = USERS.findIndex(x => x.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: "User not found" });
+  if (USERS[idx].role === "admin" && adminCountExcluding(USERS[idx].id) === 0) return res.status(400).json({ error: "Cannot delete the last Admin" });
+  const [removed] = USERS.splice(idx, 1);
+  try { saveUsers(); } catch (e) { USERS.splice(idx, 0, removed); return res.status(500).json({ error: e.message }); }
+  if (removed.id === (req.user && req.user.id)) { auth.destroySession(req.sessionToken); res.clearCookie(auth.SESSION_COOKIE); }
+  res.json({ ok: true });
+});
+
+// Mirrors /api/notify-test's "test the live form values, not necessarily
+// saved ones" UX — works before the Resend settings have been saved.
+app.post("/api/email-test", requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const apiKey = (typeof b.apiKey === "string" && b.apiKey.trim()) ? b.apiKey.trim() : ((CFG.resend && CFG.resend.apiKey) || "");
+  const fromAddress = String(b.fromAddress || (CFG.resend && CFG.resend.fromAddress) || "").trim();
+  const to = String(b.to || "").trim();
+  if (!apiKey) return res.status(400).json({ error: "Enter a Resend API key first" });
+  if (!fromAddress) return res.status(400).json({ error: "Enter a from-address first" });
+  if (!to) return res.status(400).json({ error: "Enter a test recipient address" });
+  try {
+    await sendResendEmail({ apiKey, fromAddress, to, subject: "SnapCon test email", text: "This is a test email from SnapCon." });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
   }
 });
 
@@ -1070,6 +1312,18 @@ async function sendNtfy({ topic, title, message, iconUrl, image }) {
     : { method: "POST" };
   const r = await fetchTimeout(url, 15000, opts);
   if (!r.ok) throw new Error("ntfy.sh " + r.status + ": " + (await r.text()).slice(0, 160));
+}
+
+// Send an OTP login code (or a test message) via Resend's HTTP API — a plain
+// fetchTimeout() POST, same shape as sendNtfy() above, so this needs no
+// nodemailer/SMTP dependency.
+async function sendResendEmail({ apiKey, fromAddress, to, subject, text }) {
+  const r = await fetchTimeout("https://api.resend.com/emails", 15000, {
+    method: "POST",
+    headers: { Authorization: "Bearer " + apiKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: fromAddress, to, subject, text })
+  });
+  if (!r.ok) throw new Error("Resend " + r.status + ": " + (await r.text()).slice(0, 160));
 }
 
 async function sendEventNotification(idx, p, ev, st) {
@@ -1148,7 +1402,7 @@ async function notifyTick() {
 setInterval(notifyTick, NOTIFY_POLL_MS).unref();
 notifyTick();   // prime NOTIFY_STATE at startup (first sight never notifies)
 
-app.post("/api/notify-test", async (req, res) => {
+app.post("/api/notify-test", requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (b.service === "telegram") return res.status(400).json({ error: "Telegram is not implemented yet — select ntfy.sh" });
   const topic = String(b.topic || (CFG.notifications || {}).ntfyTopic || "").trim();
@@ -1180,7 +1434,7 @@ app.post("/api/notify-test", async (req, res) => {
 });
 
 // ---- Electricity rate lookup by US ZIP code (OpenEI Utility Rate Database) ----
-app.get("/api/electricity-rate", async (req, res) => {
+app.get("/api/electricity-rate", requireAuth, async (req, res) => {
   const zip = (req.query.zip || "").trim().replace(/\D/g, "");
   if (!/^\d{5}$/.test(zip)) return res.status(400).json({ error: "Please enter a valid 5-digit US ZIP code" });
   try {
@@ -1257,7 +1511,7 @@ async function probeMoonraker(ip) {
   }
   return null;
 }
-app.get("/api/probe-printer", async (req, res) => {
+app.get("/api/probe-printer", requireAdmin, async (req, res) => {
   const url = (req.query.url || "").trim().replace(/\/+$/, "");
   if (!url) return res.status(400).json({ error: "url required" });
   try {
@@ -1269,7 +1523,7 @@ app.get("/api/probe-printer", async (req, res) => {
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
-app.get("/api/discover", async (req, res) => {
+app.get("/api/discover", requireAdmin, async (req, res) => {
   const found = [];
   let bases;
   if (req.query.subnet) {
