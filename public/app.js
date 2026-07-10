@@ -59,18 +59,21 @@ function sortedFleet(){
       return p.elapsed * (1 / p.progress - 1);
     };
     arr.sort((a,b) => rem(a) - rem(b));
+  } else if(SORT_MODE === 'name'){
+    // numeric:true so "U1-2" sorts before "U1-10" instead of lexicographically after it.
+    arr.sort((a,b)=>(a.name||'').localeCompare(b.name||'', undefined, {numeric:true, sensitivity:'base'}));
   }
   return arr;
 }
 
 function applySortUI(){
-  ['none','status','time'].forEach(k=>{
+  ['none','status','time','name'].forEach(k=>{
     const el = $('sc-'+k);
     if(el) el.textContent = SORT_MODE === k ? '✓' : '';
   });
   const btn = $('sortBtn');
   if(btn){
-    const labels = { none:'none', status:'by status', time:'by time remaining' };
+    const labels = { none:'none', status:'by status', time:'by time remaining', name:'by name' };
     btn.title = 'Sort printers: ' + (labels[SORT_MODE] || 'none');
   }
 }
@@ -112,9 +115,25 @@ function headLabel(i){ return USE_T_NOTATION ? 'T'+i : String(i+1); }
 init();
 async function init(){
   wireUI();
-  // Single-printer deep link: the search box would just be dead weight since
-  // renderFleet() ignores it in this mode.
-  if(URL_PRINTER_FILTER && $("fleetSearch")) $("fleetSearch").style.display="none";
+  // Single-printer deep link: this is a focused view — the search box, file
+  // browser, sort, compact toggle, settings, the "Selected Model" summary and
+  // the "Fleet x/x online" heading are all dead weight/noise; only the
+  // printer card itself earns a place here. Inline display:none beats the
+  // .show class toggle these elements use, so this stays permanent even once
+  // a file gets selected (e.g. via a notify-load pending delivery).
+  if(URL_PRINTER_FILTER){
+    if($("fleetSearch")) $("fleetSearch").style.display="none";
+    if($("filesBtn")) $("filesBtn").style.display="none";
+    const topSort=document.querySelector(".topbar .sort-wrap");
+    if(topSort) topSort.style.display="none";
+    if($("compactBtn")) $("compactBtn").style.display="none";
+    if($("gear")) $("gear").style.display="none";
+    if($("jobsechead")) $("jobsechead").style.display="none";
+    if($("jobloading")) $("jobloading").style.display="none";
+    if($("jobcard")) $("jobcard").style.display="none";
+    const fleetSechead=$("fleetcount")&&$("fleetcount").closest(".sechead");
+    if(fleetSechead) fleetSechead.style.display="none";
+  }
   await checkVersion(); await loadConfigUI(); await loadFiles(); await initialFleetLoad();
   // First fleet data is in (or failed) — fade the splash out and drop it.
   const splash=$("splash");
@@ -334,14 +353,17 @@ function renderList(){
 
 async function selectFile(name){
   SELECTED=name; MAPSEL={}; renderList();
-  $("jobsechead").style.display="";
+  // Orca mode hides this section permanently (init() sets it inline) — don't
+  // fight that override here.
+  if(!URL_PRINTER_FILTER) $("jobsechead").style.display="";
   $("jlname").textContent="Opening "+name+"…";
   $("jobloading").classList.add("show");
   $("jobcard").classList.remove("show");
   try{ const m=await getJSON("/api/map?file="+encodeURIComponent(name));
     $("jobloading").classList.remove("show");
-    if(m.error){ MAP=null; $("jobsechead").style.display="none"; return; } MAP=m; renderJob(); renderList(); renderFleet();
-  }catch(e){ $("jobloading").classList.remove("show"); $("jobsechead").style.display="none"; }
+    if(m.error){ MAP=null; if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none"; return; }
+    MAP=m; renderJob(); renderList(); renderFleet();
+  }catch(e){ $("jobloading").classList.remove("show"); if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none"; }
 }
 
 function neededColors(){ return MAP ? MAP.palette.filter(s=>s.used) : []; }
@@ -582,6 +604,9 @@ function thumbToken(p, stem){
   return token;
 }
 
+// /orca/<printer> mode: narrow any printer list down to just that one printer.
+const urlFilterFleet = arr => URL_PRINTER_FILTER ? arr.filter(p=>(p.name||'').trim().toLowerCase()===URL_PRINTER_FILTER) : arr;
+
 function renderFleet(){
   const need=neededColors();
   const wrap=$("fleet"); wrap.innerHTML="";
@@ -591,7 +616,7 @@ function renderFleet(){
   all.forEach(p=>{ if(p.online) online++; });
   const pctMatch=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
   const isColor=q in COLOR_FAMILIES;
-  const fleet=URL_PRINTER_FILTER ? all.filter(p=>(p.name||'').trim().toLowerCase()===URL_PRINTER_FILTER)
+  const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
     : !q ? all : all.filter(p=>{
     if(pctMatch){
       if(!p.online||p.progress==null) return false;
@@ -660,8 +685,9 @@ function renderFleet(){
       }
     }
     card.innerHTML=`
-      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete')&&p.filename?`<button class="pill-btn" data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn" data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
+      ${p.queuedFile?queuedFileBannerHtml(p):''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
         const e=lookupKlipperError(p.errorCode, p.message);
         const listIcon=`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg>`;
@@ -769,6 +795,28 @@ function renderFleet(){
   wrap.querySelectorAll("button[data-preheat]").forEach(b=>{
     b.addEventListener("click",()=>openPreheat(parseInt(b.dataset.preheat,10)));
   });
+  wrap.querySelectorAll("button[data-queued-print]").forEach(b=>{
+    b.addEventListener("click",()=>printQueuedFile(parseInt(b.dataset.queuedPrint,10), b.dataset.queuedFile));
+  });
+}
+
+// A file staged by --load while nobody was watching (queuedFile, set server-side
+// by /api/notify-load) — a quiet banner + one-click Print, in any view mode.
+function queuedFileBannerHtml(p){
+  const qf=p.queuedFile;
+  if(qf.status==='uploading') return `<div class="queued-banner work">Staging <b>${esc(qf.name)}</b> on this printer…</div>`;
+  if(qf.status==='error') return `<div class="queued-banner err">Couldn't stage ${esc(qf.name)}: ${esc(qf.error||'')}</div>`;
+  return `<div class="queued-banner ok"><span>Ready to print: <b>${esc(qf.name)}</b></span><button class="btn ghost" data-queued-print="${p.id}" data-queued-file="${esc(qf.name)}">Print</button></div>`;
+}
+async function printQueuedFile(printerId, filename){
+  const st=$("pst-"+printerId);
+  if(st){ st.className="pstatus work"; st.textContent="Starting print…"; }
+  try{
+    const r=await postJSON("/api/printfile",{printer:printerId,filename,map:{}});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    if(st){ st.className="pstatus ok"; st.textContent="Printing "+filename; }
+  }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
+  loadFleet();
 }
 
 // ---- Fleet card reordering by drag (status pill = drag handle, "No Sort" only) ----
@@ -926,7 +974,7 @@ function openSendModal(){
 function closeSendModal(){ $('sendmodal').classList.remove('show'); }
 
 function renderSendList(){
-  $('sendlist').innerHTML=FLEET.map(p=>{
+  $('sendlist').innerHTML=urlFilterFleet(FLEET).map(p=>{
     const idle=p.online&&p.state==='idle';
     const dot=p.online?(idle?'var(--ok)':'var(--busy)'):'var(--idle)';
     const statusTxt=p.online?(p.state||'online'):'offline';
