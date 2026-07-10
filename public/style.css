@@ -398,6 +398,31 @@
   .queued-banner.err{background:color-mix(in srgb,var(--bad) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);color:var(--ink-dim);}
   .queued-banner .btn{padding:4px 12px;font-size:11px;flex:none;}
 
+  /* ---- User Access Management ---- */
+  .topbar-emoji{font-size:17px;line-height:1;display:block;}
+
+  .user-badge{display:flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line);}
+  .user-badge-name{font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;}
+  .user-badge .btn{padding:4px 10px;font-size:11px;flex:none;}
+
+  .login-overlay{position:fixed;inset:0;z-index:300;background:var(--chassis);display:flex;align-items:center;justify-content:center;padding:18px;}
+  .login-box{width:100%;max-width:320px;display:flex;flex-direction:column;align-items:stretch;}
+  .login-logo{width:96px;height:auto;margin:0 auto 22px;display:block;}
+  .login-box .fl{margin-bottom:5px;}
+  .login-box .field{margin-bottom:2px;}
+  .login-actions{display:flex;flex-direction:column;gap:8px;margin-top:16px;}
+  .login-box .pstatus{margin-top:10px;min-height:16px;}
+
+  .bootstrap-admin{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);}
+
+  .maint-report-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:8px;margin-bottom:6px;background:var(--panel-2);}
+  .maint-report-name{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .maint-report-dot{width:8px;height:8px;border-radius:50%;flex:none;}
+  .maint-report-row .btn{padding:4px 12px;font-size:11px;flex:none;}
+
+  /* Non-<button> action triggers (bed-temp cell, unload spool) gated for View Only */
+  .inert-action{pointer-events:none;opacity:.45;cursor:not-allowed !important;}
+
   @media (max-width:880px){
     .shell{grid-template-columns:1fr;}
     .side{min-height:auto; border-right:none; border-bottom:1px solid var(--line);}

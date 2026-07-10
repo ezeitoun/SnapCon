@@ -7,11 +7,28 @@ function lookupKlipperError(code, msg){
 }
 const $ = id => document.getElementById(id);
 const VERSION = "0.0.7";
-const getJSON = url => fetch(url).then(r => r.json());
-const postJSON = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)});
+// A session that expired mid-use (idle timeout, or an Admin deleted the
+// account) shows the login overlay again on the next call rather than
+// leaving the UI silently broken.
+// LAST_LOGIN_AT guards against a request that was already in flight when the
+// overlay was showing: if it resolves with a stale 401 just after a fresh
+// login succeeds, this skips re-triggering the overlay on top of a session
+// that's actually valid again. A genuine mid-session expiry is always far
+// more than a second past the last login, so it's unaffected.
+let LAST_LOGIN_AT=0;
+function checkAuthFailure(r){ if(r.status===401 && USERS_ENABLED && Date.now()-LAST_LOGIN_AT>1000){ CURRENT_USER=null; showLoginOverlay(); } return r; }
+const getJSON = url => fetch(url).then(r => { checkAuthFailure(r); return r.json(); });
+const postJSON = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)}).then(r => { checkAuthFailure(r); return r; });
 let FILES = [], FOLDERS = [], CURRENT_SUB = "", SELECTED = null, MAP = null, FLEET = [], MAPSEL = {};
 let USE_T_NOTATION = false, FILAMENT_COST = 0, ELECTRICITY_RATE = 0;
 let ALLOW_MAPPING = true, SUGGEST_MATCHING = true;
+
+// ---- User Access Management: session state + role helpers ----
+// Both hard-return true when USERS_ENABLED is false, so every gated call site
+// below is correct with zero enabled/disabled branching at the call site.
+let USERS_ENABLED = false, CURRENT_USER = null;
+function isAdmin(){ return !USERS_ENABLED || (CURRENT_USER && CURRENT_USER.role==='admin'); }
+function canAct(){ return !USERS_ENABLED || (CURRENT_USER && (CURRENT_USER.role==='regular'||CURRENT_USER.role==='admin')); }
 
 // ---- /orca/<printer name> deep link — "_" = space, case-insensitive — shows
 // only that printer's fleet card. Read once at load; the path doesn't change
@@ -112,8 +129,131 @@ const ICONS = {
 
 function headLabel(i){ return USE_T_NOTATION ? 'T'+i : String(i+1); }
 
+// ---- Login overlay ----
+// showLoginOverlay() returns a promise that resolves once login succeeds, so
+// the initial auth gate in init() can await it; a mid-session 401 (idle
+// timeout, or an Admin deleting the account) calls it again as a fire-and-
+// forget re-prompt — checkAuthFailure() doesn't await the result.
+let LOGIN_RESOLVE=null, LOGIN_PENDING=null, OTP_LOGIN_NAME=null;
+function showLoginOverlay(){
+  if(LOGIN_PENDING) return LOGIN_PENDING;
+  $("loginOverlay").style.display="flex";
+  $("loginStep1").style.display="";
+  $("loginStep2").style.display="none";
+  $("loginPassword").value="";
+  $("loginStatus").textContent="";
+  LOGIN_PENDING=new Promise(resolve=>{ LOGIN_RESOLVE=resolve; });
+  return LOGIN_PENDING;
+}
+function hideLoginOverlay(){
+  $("loginOverlay").style.display="none";
+  LOGIN_PENDING=null;
+}
+function onLoginSuccess(user){
+  CURRENT_USER=user;
+  LAST_LOGIN_AT=Date.now();
+  hideLoginOverlay();
+  if(LOGIN_RESOLVE){ const r=LOGIN_RESOLVE; LOGIN_RESOLVE=null; r(); }
+  applyRoleUI();
+  loadConfigUI(); loadFiles(); loadFleet();
+}
+async function doLoginPassword(){
+  const loginName=$("loginName").value.trim(), password=$("loginPassword").value;
+  const st=$("loginStatus");
+  if(!loginName||!password){ st.className="pstatus err"; st.textContent="Enter a login name and password"; return; }
+  st.className="pstatus work"; st.textContent="Logging in…";
+  try{
+    const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loginName,password})});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    onLoginSuccess(d.user);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+async function doRequestOtp(){
+  const loginName=$("loginName").value.trim();
+  const st=$("loginStatus");
+  if(!loginName){ st.className="pstatus err"; st.textContent="Enter your login name first"; return; }
+  st.className="pstatus work"; st.textContent="Sending code…";
+  try{
+    const r=await fetch("/api/login/otp/request",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loginName})});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    OTP_LOGIN_NAME=loginName;
+    st.className="pstatus"; st.textContent="";
+    $("loginStep1").style.display="none";
+    $("loginStep2").style.display="";
+    $("otpCode").value=""; $("otpStatus").textContent="";
+    $("otpCode").focus();
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+async function doVerifyOtp(){
+  const code=$("otpCode").value.trim();
+  const st=$("otpStatus");
+  if(!code){ st.className="pstatus err"; st.textContent="Enter the code"; return; }
+  st.className="pstatus work"; st.textContent="Verifying…";
+  try{
+    const r=await fetch("/api/login/otp/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loginName:OTP_LOGIN_NAME,code})});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    onLoginSuccess(d.user);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+function wireLoginOverlay(){
+  $("loginSubmit").addEventListener("click", doLoginPassword);
+  $("loginPassword").addEventListener("keydown", e=>{ if(e.key==="Enter") doLoginPassword(); });
+  $("loginName").addEventListener("keydown", e=>{ if(e.key==="Enter") doLoginPassword(); });
+  $("loginOtpBtn").addEventListener("click", doRequestOtp);
+  $("otpSubmit").addEventListener("click", doVerifyOtp);
+  $("otpCode").addEventListener("keydown", e=>{ if(e.key==="Enter") doVerifyOtp(); });
+  $("otpBack").addEventListener("click", ()=>{ $("loginStep2").style.display="none"; $("loginStep1").style.display=""; $("otpStatus").textContent=""; });
+  $("logoutBtn").addEventListener("click", async ()=>{
+    try{ await fetch("/api/logout",{method:"POST"}); }catch{}
+    CURRENT_USER=null;
+    applyRoleUI();
+    showLoginOverlay();
+  });
+}
+async function authGate(){
+  // One retry on network failure: giving up immediately would default
+  // USERS_ENABLED to false and show a fully-open UI even though the server
+  // still requires login, with every subsequent call silently 401ing.
+  for(let attempt=0; attempt<2; attempt++){
+    try{
+      const s=await fetch("/api/session").then(r=>r.json());
+      USERS_ENABLED=!!s.usersEnabled;
+      if(USERS_ENABLED && s.authenticated) CURRENT_USER=s.user;
+      break;
+    }catch{
+      if(attempt===0) await new Promise(r=>setTimeout(r,800));
+      else USERS_ENABLED=false;
+    }
+  }
+  if(USERS_ENABLED && !CURRENT_USER) await showLoginOverlay();
+}
+
+// ---- Role gating ----
+// Called after init/login/logout. Both isAdmin()/canAct() hard-return true
+// when USERS_ENABLED is false, so this is a no-op restoring today's fully-
+// open UI whenever the feature is off.
+function applyRoleUI(){
+  const admin=isAdmin(), act=canAct();
+  $("gear").style.display = admin ? "" : "none";
+  if($("maintBtn")) $("maintBtn").disabled = !act;
+  if($("jobSend")) $("jobSend").style.display = act ? "" : "none";
+  if(USERS_ENABLED && CURRENT_USER){
+    $("userBadge").style.display="flex";
+    $("userBadgeName").textContent=(CURRENT_USER.firstName||CURRENT_USER.loginName)+" · "+CURRENT_USER.role;
+  } else if($("userBadge")){
+    $("userBadge").style.display="none";
+  }
+  renderFleet();
+}
+
 init();
 async function init(){
+  wireLoginOverlay();
+  await authGate();
+  applyRoleUI();
   wireUI();
   // Single-printer deep link: this is a focused view — the search box, file
   // browser, sort, compact toggle, settings, the "Selected Model" summary and
@@ -157,6 +297,8 @@ function wireUI(){
   wireModal("unloadmodal", closeUnload, ["unloadx","unloadNo"]);
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
   wireModal("maintmodal", closeMaintenance, ["maintx"]);
+  wireModal("maintReportModal", closeMaintReport, ["maintReportX"]);
+  $("maintBtn").addEventListener("click", openMaintReport);
   wireModal("browsemodal", closeBrowse, ["browsex","browsecancel"]);
   wireModal("elecmodal", closeElecModal, ["elecmodalx","elecmodalcancel"]);
   wireModal("sendmodal", closeSendModal, ["sendmodalx","sendmodalcancel"]);
@@ -463,7 +605,11 @@ async function loadFleet(){
   if(!FLEET.length) renderSkeletonFleet();
   try{
     // Own timeout so a hung request can never wedge the in-flight guard shut.
-    const body=await (await fetch("/api/fleet",{signal:AbortSignal.timeout(15000)})).text();
+    const r=await fetch("/api/fleet",{signal:AbortSignal.timeout(15000)});
+    // A session that expired mid-poll (401) is not "fleet unreachable" — don't
+    // let an {error:...} body get parsed into FLEET, which isn't an array.
+    if(checkAuthFailure(r).status===401) return;
+    const body=await r.text();
     if(body!==FLEET_PREV_BODY){ // unchanged payload → the DOM already shows this state
       FLEET_PREV_BODY=body;
       FLEET=JSON.parse(body);
@@ -581,7 +727,7 @@ function afcLanesHtml(heads,activeExt,printerId){
     return `<div class="afc-lane-card ${active?'active':'idle'}" ${cardStyle}>
       <div class="afc-lane-hdr" ${hdrStyle}>T${i+1}${material&&material!=='—'?' '+esc(material):''}</div>
       <div class="afc-spool-area">
-        <span class="spool-click" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="Unload ${headLabel(i)}">${spoolSvg(color,active,uid)}</span>
+        <span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="Unload ${headLabel(i)}">${spoolSvg(color,active,uid)}</span>
         ${active?`<div class="afc-active-label" style="color:${color}cc">ACTIVE</div>`:''}
         ${loaded&&!active?`<div class="afc-active-label" style="color:var(--ink-faint)">LOADED</div>`:''}
       </div>
@@ -627,7 +773,12 @@ function renderFleet(){
     const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
     return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
   });
-  const dragEnabled=SORT_MODE==='none'&&!q;
+  // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
+  // /api/config, which is admin-only server-side — gate on isAdmin(), not
+  // canAct(), or a Regular user's drag would silently 403 and revert with
+  // no visible feedback (Settings, where the error would surface, is hidden
+  // from them entirely).
+  const dragEnabled=SORT_MODE==='none'&&!q&&isAdmin();
   fleet.forEach(p=>{
     const card=document.createElement("div");
     card.className="pcard"+(p.online?"":" offline");
@@ -685,7 +836,7 @@ function renderFleet(){
       }
     }
     card.innerHTML=`
-      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn" data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
       ${p.queuedFile?queuedFileBannerHtml(p):''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
@@ -709,7 +860,7 @@ function renderFleet(){
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
           `<div class="stats-cell"><div class="stats-cell-label">HOTEND</div><div class="stats-cell-val">${extA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':extT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'hot-fill'}" style="width:${extPct}%"></div></div></div>`+
-          `<div class="stats-cell" data-setbed="${p.id}" style="cursor:pointer" title="Click to set bed temp"><div class="stats-cell-label">BED</div><div class="stats-cell-val">${bedA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':bedT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'warm-fill'}" style="width:${bedPct}%"></div></div></div>`+
+          `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="Click to set bed temp"><div class="stats-cell-label">BED</div><div class="stats-cell-val">${bedA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':bedT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'warm-fill'}" style="width:${bedPct}%"></div></div></div>`+
           `<div class="stats-cell"><div class="stats-cell-label">LAYER</div><div class="stats-cell-val">${p.layer?p.layer.current:'—'}<span class="stats-inline-target">${p.layer?'/'+p.layer.total:''}</span></div></div>`+
           thumbCell+
           `</div>`;
@@ -738,14 +889,14 @@ function renderFleet(){
       <div class="foot${busy?'':' foot-idle'}">
         ${busy
           ? (p.state==="paused"
-                ? `<button class="btn-svg" data-ctl="${p.id}" data-act="resume" title="Resume"><img src="/b-resume.svg" alt="Resume"></button>`
-                : `<button class="btn-svg" data-ctl="${p.id}" data-act="pause" title="Pause"><img src="/b-pause.svg" alt="Pause"></button>`)
-            + `<button class="btn-svg" data-ctl="${p.id}" data-act="cancel" title="Cancel"><img src="/b-cancel.svg" alt="Cancel"></button>`
-            + (p.plate&&p.plate.total>1?`<button class="btn-svg" data-plate="${p.id}" title="Plate"><img src="/b-plate.svg" alt="Plate ${p.plate.total-p.plate.excluded}/${p.plate.total}"></button>`:"")
-            + `<button class="btn-svg" data-estop="${p.id}" title="Emergency Stop"><img src="/b-estop.svg" alt="E-Stop"></button>`
-          : `<button class="btn-svg" ${canSend?"":"disabled"} data-id="${p.id}" data-start="0" title="Upload to printer"><img src="/b-upload.svg" alt="Upload"></button>`
-            + `<button class="btn-svg" ${p.online&&!busy?"":"disabled"} data-id="${p.id}" data-start="1" title="${SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/b-print.svg" alt="Print"></button>`
-            + `<button class="btn-svg" data-preheat="${p.id}" title="Preheat"><img src="/b-preheat.svg" alt="Preheat"></button>`
+                ? `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="Resume"><img src="/b-resume.svg" alt="Resume"></button>`
+                : `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="Pause"><img src="/b-pause.svg" alt="Pause"></button>`)
+            + `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="Cancel"><img src="/b-cancel.svg" alt="Cancel"></button>`
+            + (p.plate&&p.plate.total>1?`<button class="btn-svg" ${canAct()?"":"disabled"} data-plate="${p.id}" title="Plate"><img src="/b-plate.svg" alt="Plate ${p.plate.total-p.plate.excluded}/${p.plate.total}"></button>`:"")
+            + `<button class="btn-svg" ${canAct()?"":"disabled"} data-estop="${p.id}" title="Emergency Stop"><img src="/b-estop.svg" alt="E-Stop"></button>`
+          : `<button class="btn-svg" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="Upload to printer"><img src="/b-upload.svg" alt="Upload"></button>`
+            + `<button class="btn-svg" ${p.online&&!busy&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/b-print.svg" alt="Print"></button>`
+            + `<button class="btn-svg" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/b-preheat.svg" alt="Preheat"></button>`
         }
       </div>
       <div class="pstatus" id="pst-${p.id}"></div>`;
@@ -1357,9 +1508,8 @@ async function doBedSet(printerId,temp){
 // ---- Maintenance modal ----
 let MAINT_TOTAL_SEC=null, PRINTERS_CFG=[];
 function fmtHours(sec){ if(sec==null) return '—'; const h=Math.floor(sec/3600); const m=Math.floor((sec%3600)/60); return h+'h '+m+'m'; }
-async function openMaintenance(url,name){
-  const idx=PRINTERS_CFG.findIndex(p=>p.url===url);
-  if(idx<0) return;
+async function openMaintenance(idx,name){
+  if(idx==null||idx<0) return;
   $("mainttitle").textContent=(name||"Printer")+" — Maintenance";
   $("maintDate").value=new Date().toISOString().slice(0,10);
   $("maintComment").value="";
@@ -1394,6 +1544,38 @@ async function openMaintenance(url,name){
   };
 }
 function closeMaintenance(){ $("maintmodal").classList.remove("show"); }
+
+// ---- Fleet-wide maintenance report (topbar button) ----
+// Entry point for roles that can't reach the admin-only Printers settings
+// tab, where the per-printer Maintenance button normally lives.
+async function openMaintReport(){
+  const list=$("maintReportList");
+  list.innerHTML='<div class="hint">Loading…</div>';
+  $("maintReportModal").classList.add("show");
+  try{
+    const printers=await getJSON("/api/printers");
+    const rows=await Promise.all(printers.map(async p=>{
+      let entries=[];
+      try{ entries=await getJSON("/api/maintenance?printer="+p.id); }catch{}
+      const last=entries.length?entries.slice().sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
+      return {id:p.id,name:p.name,last};
+    }));
+    list.innerHTML=rows.map(r=>
+      `<div class="maint-report-row">`+
+      `<span class="maint-report-dot" style="background:${r.last?'var(--ok)':'var(--idle)'}"></span>`+
+      `<span class="maint-report-name">${esc(r.name)}</span>`+
+      `<span style="font-size:11px;color:var(--ink-faint)">${r.last?esc(r.last.date):'No records'}</span>`+
+      `<button class="btn ghost" ${canAct()?"":"disabled"} data-maint-open="${r.id}" data-maint-name="${esc(r.name)}">Open</button>`+
+      `</div>`
+    ).join("") || '<div class="hint">No printers configured</div>';
+    list.querySelectorAll("[data-maint-open]").forEach(b=>{
+      b.addEventListener("click",()=>{ closeMaintReport(); openMaintenance(parseInt(b.dataset.maintOpen,10), b.dataset.maintName); });
+    });
+  }catch(e){
+    list.innerHTML='<div class="hint" style="color:var(--bad)">'+esc(e.message)+'</div>';
+  }
+}
+function closeMaintReport(){ $("maintReportModal").classList.remove("show"); }
 function renderMaintHistory(entries){
   if(!entries.length){ $("maintHistory").innerHTML='<div style="color:var(--ink-faint);font-size:12px;margin-top:6px">No maintenance records yet.</div>'; return; }
   const sorted=entries.slice().sort((a,b)=>b.date.localeCompare(a.date));
@@ -1505,7 +1687,8 @@ $("gear").addEventListener("click",()=>{
   $("sortBtn").style.display = open ? "none" : "";
   $("compactBtn").style.display = open ? "none" : "";
   $("filesBtn").style.display = open ? "none" : "";
-  if(open){ document.body.classList.remove("showfiles"); }
+  if($("maintBtn")) $("maintBtn").style.display = open ? "none" : "";
+  if(open){ document.body.classList.remove("showfiles"); loadUsersUI(); }
   else { applyFilesOpen(); $("sortMenu").classList.remove("open"); }
 });
 $("addPrinter").addEventListener("click",()=>addPrinterRow("","",{},true));
@@ -1524,6 +1707,54 @@ $("printerSearch").addEventListener("input",()=>{
     const serial=(row.querySelector(".pserial")?.value||"").toLowerCase();
     row.style.display=!q||name.includes(q)||brand.includes(q)||loc.includes(q)||serial.includes(q)?"":"none";
   });
+});
+$("addUser").addEventListener("click",()=>addUserRow(null,true));
+$("userSearch").addEventListener("input",()=>{
+  const q=$("userSearch").value.trim().toLowerCase();
+  document.querySelectorAll("#setUsers .prow").forEach(row=>{
+    const login=(row.querySelector(".ulogin")?.value||"").toLowerCase();
+    const first=(row.querySelector(".ufirst")?.value||"").toLowerCase();
+    const last=(row.querySelector(".ulast")?.value||"").toLowerCase();
+    const role=(row.querySelector(".urole")?.value||"").toLowerCase();
+    row.style.display=!q||login.includes(q)||first.includes(q)||last.includes(q)||role.includes(q)?"":"none";
+  });
+});
+$("resendTest").addEventListener("click", async ()=>{
+  const st=$("resendTestStatus");
+  const to=$("resendTestTo").value.trim();
+  if(!to){ st.className="pstatus err"; st.textContent="Enter a recipient address"; return; }
+  st.className="pstatus work"; st.textContent="Sending…";
+  try{
+    const r=await postJSON("/api/email-test",{apiKey:$("setResendKey").value.trim(),fromAddress:$("setResendFrom").value.trim(),to});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent="Sent";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+});
+// Bootstrap-first-admin: the toggle can't be turned on until this succeeds
+// (checked in saveConfig()), so no default/throwaway admin ever exists.
+let BOOTSTRAPPED_ADMIN=false;
+$("setUsersEnabled").addEventListener("change", async ()=>{
+  const box=$("bootstrapAdmin");
+  if(!$("setUsersEnabled").checked){ box.style.display="none"; return; }
+  try{
+    const users=await getJSON("/api/users");
+    if(users.length){ BOOTSTRAPPED_ADMIN=true; box.style.display="none"; return; }
+  }catch{}
+  BOOTSTRAPPED_ADMIN=false;
+  box.style.display="";
+});
+$("bootSubmit").addEventListener("click", async ()=>{
+  const st=$("bootStatus");
+  const loginName=$("bootLogin").value.trim(), password=$("bootPassword").value;
+  if(!loginName||!password){ st.className="pstatus err"; st.textContent="Login name and password required"; return; }
+  st.className="pstatus work"; st.textContent="Creating…";
+  try{
+    const r=await postJSON("/api/users",{firstName:$("bootFirst").value.trim(),lastName:$("bootLast").value.trim(),loginName,password,role:"admin",otpEnabled:false});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent="Admin created";
+    BOOTSTRAPPED_ADMIN=true;
+    $("bootstrapAdmin").style.display="none";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 });
 $("discover").addEventListener("click",()=>runDiscover());
 $("discoverSubnet").addEventListener("click",()=>{
@@ -1605,6 +1836,12 @@ async function loadConfigUI(){
     $("setOpenCompact").checked=!!c.openCompact;
     ALLOW_MAPPING=c.allowMapping!==false; $("setAllowMapping").checked=ALLOW_MAPPING;
     SUGGEST_MATCHING=c.suggestMatching!==false; $("setSuggestMatching").checked=SUGGEST_MATCHING;
+    $("setUsersEnabled").checked=!!c.usersEnabled;
+    $("bootstrapAdmin").style.display="none";
+    const rs=c.resend||{};
+    $("setResendKey").value="";
+    $("setResendKey").placeholder=rs.hasApiKey?"•••••••• (saved — leave blank to keep)":"re_...";
+    $("setResendFrom").value=rs.fromAddress||"";
     COMPACT=!!c.openCompact; applyCompact();
     const nf=c.notifications||{};
     $("ntfEnabled").checked=!!nf.enabled;
@@ -1618,7 +1855,10 @@ async function loadConfigUI(){
     $("setPrinters").innerHTML="";
     PRINTERS_CFG=c.printers||[];
     PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{brand:p.brand,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,pushNotify:p.pushNotify,serial:p.serial,verificationCode:p.verificationCode,token:p.token}));
-    if(!c.configured){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
+    // The onboarding "add your first printer" flow drops into the admin-only
+    // Printers settings tab — never force that open for a non-Admin role,
+    // who couldn't reach or complete it (Settings itself is hidden for them).
+    if(!c.configured && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
   }catch(e){}
 }
 function addPrinterRow(name,url,opts,autoOpen){
@@ -1665,9 +1905,112 @@ function addPrinterRow(name,url,opts,autoOpen){
   row.querySelector(".rm").addEventListener("click",()=>row.remove());
   row.querySelector(".mv-up").addEventListener("click",()=>{ const prev=row.previousElementSibling; if(prev) row.parentNode.insertBefore(row,prev); });
   row.querySelector(".mv-dn").addEventListener("click",()=>{ const next=row.nextElementSibling; if(next) row.parentNode.insertBefore(next,row); });
-  row.querySelector(".pmaint").addEventListener("click",()=>{ const u=row.querySelector(".purl").value.trim(),n=row.querySelector(".pname").value.trim(); if(u) openMaintenance(u,n); });
+  row.querySelector(".pmaint").addEventListener("click",()=>{
+    const u=row.querySelector(".purl").value.trim(), n=row.querySelector(".pname").value.trim();
+    const idx=PRINTERS_CFG.findIndex(p=>p.url===u);
+    if(idx>=0) openMaintenance(idx,n);
+  });
   $("setPrinters").appendChild(row);
 }
+// ---- Users tab: each row saves itself immediately, independent of #saveCfg ----
+async function loadUsersUI(){
+  $("setUsers").innerHTML="";
+  try{
+    const users=await getJSON("/api/users");
+    users.forEach(u=>addUserRow(u));
+  }catch{}
+}
+function roleLabel(r){ return r==='admin'?'Admin':r==='regular'?'Regular':'View Only'; }
+function addUserRow(u,autoOpen){
+  const row=document.createElement("div"); row.className="prow";
+  row.dataset.userId=u&&u.id?u.id:"";
+  row.innerHTML=
+    `<details class="prow-details"${autoOpen?" open":""}>`+
+    `<summary><span class="prow-chevron">▶</span>`+
+    `<div class="prow-suminfo"><span class="prow-sumname">${esc(u&&u.loginName?u.loginName:"New User")}</span><span class="prow-sumip">${esc(roleLabel(u?u.role:"view"))}</span></div>`+
+    `<div class="prow-sumbtns"><button class="dup" title="Duplicate">⧉</button><button class="rm" title="Remove">×</button></div>`+
+    `</summary>`+
+    `<div class="prow-body"><div class="prow-rows">`+
+    `<div class="prow-irow">`+
+    `<span class="pi-lbl">First</span><input class="field ufirst" maxlength="40" value="${esc(u&&u.firstName||"")}" style="width:150px">`+
+    `<span class="pi-lbl">Last</span><input class="field ulast" maxlength="40" value="${esc(u&&u.lastName||"")}" style="width:150px">`+
+    `</div>`+
+    `<div class="prow-irow">`+
+    `<span class="pi-lbl">Login</span><input class="field ulogin" maxlength="32" value="${esc(u&&u.loginName||"")}" style="width:150px" autocomplete="off">`+
+    `<span class="pi-lbl">Role</span><select class="field urole" style="width:140px">`+
+    `<option value="view">View Only</option><option value="regular">Regular</option><option value="admin">Admin</option>`+
+    `</select>`+
+    `</div>`+
+    `<div class="prow-irow">`+
+    `<span class="pi-lbl">Email</span><input class="field uemail" type="email" value="${esc(u&&u.email||"")}" style="flex:1;min-width:0">`+
+    `<span class="pi-lbl">Phone</span><input class="field uphone" value="${esc(u&&u.phone||"")}" style="width:150px">`+
+    `</div>`+
+    `<div class="prow-extra">`+
+    `<label class="prow-chk"><input type="checkbox" class="uotp" ${u&&u.otpEnabled?"checked":""}><span>Sign in with an emailed code (no password)</span></label>`+
+    `<label title="Password">Password <input class="field upassword" type="password" maxlength="64" placeholder="${u?"leave blank to keep":"required"}" style="max-width:180px" autocomplete="new-password"></label>`+
+    `<button class="btn primary usave">Save</button>`+
+    `<span class="pstatus usave-status"></span>`+
+    `</div></div></div></details>`;
+  const roleSel=row.querySelector(".urole"); roleSel.value=u?u.role:"view";
+  const loginEl=row.querySelector(".ulogin"), sumName=row.querySelector(".prow-sumname"), sumRole=row.querySelector(".prow-sumip");
+  loginEl.addEventListener("input",()=>{ sumName.textContent=loginEl.value.trim()||"New User"; });
+  roleSel.addEventListener("change",()=>{ sumRole.textContent=roleLabel(roleSel.value); });
+  const otpEl=row.querySelector(".uotp"), pwEl=row.querySelector(".upassword");
+  const syncPwState=()=>{
+    pwEl.disabled=otpEl.checked;
+    pwEl.placeholder=otpEl.checked?"not used":(row.dataset.userId?"leave blank to keep":"required");
+    if(otpEl.checked) pwEl.value="";
+  };
+  otpEl.addEventListener("change", syncPwState); syncPwState();
+  row.querySelectorAll(".dup,.rm").forEach(b=>b.addEventListener("click",e=>e.stopPropagation()));
+  row.querySelector(".rm").addEventListener("click",async()=>{
+    const id=row.dataset.userId;
+    if(!id){ row.remove(); return; }
+    if(!confirm('Remove user "'+(loginEl.value||"")+'"? This cannot be undone.')) return;
+    try{
+      const r=checkAuthFailure(await fetch("/api/users/"+id,{method:"DELETE"}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      row.remove();
+    }catch(e){ alert(e.message); }
+  });
+  // Duplicate copies only role + OTP-enabled — every identity/credential field starts blank.
+  row.querySelector(".dup").addEventListener("click",()=>{
+    addUserRow({ role: roleSel.value, otpEnabled: otpEl.checked }, true);
+  });
+  row.querySelector(".usave").addEventListener("click",async()=>{
+    const st=row.querySelector(".usave-status");
+    const body={
+      firstName: row.querySelector(".ufirst").value.trim(),
+      lastName: row.querySelector(".ulast").value.trim(),
+      loginName: loginEl.value.trim(),
+      email: row.querySelector(".uemail").value.trim(),
+      phone: row.querySelector(".uphone").value.trim(),
+      role: roleSel.value,
+      otpEnabled: otpEl.checked
+    };
+    if(pwEl.value) body.password=pwEl.value;
+    // "usave-status" must stay in className every time — it's how this element
+    // gets re-found on the *next* click (className is fully overwritten below,
+    // not just toggled, since it mirrors the pstatus idiom used elsewhere).
+    if(!body.loginName){ st.className="pstatus usave-status err"; st.textContent="Login name required"; return; }
+    const id=row.dataset.userId;
+    if(!id&&!otpEl.checked&&!pwEl.value){ st.className="pstatus usave-status err"; st.textContent="Set a password, or enable OTP login"; return; }
+    st.className="pstatus usave-status work"; st.textContent="Saving…";
+    try{
+      const r=checkAuthFailure(id
+        ? await fetch("/api/users/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+        : await fetch("/api/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      row.dataset.userId=d.user.id;
+      pwEl.value="";
+      st.className="pstatus usave-status ok"; st.textContent="Saved";
+      sumName.textContent=d.user.loginName; sumRole.textContent=roleLabel(d.user.role);
+      syncPwState();
+    }catch(e){ st.className="pstatus usave-status err"; st.textContent=e.message; }
+  });
+  $("setUsers").appendChild(row);
+}
+
 function gatherPrinters(){
   return [...$("setPrinters").querySelectorAll(".prow")].map(r=>({
     name:r.querySelector(".pname").value.trim(),
@@ -1727,6 +2070,12 @@ function startFleetRefresh(){
 }
 async function saveConfig(){
   const s=$("cfgStatus"); s.className="pstatus work"; s.textContent="Saving…";
+  // Refuse to send usersEnabled:true until the inline bootstrap-admin form
+  // has succeeded — no default/throwaway admin is ever created as a fallback.
+  if($("setUsersEnabled").checked && $("bootstrapAdmin").style.display!=="none" && !BOOTSTRAPPED_ADMIN){
+    s.className="pstatus err"; s.textContent="Create the first Admin account before enabling User Access Management";
+    return;
+  }
   // auto-fill empty name/serial from printer before saving
   const prows=[...$("setPrinters").querySelectorAll(".prow")];
   const needProbe=prows.filter(r=>{
@@ -1753,7 +2102,9 @@ async function saveConfig(){
   const er=parseFloat($("setElectricityRate").value)||0;
   const tn=$("setTNotation").checked; USE_T_NOTATION=tn;
   ALLOW_MAPPING=$("setAllowMapping").checked; SUGGEST_MATCHING=$("setSuggestMatching").checked;
-  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING||undefined, suggestMatching:SUGGEST_MATCHING||undefined,
+  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
+    usersEnabled:$("setUsersEnabled").checked||undefined,
+    resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     notifications:{
       enabled:$("ntfEnabled").checked,
       onEvents:$("ntfEvents").checked,
@@ -1771,6 +2122,12 @@ async function saveConfig(){
     $("setupmsg").textContent="";
     FILAMENT_COST=fc>0?fc:0; ELECTRICITY_RATE=er>0?er:0;
     if(MAP) renderJob(); // refresh cost line immediately
+    // Flipping usersEnabled on/off takes effect on THIS tab immediately: going
+    // on with no session yet prompts login as the admin just created; going
+    // off drops straight back to the fully-open UI, no reload needed either way.
+    USERS_ENABLED=!!c.usersEnabled;
+    if(USERS_ENABLED && !CURRENT_USER){ applyRoleUI(); showLoginOverlay(); }
+    else applyRoleUI();
     loadFiles(); loadFleet(); startFleetRefresh();
   }catch(e){ s.className="pstatus err"; s.textContent=e.message; }
 }
