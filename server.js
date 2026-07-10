@@ -37,6 +37,37 @@ function loadConfig() {
 loadConfig();
 const PORT = CFG.port || 4545;
 
+// ---- CLI notify mode ----
+// `SnapCon --load "C:\file.gcode" --printer "U1 White" --outputname "Nicer Name"`
+// pings an ALREADY-RUNNING instance's HTTP API and exits — it never starts the
+// web server itself. A plain top-level `return` (valid — CommonJS wraps each
+// file in a function) stops the rest of this file, Express setup included,
+// from ever running. --outputname is cosmetic + the upload filename only —
+// the file read from disk is always the --load path.
+const CLI_LOAD_ARG = process.argv.indexOf("--load");
+if (CLI_LOAD_ARG !== -1) {
+  const file = process.argv[CLI_LOAD_ARG + 1];
+  const printerArgI = process.argv.indexOf("--printer");
+  const printer = printerArgI !== -1 ? process.argv[printerArgI + 1] : "";
+  const outputArgI = process.argv.indexOf("--outputname");
+  const outputname = outputArgI !== -1 ? process.argv[outputArgI + 1] : "";
+  if (!file) { console.error("--load requires a file path"); process.exit(1); }
+  const body = JSON.stringify({ file: path.resolve(file), printer, outputname });
+  const req = http.request({
+    hostname: "127.0.0.1", port: PORT, path: "/api/notify-load", method: "POST",
+    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+  }, res => {
+    let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
+    res.on("end", () => {
+      if (res.statusCode >= 300) { console.error("SnapCon: " + b); process.exit(1); }
+      console.log("SnapCon: " + b); process.exit(0);
+    });
+  });
+  req.on("error", e => { console.error("Could not reach SnapCon on port " + PORT + " — is it running? (" + e.message + ")"); process.exit(1); });
+  req.write(body); req.end();
+  return;
+}
+
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(ASSET_DIR, "public")));
@@ -380,6 +411,8 @@ app.post("/api/printfile", async (req, res) => {
       await sendGcode(p, lines.join("\n"));
     }
     await sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${filename}"`);
+    // Printing it is what "ready to print" was waiting for — clear the badge.
+    if (queuedFile.get(printer)?.name === filename) queuedFile.delete(printer);
     res.json({ ok: true, printer: p.name, filename, mapped: tools.length });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -546,6 +579,50 @@ async function probeCached(p) {
   return result;
 }
 
+// ---- Notify: external CLI hook (--load/--printer) stages a file for a printer ----
+// No interactive hand-off, ever — a notify always just uploads. If the printer
+// is busy right now, it's held in pendingLoad and a background sweep retries
+// it once the printer goes idle, with no browser tab needed for that to happen.
+// queuedFile: printer index -> { name, status, ts, error? } — reflects the
+// upload's progress; visible to ANY tab as a "ready to print" card banner.
+const pendingLoad = new Map();
+const queuedFile = new Map();
+
+const normPrinterName = s => String(s || "").replace(/_/g, " ").trim().toLowerCase();
+function findPrinterIndex(name) {
+  const norm = normPrinterName(name);
+  if (!norm) return -1;
+  return PRINTERS.findIndex(p => normPrinterName(p.name) === norm);
+}
+
+async function isPrinterIdle(p) {
+  try { const st = await probeCached(p); return st.online && st.state !== "printing" && st.state !== "paused"; }
+  catch { return false; }
+}
+async function uploadNotifiedFile(idx, pl) {
+  const p = PRINTERS[idx];
+  queuedFile.set(idx, { name: pl.name, status: "uploading", ts: Date.now() });
+  try {
+    await uploadWithProgress(baseUrl(p), pl.file, pl.name, { sent: 0, total: 0 });
+    queuedFile.set(idx, { name: pl.name, status: "ready", ts: Date.now() });
+  } catch (e) {
+    queuedFile.set(idx, { name: pl.name, status: "error", error: e.message, ts: Date.now() });
+  }
+}
+// Runs independent of any open browser tab — this is what lets a queued file
+// eventually upload even if nobody ever loads the page.
+const PENDING_RETRY_MS = 5000;
+setInterval(async () => {
+  for (const [idx, pl] of [...pendingLoad]) {
+    const p = PRINTERS[idx];
+    if (!p) { pendingLoad.delete(idx); continue; }
+    if (await isPrinterIdle(p)) {
+      pendingLoad.delete(idx);
+      uploadNotifiedFile(idx, pl);
+    }
+  }
+}, PENDING_RETRY_MS).unref();
+
 app.get("/api/fleet", async (req, res) => {
   // ?printer=N probes just that printer — the splash screen uses this to show
   // per-printer connect progress. No param = the whole fleet (normal polling).
@@ -555,8 +632,44 @@ app.get("/api/fleet", async (req, res) => {
     if (!p) return res.status(400).json({ error: "Unknown printer" });
     return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", ...(await probeCached(p)) });
   }
-  const out = await Promise.all(PRINTERS.map((p, i) => probeCached(p).then(r => ({ id: i, url: p.url, brand: p.brand || "SnapMaker", ...r }))));
+  const out = await Promise.all(PRINTERS.map(async (p, i) => {
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", ...(await probeCached(p)) };
+    const qf = queuedFile.get(i);
+    if (qf) row.queuedFile = qf;
+    return row;
+  }));
   res.json(out);
+});
+
+// Only the local machine may stage arbitrary filesystem paths onto a printer —
+// this bypasses the gcodeFolder jail that keeps the normal web UI sandboxed.
+function isLoopback(req) {
+  const ip = req.socket.remoteAddress || "";
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+}
+
+app.post("/api/notify-load", async (req, res) => {
+  if (!isLoopback(req)) return res.status(403).json({ error: "localhost only" });
+  const { file, printer, outputname } = req.body || {};
+  if (!file || typeof file !== "string") return res.status(400).json({ error: "file required" });
+  if (!printer) return res.status(400).json({ error: "printer required" });
+  if (outputname && /["\r\n/\\]/.test(outputname)) return res.status(400).json({ error: "Bad output name" });
+  const absFile = path.resolve(file);
+  if (!fs.existsSync(absFile) || !fs.statSync(absFile).isFile()) return res.status(404).json({ error: "File not found: " + absFile });
+  const idx = findPrinterIndex(printer);
+  if (idx === -1) return res.status(400).json({ error: "Unknown printer: " + printer });
+  const p = PRINTERS[idx];
+  // outputname is used exactly as given — it's what the file is uploaded and
+  // displayed as. The file actually read off disk is always absFile.
+  const name = outputname ? outputname.trim() : path.basename(absFile);
+
+  if (!(await isPrinterIdle(p))) {
+    pendingLoad.set(idx, { file: absFile, name, ts: Date.now() });
+    return res.json({ ok: true, mode: "pending", printer: p.name });
+  }
+
+  uploadNotifiedFile(idx, { file: absFile, name });
+  res.json({ ok: true, mode: "queued", printer: p.name });
 });
 
 // ---- Camera snapshot: Snapmaker U1 monitor.jpg via Moonraker WebSocket RPC ----
@@ -1120,16 +1233,29 @@ function localSubnets() {
   }
   return [...out];
 }
+// Port 80 catches the common case (Fluidd/Mainsail/KIAUH nginx proxying
+// straight to Moonraker) — but plenty of stock images (e.g. Creality's K1
+// series) run Moonraker directly on its own default port 7125 with nothing
+// on 80 at all. Try both so those aren't invisible to the scan.
+const DISCOVER_PORTS = [80, 7125];
+async function probeMoonrakerAt(base) {
+  const { ok, json } = await fetchJSONTimeout(`${base}/machine/system_info`, 900);
+  if (!ok) return null;
+  const si = (json.result || {}).system_info;
+  if (!si) return null;
+  const pi = si.product_info || {};
+  const { mac } = pickIface(si.network || {});
+  return { url: base, device_name: pi.device_name || null, machine_type: pi.machine_type || null, serial: pi.serial_number || null, mac };
+}
 async function probeMoonraker(ip) {
-  try {
-    const { ok, json } = await fetchJSONTimeout(`http://${ip}/machine/system_info`, 900);
-    if (!ok) return null;
-    const si = (json.result || {}).system_info;
-    if (!si) return null;
-    const pi = si.product_info || {};
-    const { mac } = pickIface(si.network || {});
-    return { ip, url: `http://${ip}`, device_name: pi.device_name || null, machine_type: pi.machine_type || null, serial: pi.serial_number || null, mac };
-  } catch { return null; }
+  for (const port of DISCOVER_PORTS) {
+    const base = port === 80 ? `http://${ip}` : `http://${ip}:${port}`;
+    try {
+      const hit = await probeMoonrakerAt(base);
+      if (hit) return { ip, ...hit };
+    } catch { /* try the next port */ }
+  }
+  return null;
 }
 app.get("/api/probe-printer", async (req, res) => {
   const url = (req.query.url || "").trim().replace(/\/+$/, "");
