@@ -12,6 +12,32 @@
   <img src="/snapcon-icon-large.svg" alt="SnapCon">
   <div class="splash-sub" id="splashsub">connecting to printers…</div>
 </div>
+<div class="login-overlay" id="loginOverlay" style="display:none">
+  <div class="login-box">
+    <img src="/snapcon-icon-large.svg" alt="SnapCon" class="login-logo">
+    <div id="loginStep1">
+      <label class="fl">Login name</label>
+      <input class="field" id="loginName" autocomplete="username">
+      <label class="fl" style="margin-top:10px">Password</label>
+      <input class="field" id="loginPassword" type="password" autocomplete="current-password">
+      <div class="login-actions">
+        <button class="btn primary" id="loginSubmit">Log in</button>
+        <button class="btn ghost" id="loginOtpBtn">Email me a code instead</button>
+      </div>
+      <div class="pstatus" id="loginStatus"></div>
+    </div>
+    <div id="loginStep2" style="display:none">
+      <div class="hint" style="margin-bottom:10px">Enter the code emailed to you.</div>
+      <label class="fl">Code</label>
+      <input class="field" id="otpCode" autocomplete="one-time-code" maxlength="8" style="text-transform:uppercase">
+      <div class="login-actions">
+        <button class="btn primary" id="otpSubmit">Verify</button>
+        <button class="btn ghost" id="otpBack">Back</button>
+      </div>
+      <div class="pstatus" id="otpStatus"></div>
+    </div>
+  </div>
+</div>
 <div class="shell">
   <aside class="side">
     <div class="head">
@@ -47,10 +73,16 @@
           <button class="sort-opt" data-sort="none"><span class="sort-check" id="sc-none"></span>No sort</button>
           <button class="sort-opt" data-sort="status"><span class="sort-check" id="sc-status"></span>By status</button>
           <button class="sort-opt" data-sort="time"><span class="sort-check" id="sc-time"></span>By time remaining</button>
+          <button class="sort-opt" data-sort="name"><span class="sort-check" id="sc-name"></span>By name</button>
         </div>
       </div>
       <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
+      <button class="gear" id="maintBtn" title="Maintenance"><span class="topbar-emoji">🔧</span></button>
       <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
+      <div class="user-badge" id="userBadge" style="display:none">
+        <span class="user-badge-name" id="userBadgeName"></span>
+        <button class="btn ghost" id="logoutBtn">Logout</button>
+      </div>
     </div>
     <div class="setup" id="setup">
       <div class="sechead"><h2>Settings</h2><span class="count" id="setupmsg"></span></div>
@@ -60,6 +92,7 @@
         <button class="set-tab" data-tab="notif">Notifications</button>
         <button class="set-tab" data-tab="printers">Printers</button>
         <button class="set-tab" data-tab="firmware">Firmware</button>
+        <button class="set-tab" data-tab="users">Users</button>
       </div>
 
       <div class="set-panel" id="tab-general">
@@ -90,6 +123,21 @@
 
         <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setAllowMapping"> Enable Head Mapping <span class="hint">show color-to-head assignment UI when sending prints</span></label>
         <label style="margin-top:6px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setSuggestMatching"> Auto-Match Colors <span class="hint">suggest the closest head color; uncheck for T1→T1 order</span></label>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setUsersEnabled"> Enable User Access Management <span class="hint">require login; gate actions by role</span></label>
+        <div class="bootstrap-admin" id="bootstrapAdmin" style="display:none">
+          <div class="hint" style="margin-bottom:8px">Create the first Admin account — it must use a password, not an emailed code.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <input class="field" id="bootFirst" placeholder="First name (optional)" style="max-width:150px">
+            <input class="field" id="bootLast" placeholder="Last name (optional)" style="max-width:150px">
+            <input class="field" id="bootLogin" placeholder="Login name" style="max-width:150px" autocomplete="off">
+            <input class="field" id="bootPassword" type="password" placeholder="Password" style="max-width:150px" autocomplete="new-password">
+          </div>
+          <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
+            <button class="btn primary" id="bootSubmit">Create Admin</button>
+            <span class="pstatus" id="bootStatus"></span>
+          </div>
+        </div>
       </div>
 
       </div>
@@ -147,6 +195,27 @@
             <span class="pstatus" id="fwStatus"></span>
           </div>
           <div id="fwResults" style="margin-top:14px"></div>
+        </div>
+      </div>
+
+      <div class="set-panel" id="tab-users" style="display:none">
+        <div class="setcard">
+          <div class="fl">Resend API key <span class="hint">for OTP email login — never sent back to the browser once saved</span></div>
+          <input class="field" id="setResendKey" type="password" placeholder="re_..." style="max-width:280px" autocomplete="off">
+          <label class="fl" style="margin-top:10px">From address</label>
+          <input class="field" id="setResendFrom" placeholder="snapcon@yourdomain.com" style="max-width:280px">
+          <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <input class="field" id="resendTestTo" placeholder="test@address.com" style="max-width:220px">
+            <button class="btn ghost" id="resendTest">Send test email</button>
+            <span class="pstatus" id="resendTestStatus"></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;margin:14px 0 10px">
+          <input class="field" id="userSearch" placeholder="Search users…" style="max-width:220px" />
+        </div>
+        <div id="setUsers"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn ghost" id="addUser">+ Add User</button>
         </div>
       </div>
 
@@ -247,6 +316,13 @@
         <label>Comment <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea></label>
         <div><button class="btn primary" id="maintSave">Save</button> <span class="pstatus" id="maintStatus"></span></div>
       </div>
+    </div>
+  </div>
+
+  <div class="modal" id="maintReportModal">
+    <div class="modalbox" style="max-width:520px">
+      <div class="modalhdr"><span>Maintenance</span><button class="modalx" id="maintReportX">✕</button></div>
+      <div id="maintReportList"></div>
     </div>
   </div>
 
