@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.0.7
+// server.js — SnapCon  ·  v0.1.0
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.0.7";
+const VERSION = "0.1.0";
 
 const express = require("express");
 const fs = require("fs");
@@ -59,6 +59,13 @@ loadUsers();
 // file in a function) stops the rest of this file, Express setup included,
 // from ever running. --outputname is cosmetic + the upload filename only —
 // the file read from disk is always the --load path.
+// `--snapcon <host[:port]>` targets a SnapCon instance on a DIFFERENT machine
+// (e.g. the slicing PC isn't the one hosting SnapCon). Since that instance
+// can't read a path off this machine's disk, this mode reads the file itself
+// and streams its bytes over HTTP instead of sending a path reference — the
+// server materializes them into a temp file on its own side (see
+// /api/notify-load below). Omit --snapcon to keep the original same-machine,
+// zero-copy path-reference flow.
 const CLI_LOAD_ARG = process.argv.indexOf("--load");
 if (CLI_LOAD_ARG !== -1) {
   const file = process.argv[CLI_LOAD_ARG + 1];
@@ -66,7 +73,42 @@ if (CLI_LOAD_ARG !== -1) {
   const printer = printerArgI !== -1 ? process.argv[printerArgI + 1] : "";
   const outputArgI = process.argv.indexOf("--outputname");
   const outputname = outputArgI !== -1 ? process.argv[outputArgI + 1] : "";
+  const snapconArgI = process.argv.indexOf("--snapcon");
+  const snapconTarget = snapconArgI !== -1 ? process.argv[snapconArgI + 1] : "";
   if (!file) { console.error("--load requires a file path"); process.exit(1); }
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { console.error("File not found: " + file); process.exit(1); }
+
+  if (snapconTarget) {
+    // "host", "host:port", "[ipv6]", or "[ipv6]:port" — bracket form first so
+    // a bare colon inside an IPv6 address is never mistaken for a port split.
+    const s = String(snapconTarget);
+    const bracketed = s.match(/^\[([^\]]+)\](?::(\d+))?$/);
+    let hostname, port;
+    if (bracketed) {
+      hostname = bracketed[1]; port = bracketed[2] ? parseInt(bracketed[2], 10) : 4545;
+    } else {
+      const i = s.lastIndexOf(":");
+      const tail = i !== -1 ? s.slice(i + 1) : "";
+      if (i !== -1 && /^\d+$/.test(tail)) { hostname = s.slice(0, i); port = parseInt(tail, 10); }
+      else { hostname = s; port = 4545; }
+    }
+    const stat = fs.statSync(file);
+    const qs = "printer=" + encodeURIComponent(printer) + "&outputname=" + encodeURIComponent(outputname) + "&filename=" + encodeURIComponent(path.basename(file));
+    const req = http.request({
+      hostname, port, path: "/api/notify-load?" + qs, method: "POST",
+      headers: { "Content-Type": "application/octet-stream", "Content-Length": stat.size }
+    }, res => {
+      let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
+      res.on("end", () => {
+        if (res.statusCode >= 300) { console.error("SnapCon: " + b); process.exit(1); }
+        console.log("SnapCon: " + b); process.exit(0);
+      });
+    });
+    req.on("error", e => { console.error("Could not reach SnapCon at " + hostname + ":" + port + " (" + e.message + ")"); process.exit(1); });
+    fs.createReadStream(file).pipe(req);
+    return;
+  }
+
   const body = JSON.stringify({ file: path.resolve(file), printer, outputname });
   const req = http.request({
     hostname: "127.0.0.1", port: PORT, path: "/api/notify-load", method: "POST",
@@ -83,8 +125,19 @@ if (CLI_LOAD_ARG !== -1) {
   return;
 }
 
+// Temp staging area for files pushed from a remote --snapcon CLI call (see
+// /api/notify-load) — the server can't reference a path on the CLI's own
+// machine, so it writes the pushed bytes here first. Wiped on every startup
+// to drop anything orphaned by a crash mid-transfer.
+const NOTIFY_TMP_DIR = path.join(BASE_DIR, ".notify-tmp");
+try { fs.rmSync(NOTIFY_TMP_DIR, { recursive: true, force: true }); } catch {}
+
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+// Separate parser (different Content-Type) for the raw gcode bytes a remote
+// --snapcon push sends to /api/notify-load — express.json() above ignores
+// non-JSON bodies and leaves the stream untouched, so layering this is safe.
+const rawGcodeBody = express.raw({ type: "application/octet-stream", limit: "2gb" });
 app.use(express.static(path.join(ASSET_DIR, "public")));
 // Annotates req.user on every /api request; when usersEnabled is false this
 // always resolves to an implicit admin, so every route below behaves exactly
@@ -293,10 +346,11 @@ setInterval(() => {
 
 app.post("/api/print", requireRegular, (req, res) => {
   const { file, printer, start, map } = req.body || {};
-  const fp = safePath(file);
-  if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
+  const fp = safePath(file);
+  if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
 
   // map is { logicalToolIndex: physicalHeadIndex }. Reject two tools → same head —
   // but only when actually starting a print. A plain upload just stages the file
@@ -416,6 +470,7 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
   const { printer, filename, map } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
   if (!filename || /["\r\n]/.test(filename)) return res.status(400).json({ error: "Bad filename" });
 
   // Same head-mapping macros as the upload flow (map = { paletteIdx: headIdx }).
@@ -593,11 +648,16 @@ const offlineCache = new Map();   // printer url -> { result, until }
 
 async function probeCached(p) {
   const hit = offlineCache.get(p.url);
-  if (hit && Date.now() < hit.until) return hit.result;
-  const result = await probe(p);
-  if (result.online) offlineCache.delete(p.url);
-  else offlineCache.set(p.url, { result, until: Date.now() + OFFLINE_RETRY_MS });
-  return result;
+  let result;
+  if (hit && Date.now() < hit.until) result = hit.result;
+  else {
+    result = await probe(p);
+    if (result.online) offlineCache.delete(p.url);
+    else offlineCache.set(p.url, { result, until: Date.now() + OFFLINE_RETRY_MS });
+  }
+  // Checked fresh every call, independent of the reachability cache above —
+  // maintenanceMode can flip without a new probe cycle needing to happen.
+  return p.maintenanceMode ? { ...result, state: "maintenance" } : result;
 }
 
 // ---- Notify: external CLI hook (--load/--printer) stages a file for a printer ----
@@ -628,6 +688,10 @@ async function uploadNotifiedFile(idx, pl) {
     queuedFile.set(idx, { name: pl.name, status: "ready", ts: Date.now() });
   } catch (e) {
     queuedFile.set(idx, { name: pl.name, status: "error", error: e.message, ts: Date.now() });
+  } finally {
+    // Remote --snapcon pushes materialize into NOTIFY_TMP_DIR (see
+    // /api/notify-load) — that copy is only ever needed for this one upload.
+    if (pl.cleanup) { try { fs.unlinkSync(pl.file); } catch {} }
   }
 }
 // Runs independent of any open browser tab — this is what lets a queued file
@@ -669,7 +733,37 @@ function isLoopback(req) {
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 }
 
-app.post("/api/notify-load", async (req, res) => {
+app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
+  // A remote --snapcon CLI call arrives as raw gcode bytes (application/octet-
+  // stream) instead of a JSON {file} path reference, since it can't assume
+  // this server can read a path off the CLI's own machine. It's gated the
+  // same as an actual print request (requireRegular) rather than the
+  // loopback-trust check below, since it's reachable from anywhere on the LAN.
+  if (Buffer.isBuffer(req.body)) {
+    if (!req.user) return res.status(401).json({ error: "Login required" });
+    if (req.user.role !== "regular" && req.user.role !== "admin") return res.status(403).json({ error: "Insufficient permissions" });
+    const printer = String(req.query.printer || "");
+    const outputname = String(req.query.outputname || "").trim();
+    const filename = String(req.query.filename || "");
+    if (!printer) return res.status(400).json({ error: "printer required" });
+    if (outputname && /["\r\n/\\]/.test(outputname)) return res.status(400).json({ error: "Bad output name" });
+    const idx = findPrinterIndex(printer);
+    if (idx === -1) return res.status(400).json({ error: "Unknown printer: " + printer });
+    const p = PRINTERS[idx];
+    const name = outputname || path.basename(filename || "upload.gcode");
+    fs.mkdirSync(NOTIFY_TMP_DIR, { recursive: true });
+    const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const tmpFile = path.join(NOTIFY_TMP_DIR, "push-" + Date.now() + "-" + Math.random().toString(16).slice(2) + "-" + safeName);
+    fs.writeFileSync(tmpFile, req.body);
+
+    if (!(await isPrinterIdle(p))) {
+      pendingLoad.set(idx, { file: tmpFile, name, ts: Date.now(), cleanup: true });
+      return res.json({ ok: true, mode: "pending", printer: p.name });
+    }
+    uploadNotifiedFile(idx, { file: tmpFile, name, cleanup: true });
+    return res.json({ ok: true, mode: "queued", printer: p.name });
+  }
+
   if (!isLoopback(req)) return res.status(403).json({ error: "localhost only" });
   const { file, printer, outputname } = req.body || {};
   if (!file || typeof file !== "string") return res.status(400).json({ error: "file required" });
@@ -963,11 +1057,50 @@ app.get("/api/printer-hours", requireAuth, async (req, res) => {
 });
 
 // ---- Maintenance log per printer ----
+const DEFAULT_MAINT_COMPONENTS = ["Linear Shaft / Linear Bearing", "X Carbon Rod Assembly", "Lead Screw / Nut", "Steel Pin / Steel Ball", "Timing Belt", "Pogo pin"];
+const MAINT_FREQ_MONTHS = { monthly: 1, quarterly: 3, "6months": 6 };
+// CFG.maintenanceComponents starts out undefined on any pre-existing config —
+// this is the same "compute the default at read time, only persist once
+// something actually changes" convention used elsewhere (e.g. refreshInterval).
+const maintComponents = () => Array.isArray(CFG.maintenanceComponents) ? CFG.maintenanceComponents : DEFAULT_MAINT_COMPONENTS.slice();
+function addMonths(dateStr, months) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+function computeWarranty(purchaseDate) {
+  if (!purchaseDate) return false;
+  const expiry = new Date(purchaseDate + "T00:00:00");
+  expiry.setMonth(expiry.getMonth() + 12);
+  return Date.now() <= expiry.getTime();
+}
+// "Next" due = soonest nextScheduled among each component's MOST RECENT entry
+// — an older service record for the same part shouldn't out-rank a newer one.
+function computeNextMaintenance(entries) {
+  // entries is always in save/push order, so the last one seen per component
+  // IS the most recent — comparing e.date alone would tie (and pick wrong)
+  // whenever two entries for the same component are logged on the same day.
+  const latestByComponent = new Map();
+  for (const e of entries) {
+    if (!e.component || !e.nextScheduled) continue;
+    latestByComponent.set(e.component, e);
+  }
+  let best = null;
+  for (const e of latestByComponent.values()) {
+    if (!best || e.nextScheduled < best.nextScheduled) best = e;
+  }
+  return best ? { date: best.nextScheduled, component: best.component } : null;
+}
+
 app.get("/api/maintenance", requireAuth, (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
-  res.json(p.maintenance || []);
+  const entries = p.maintenance || [];
+  // warranty/next are computed server-side and returned as plain values (not
+  // the raw purchaseDate) so Regular/View roles — who never receive printers[]
+  // from publicCfg() — can still see them without gaining printer-config access.
+  res.json({ entries, components: maintComponents(), warranty: computeWarranty(p.purchaseDate), next: computeNextMaintenance(entries) });
 });
 
 app.post("/api/maintenance", requireRegular, (req, res) => {
@@ -977,10 +1110,37 @@ app.post("/api/maintenance", requireRegular, (req, res) => {
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (!entry || !entry.date) return res.status(400).json({ error: "Missing date" });
   if (!p.maintenance) p.maintenance = [];
-  p.maintenance.push({ date: String(entry.date), comment: String(entry.comment || ""), hours: String(entry.hours || "—"), totalSeconds: entry.totalSeconds != null ? Number(entry.totalSeconds) : null });
+  const frequency = MAINT_FREQ_MONTHS[entry.frequency] ? entry.frequency : "monthly";
+  const component = String(entry.component || "").trim();
+  p.maintenance.push({
+    date: String(entry.date),
+    comment: String(entry.comment || ""),
+    hours: String(entry.hours || "—"),
+    totalSeconds: entry.totalSeconds != null ? Number(entry.totalSeconds) : null,
+    component,
+    frequency,
+    nextScheduled: addMonths(entry.date, MAINT_FREQ_MONTHS[frequency]),
+    cost: Number(entry.cost) || 0
+  });
+  if (component && !maintComponents().includes(component)) CFG.maintenanceComponents = [...maintComponents(), component];
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
-    res.json({ ok: true, maintenance: p.maintenance });
+    res.json({ ok: true, entries: p.maintenance, components: maintComponents(), warranty: computeWarranty(p.purchaseDate), next: computeNextMaintenance(p.maintenance) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Separate from the log-entry save above — the Offline/Online button is its
+// own action, not tied to logging a maintenance record.
+app.post("/api/maintenance-mode", requireRegular, (req, res) => {
+  const { printer, offline } = req.body || {};
+  const p = PRINTERS[parseInt(printer, 10)];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  p.maintenanceMode = !!offline;
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
+    res.json({ ok: true, maintenanceMode: p.maintenanceMode });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -998,6 +1158,7 @@ function publicCfg(role) {
     refreshInterval: CFG.refreshInterval || 2,
     filamentCost: CFG.filamentCost || null,
     electricityRate: CFG.electricityRate || null,
+    currency: CFG.currency || "$",
     tNotation: CFG.tNotation || false,
     openCompact: CFG.openCompact || false,
     allowMapping: CFG.allowMapping !== false,
@@ -1014,7 +1175,8 @@ function publicCfg(role) {
     // unlike printer tokens (which do, into a masked <input>), this secret
     // gets the stricter treatment since leaking it is exactly what this
     // feature is partly meant to close off.
-    resend: { fromAddress: (CFG.resend && CFG.resend.fromAddress) || "", hasApiKey: !!(CFG.resend && CFG.resend.apiKey) }
+    resend: { fromAddress: (CFG.resend && CFG.resend.fromAddress) || "", hasApiKey: !!(CFG.resend && CFG.resend.apiKey) },
+    otp: { service: (CFG.otp && CFG.otp.service) || "resend", ntfyTopic: (CFG.otp && CFG.otp.ntfyTopic) || "" }
   };
 }
 app.get("/api/config", requireAuth, (req, res) => res.json(publicCfg(req.user.role)));
@@ -1030,6 +1192,7 @@ app.post("/api/config", requireAdmin, (req, res) => {
     refreshInterval: (typeof b.refreshInterval === "number" && b.refreshInterval >= 1 && b.refreshInterval <= 60) ? b.refreshInterval : (CFG.refreshInterval || 2),
     filamentCost: (typeof b.filamentCost === "number" && b.filamentCost > 0) ? b.filamentCost : undefined,
     electricityRate: (typeof b.electricityRate === "number" && b.electricityRate > 0) ? b.electricityRate : undefined,
+    currency: (typeof b.currency === "string" && b.currency.trim()) ? b.currency.trim().slice(0, 6) : "$",
     tNotation: b.tNotation ? true : undefined,
     openCompact: b.openCompact ? true : undefined,
     // Unlike tNotation/openCompact (default off, "omit means false" is safe),
@@ -1042,6 +1205,10 @@ app.post("/api/config", requireAdmin, (req, res) => {
       apiKey: (typeof b.resend.apiKey === "string" && b.resend.apiKey.trim()) ? b.resend.apiKey.trim() : ((CFG.resend && CFG.resend.apiKey) || undefined),
       fromAddress: String(b.resend.fromAddress || "").trim()
     } : (CFG.resend || undefined),
+    otp: (b.otp && typeof b.otp === "object") ? {
+      service: b.otp.service === "ntfy" ? "ntfy" : "resend",
+      ntfyTopic: String(b.otp.ntfyTopic || "").trim()
+    } : (CFG.otp || undefined),
     notifications: (b.notifications && typeof b.notifications === "object") ? {
       enabled: !!b.notifications.enabled,
       onEvents: !!b.notifications.onEvents,
@@ -1122,16 +1289,28 @@ app.post("/api/login", async (req, res) => {
 // can't be used to enumerate accounts.
 app.post("/api/login/otp/request", async (req, res) => {
   if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
-  if (!CFG.resend || !CFG.resend.apiKey || !CFG.resend.fromAddress) return res.status(500).json({ error: "Email login is not configured" });
+  const otpService = (CFG.otp && CFG.otp.service) || "resend";
+  if (otpService === "ntfy") {
+    if (!CFG.otp || !CFG.otp.ntfyTopic) return res.status(500).json({ error: "OTP is not configured" });
+  } else if (!CFG.resend || !CFG.resend.apiKey || !CFG.resend.fromAddress) {
+    return res.status(500).json({ error: "OTP is not configured" });
+  }
   const u = findUserByLoginName((req.body || {}).loginName);
-  if (!u || !u.otpEnabled || !u.email) return res.status(400).json({ error: "Could not send a code for that login name" });
+  // ntfy delivers to a shared topic, not a per-user address, so email isn't
+  // required for that path — it still is for Resend, which needs somewhere
+  // to send the message.
+  if (!u || !u.otpEnabled || (otpService !== "ntfy" && !u.email)) return res.status(400).json({ error: "Could not send a code for that login name" });
   const code = auth.setOtpCode(u.loginNameLower);
   try {
-    await sendResendEmail({
-      apiKey: CFG.resend.apiKey, fromAddress: CFG.resend.fromAddress, to: u.email,
-      subject: "Your SnapCon login code",
-      text: "Your SnapCon login code is: " + code + "\n\nThis code expires in 10 minutes."
-    });
+    if (otpService === "ntfy") {
+      await sendNtfy({ topic: CFG.otp.ntfyTopic, title: "SnapCon login code", message: "Code for " + u.loginName + ": " + code + " (expires in 10 min)" });
+    } else {
+      await sendResendEmail({
+        apiKey: CFG.resend.apiKey, fromAddress: CFG.resend.fromAddress, to: u.email,
+        subject: "Your SnapCon login code",
+        text: "Your SnapCon login code is: " + code + "\n\nThis code expires in 10 minutes."
+      });
+    }
   } catch (e) {
     return res.status(502).json({ error: "Could not send the code: " + e.message });
   }
@@ -1225,8 +1404,10 @@ app.put("/api/users/:id", requireAdmin, async (req, res) => {
   if (b.email !== undefined) u.email = String(b.email || "").trim();
   if (b.phone !== undefined) u.phone = String(b.phone || "").trim();
   u.otpEnabled = nextOtpEnabled;
-  if (nextOtpEnabled) u.passwordHash = null; // forced regardless of what the request body contains
-  else if (newPasswordHash) u.passwordHash = newPasswordHash;
+  // A password already on file stays on file when OTP is turned on — it's just
+  // unusable while otpEnabled blocks password login (see /api/login above) —
+  // so switching OTP back off later doesn't force re-entering a password.
+  if (!nextOtpEnabled && newPasswordHash) u.passwordHash = newPasswordHash;
   u.updatedAt = new Date().toISOString();
   try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
   res.json({ ok: true, user: publicUser(u) });
@@ -1244,8 +1425,21 @@ app.delete("/api/users/:id", requireAdmin, (req, res) => {
 
 // Mirrors /api/notify-test's "test the live form values, not necessarily
 // saved ones" UX — works before the Resend settings have been saved.
-app.post("/api/email-test", requireAdmin, async (req, res) => {
+// Tests whichever OTP provider is currently selected in the (possibly
+// unsaved) form — same "test the live values" convention as /api/notify-test.
+app.post("/api/otp-test", requireAdmin, async (req, res) => {
   const b = req.body || {};
+  if (b.service === "ntfy") {
+    const topic = (typeof b.ntfyTopic === "string" && b.ntfyTopic.trim()) ? b.ntfyTopic.trim() : ((CFG.otp && CFG.otp.ntfyTopic) || "");
+    if (!topic) return res.status(400).json({ error: "Enter a topic first" });
+    try {
+      await sendNtfy({ topic, title: "SnapCon OTP test", message: "This is a test OTP notification from SnapCon." });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(502).json({ error: e.message });
+    }
+    return;
+  }
   const apiKey = (typeof b.apiKey === "string" && b.apiKey.trim()) ? b.apiKey.trim() : ((CFG.resend && CFG.resend.apiKey) || "");
   const fromAddress = String(b.fromAddress || (CFG.resend && CFG.resend.fromAddress) || "").trim();
   const to = String(b.to || "").trim();
@@ -1253,7 +1447,7 @@ app.post("/api/email-test", requireAdmin, async (req, res) => {
   if (!fromAddress) return res.status(400).json({ error: "Enter a from-address first" });
   if (!to) return res.status(400).json({ error: "Enter a test recipient address" });
   try {
-    await sendResendEmail({ apiKey, fromAddress, to, subject: "SnapCon test email", text: "This is a test email from SnapCon." });
+    await sendResendEmail({ apiKey, fromAddress, to, subject: "SnapCon OTP test", text: "This is a test OTP email from SnapCon." });
     res.json({ ok: true });
   } catch (e) {
     res.status(502).json({ error: e.message });

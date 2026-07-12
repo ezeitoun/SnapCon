@@ -1,6 +1,6 @@
 {
   "name": "snapcon",
-  "version": "0.0.7",
+  "version": "0.1.0",
   "private": true,
   "type": "commonjs",
   "bin": "server.js",

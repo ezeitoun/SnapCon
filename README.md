@@ -18,14 +18,22 @@ This project would not have existed without the inspiration and foundation provi
 
 I hope SnapCon will be as useful to other makers and print farm operators as it has been for me.    
 
-(SnapCon talks straight to each printer's built-in Moonraker API. Nothing leaves your network.)
+(SnapCon talks straight to each printer's built-in Moonraker API. Nothing leaves your network.)  
   
+
+Enjoying SnapCon? Consider buying me a coffee (or two).  
+every bit helps fund new printers so I can expand support to more models.
+[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/default-orange.png)](https://buymeacoffee.com/ebzed)
+
+
 ### SnapCon Core Features
 #### Fleet Dashboard
 * Live grid of all configured printers, each displayed as its own card
 * Real-time status tracking: Idle, Printing, Paused, Complete, Error, Offline
 * Compact view mode to fit more printers on screen at once
 * Color-coded accent line per card, reflecting its current state (error, paused, complete, etc.)
+* When "No Sort" (the default) is selected, users can reorder printers manually via drag-and-drop, dragging from the printer's status button to the desired position. (**v0.1.0**)
+* Sort by Name was added to the available sorting methods. (**v0.1.0**)
 
 #### Printer Card
 * Brand, printer name, and status badge
@@ -51,6 +59,7 @@ I hope SnapCon will be as useful to other makers and print farm operators as it 
 * Collapsible folder/file browser sidebar
 * Sort files and select one to send to a printer
 * Select multiple printers and send a file, with color-mapped tool assignments
+* Improved feedback for Upload to All Printers, a progress bar is now shown for each printer, indicating its individual upload status. (**v0.1.0**)
 
 
 ### Interface
@@ -79,6 +88,49 @@ You can always override this and assign colors to spools manually.
 Note: if the file requires different materials than what's currently loaded, an ✕ will appear on the affected mapping(s). Printing is still possible in this case — but proceed at your own risk.
 
 ![Spools](./docs/Spools.png)
+
+### User Management (**v0.1.0**)
+A new option under General Settings lets you enable "Enable User Access Management."   
+Once turned on, logging in becomes required to use SnapCon.
+![usermanagement](./docs/usermanagement.png)
+#### OTP Login  
+configured at the top of the panel, lets you skip setting a password for a user entirely.  
+Instead, a one-time password is sent at each login, delivered either by email (via the Resend  
+service) or via ntfy.sh (using the same notification channel as your printers, or a separate one  
+you create just for this).
+  
+#### Adding a user
+Enter their first name, last name, and desired login name, then assign a role:
+**View**, read-only, no control over printers
+**Regular**, full control over printers
+**Admin**, full control, plus access to SnapCon's own configuration
+
+You can also set an email address (required for OTP) and a phone number  
+(reserved for future SMS-based OTP support).
+To use OTP login for a user, check the OTP Login checkbox.  
+Otherwise, set a password for that user directly.
+
+### Improved Printer Maintenance (**v0.1.0**)
+![Maintenance](./docs/Maintenance.png)
+Printer Maintenance has been improved to let you specify which component or operation is under maintenance.   
+Each operation now comes with a preconfigured frequency (based on Snapmaker's recommendations), and the next maintenance date is scheduled automatically.
+A cost parameter was also added to maintenance entries, laying the groundwork for future TCO (total cost of ownership) tracking.
+Additionally, an Offline button was added to take a printer offline, while offline, no actions can be performed on it. Once set to offline, the button switches to "Online" and clicking it brings the printer back.
+
+### Experimental Orca "Plugins" (**v0.1.0**)
+For those who prefer working with Orca Slicer instead of Snapmaker Orca (Snorca), an option was added to "connect" Orca to SnapCon.
+![orca](./docs/orca.png)
+This is an experimental feature, to get it working, configure your connection as shown below:
+![orcaset](./docs/orcaset.png)
+**Hostname**: enter the actual hostname/IP of the printer
+**Device UI**: enter http://snapcon-ip:4545/orca/Printer-Name-in-SnapCon
+
+After saving, go to the Process settings' Other tab and add a Post-Processing Script, pointing to a batch file that runs:
+``D:\snapcon-win-x64.exe --printer "U1_White" --snapcon x.x.x.x --outputname "%SLIC3R_PP_OUTPUT_NAME%" --load %1``
+(If Orca is running on the same machine as SnapCon, --snapcon can be omitted.)
+After clicking Upload or Upload/Print — neither of which actually performs an upload or print operation — you can switch to the Device tab to control the printer.
+
+Depending on feedback on this feature, the final GUI in the Device tab may end up matching Snapmaker Orca's (Snorca) Device Control interface exactly.
 
 ---
 

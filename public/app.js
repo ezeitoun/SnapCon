@@ -6,7 +6,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||'Unknown Error'), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.0.7";
+const VERSION = "0.1.0";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -20,7 +20,7 @@ function checkAuthFailure(r){ if(r.status===401 && USERS_ENABLED && Date.now()-L
 const getJSON = url => fetch(url).then(r => { checkAuthFailure(r); return r.json(); });
 const postJSON = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)}).then(r => { checkAuthFailure(r); return r; });
 let FILES = [], FOLDERS = [], CURRENT_SUB = "", SELECTED = null, MAP = null, FLEET = [], MAPSEL = {};
-let USE_T_NOTATION = false, FILAMENT_COST = 0, ELECTRICITY_RATE = 0;
+let USE_T_NOTATION = false, FILAMENT_COST = 0, ELECTRICITY_RATE = 0, CURRENCY = "$";
 let ALLOW_MAPPING = true, SUGGEST_MATCHING = true;
 
 // ---- User Access Management: session state + role helpers ----
@@ -101,6 +101,15 @@ function applyFilesOpen(){
   document.body.classList.toggle('showfiles', FILES_OPEN);
   const b = $('filesBtn');
   if(b){ b.title = FILES_OPEN ? 'Hide file list' : 'Show file list'; }
+  // "Selected Model" is picked FROM the file list, so it only makes sense to
+  // show while that list is open — closing it hides the summary too, even
+  // though the selection itself is remembered (reopening brings it right
+  // back, no need to reselect). Orca mode already hides this permanently.
+  if(!URL_PRINTER_FILTER){
+    const show=FILES_OPEN&&!!MAP;
+    $("jobsechead").style.display=show?"":"none";
+    $("jobcard").classList.toggle("show",show);
+  }
 }
 
 // ---- Compact / Full toggle ----
@@ -239,13 +248,17 @@ function applyRoleUI(){
   const admin=isAdmin(), act=canAct();
   $("gear").style.display = admin ? "" : "none";
   if($("maintBtn")) $("maintBtn").disabled = !act;
+  if($("filesBtn")) $("filesBtn").style.display = act ? "" : "none";
   if($("jobSend")) $("jobSend").style.display = act ? "" : "none";
   if(USERS_ENABLED && CURRENT_USER){
+    // First name if set, else fall back to the login name.
+    const uname=CURRENT_USER.firstName||CURRENT_USER.loginName;
     $("userBadge").style.display="flex";
-    $("userBadgeName").textContent=(CURRENT_USER.firstName||CURRENT_USER.loginName)+" · "+CURRENT_USER.role;
+    if($("logoutBtn")) $("logoutBtn").title="Logout "+uname;
   } else if($("userBadge")){
     $("userBadge").style.display="none";
   }
+  renderVbadge();
   renderFleet();
 }
 
@@ -296,9 +309,17 @@ function wireUI(){
   wireModal("snapmodal", closeSnapshot, ["snapx"]);
   wireModal("unloadmodal", closeUnload, ["unloadx","unloadNo"]);
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
-  wireModal("maintmodal", closeMaintenance, ["maintx"]);
   wireModal("maintReportModal", closeMaintReport, ["maintReportX"]);
   $("maintBtn").addEventListener("click", openMaintReport);
+  $("maintPrinterSel").addEventListener("change", ()=>loadMaintDetail(parseInt($("maintPrinterSel").value,10)));
+  $("maintSave").addEventListener("click", saveMaintenance);
+  $("maintOfflineToggle").addEventListener("click", toggleMaintenanceMode);
+  $("maintDate").addEventListener("change", updateNextScheduledPreview);
+  $("maintFrequency").addEventListener("change", updateNextScheduledPreview);
+  $("maintComponent").addEventListener("input", ()=>{
+    const known=MAINT_FREQ_MAP[$("maintComponent").value.trim()];
+    if(known){ $("maintFrequency").value=known; updateNextScheduledPreview(); }
+  });
   wireModal("browsemodal", closeBrowse, ["browsex","browsecancel"]);
   wireModal("elecmodal", closeElecModal, ["elecmodalx","elecmodalcancel"]);
   wireModal("sendmodal", closeSendModal, ["sendmodalx","sendmodalcancel"]);
@@ -351,12 +372,18 @@ function wireUI(){
   $("filesBtn").addEventListener("click", ()=>{ FILES_OPEN=!FILES_OPEN; applyFilesOpen(); });
 
   $("ntfEnabled").addEventListener("change", applyNtfEnabled);
-  $("ntfGenTopic").addEventListener("click", ()=>{
-    // The topic doubles as the ntfy access secret — use crypto randomness.
-    const letters="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    const buf=new Uint32Array(12); crypto.getRandomValues(buf);
-    $("ntfTopic").value=[...buf].map(n=>letters[n%letters.length]).join("");
+  $("ntfGenTopic").addEventListener("click", ()=>{ $("ntfTopic").value=genRandomTopic(); });
+
+  $("otpSvcResend").addEventListener("change", applyOtpServiceUI);
+  $("otpSvcNtfy").addEventListener("change", ()=>{
+    // Default to whatever the Notifications tab already has, but only if the
+    // OTP topic hasn't been given its own value yet — never clobber a
+    // deliberately-different one.
+    if(!$("otpNtfyTopic").value.trim()) $("otpNtfyTopic").value=$("ntfTopic").value.trim();
+    applyOtpServiceUI();
   });
+  $("otpNtfyGenTopic").addEventListener("click", ()=>{ $("otpNtfyTopic").value=genRandomTopic(); });
+  $("otpTest").addEventListener("click", doOtpTest);
 
   document.querySelectorAll(".set-tab").forEach(btn=>{
     btn.addEventListener("click", ()=>showSetTab(btn.dataset.tab));
@@ -396,15 +423,27 @@ function wireUI(){
   });
 }
 
+// VBADGE_BASE holds the version-status text on its own; renderVbadge() layers
+// the "(View Mode)" suffix on top so checkVersion() (runs once) and
+// applyRoleUI() (runs on every login/logout) can't stomp on each other
+// regardless of which one last touched the badge.
+let VBADGE_BASE="";
+function renderVbadge(){
+  const b=$("vbadge");
+  if(!b) return;
+  const viewMode=USERS_ENABLED && CURRENT_USER && CURRENT_USER.role==="view";
+  b.textContent=VBADGE_BASE+(viewMode?" (View Mode)":"");
+}
 async function checkVersion(){
   const b=$("vbadge");
   try{
     const sv=(await getJSON("/api/version")).version;
-    if(sv===VERSION){ b.className="vbadge"; b.textContent="v"+VERSION; }
-    else { b.className="vbadge bad"; b.textContent="page v"+VERSION+" ≠ server v"+sv+" — restart server.js"; }
+    if(sv===VERSION){ b.className="vbadge"; VBADGE_BASE="v"+VERSION; }
+    else { b.className="vbadge bad"; VBADGE_BASE="page v"+VERSION+" ≠ server v"+sv+" — restart server.js"; }
   }catch(e){
-    b.className="vbadge bad"; b.textContent="page v"+VERSION+" · server has no version — update & restart server.js";
+    b.className="vbadge bad"; VBADGE_BASE="page v"+VERSION+" · server has no version — update & restart server.js";
   }
+  renderVbadge();
 }
 $("refresh").addEventListener("click", ()=>{ loadFiles(); loadFleet(); });
 $("filter").addEventListener("input", renderList);
@@ -759,7 +798,9 @@ function renderFleet(){
   let online=0;
   const q=($("fleetSearch")||{value:""}).value.trim().toLowerCase();
   const all=sortedFleet();
-  all.forEach(p=>{ if(p.online) online++; });
+  // Reachable-but-in-maintenance shouldn't read as "online" here — it can't
+  // take a job right now, which is what this count is meant to signal.
+  all.forEach(p=>{ if(p.online&&p.state!=="maintenance") online++; });
   const pctMatch=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
   const isColor=q in COLOR_FAMILIES;
   const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
@@ -791,6 +832,7 @@ function renderFleet(){
       else if(p.state==="error"){ statusColor="#E06A5C"; statusTxt="Error"; }
       else if(p.state==="complete"){ statusColor="#22C5BE"; statusTxt="Complete"; }
       else if(p.state==="cancelled"){ statusColor="#E06A5C"; statusTxt="Cancelled"; }
+      else if(p.state==="maintenance"){ statusColor="#A78BFA"; statusTxt="Maintenance"; }
       else { statusColor="#46C18C"; statusTxt="Idle"; }
     }
     // heads
@@ -804,7 +846,8 @@ function renderFleet(){
              `<div class="lab"><div class="ht">${headLabel(i)}</div><div class="hm">${esc(h.material||'')}</div><div class="ht" style="margin-top:2px">${h.hex||""}</div></div></div>`;
     }).join("");
     const busy = p.online && (p.state==="printing"||p.state==="paused");
-    const canSend = p.online && SELECTED && !busy;
+    const maintMode = p.state==="maintenance";
+    const canSend = p.online && SELECTED && !busy && !maintMode;
     // per-color head picker (default: greedy nearest distinct head)
     let mapHtml="";
     if(canSend && need.length && ALLOW_MAPPING){
@@ -894,8 +937,8 @@ function renderFleet(){
             + `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="Cancel"><img src="/b-cancel.svg" alt="Cancel"></button>`
             + (p.plate&&p.plate.total>1?`<button class="btn-svg" ${canAct()?"":"disabled"} data-plate="${p.id}" title="Plate"><img src="/b-plate.svg" alt="Plate ${p.plate.total-p.plate.excluded}/${p.plate.total}"></button>`:"")
             + `<button class="btn-svg" ${canAct()?"":"disabled"} data-estop="${p.id}" title="Emergency Stop"><img src="/b-estop.svg" alt="E-Stop"></button>`
-          : `<button class="btn-svg" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="Upload to printer"><img src="/b-upload.svg" alt="Upload"></button>`
-            + `<button class="btn-svg" ${p.online&&!busy&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/b-print.svg" alt="Print"></button>`
+          : `<button class="btn-svg" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?"Printer is in maintenance mode":"Upload to printer"}"><img src="/b-upload.svg" alt="Upload"></button>`
+            + `<button class="btn-svg" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?"Printer is in maintenance mode":SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/b-print.svg" alt="Print"></button>`
             + `<button class="btn-svg" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/b-preheat.svg" alt="Preheat"></button>`
         }
       </div>
@@ -1506,81 +1549,144 @@ async function doBedSet(printerId,temp){
 }
 
 // ---- Maintenance modal ----
-let MAINT_TOTAL_SEC=null, PRINTERS_CFG=[];
+// One modal, two entry points: the topbar wrench (openMaintReport — any
+// printer, picked from the select) and the Settings > Printers row's
+// Maintenance button (openMaintenance — opens with that printer preselected).
+// Both funnel into openMaintModal(), which loads the picker; switching the
+// select (or the initial preselect) calls loadMaintDetail() for that printer.
+let MAINT_TOTAL_SEC=null, PRINTERS_CFG=[], MAINT_PRINTERS=[], MAINT_IDX=null;
 function fmtHours(sec){ if(sec==null) return '—'; const h=Math.floor(sec/3600); const m=Math.floor((sec%3600)/60); return h+'h '+m+'m'; }
-async function openMaintenance(idx,name){
-  if(idx==null||idx<0) return;
-  $("mainttitle").textContent=(name||"Printer")+" — Maintenance";
+// Mirrors the server's defaults (server.js) so a known component picked here
+// auto-fills the same Frequency without a round-trip; the server recomputes
+// Next Scheduled authoritatively on save regardless.
+const MAINT_FREQ_MAP={"Linear Shaft / Linear Bearing":"monthly","X Carbon Rod Assembly":"monthly","Lead Screw / Nut":"quarterly","Steel Pin / Steel Ball":"quarterly","Timing Belt":"monthly","Pogo pin":"6months"};
+const MAINT_FREQ_MONTHS={monthly:1,quarterly:3,"6months":6};
+function addMonthsClient(dateStr,months){
+  if(!dateStr) return "";
+  const d=new Date(dateStr+"T00:00:00");
+  d.setMonth(d.getMonth()+months);
+  return d.toISOString().slice(0,10);
+}
+function updateNextScheduledPreview(){
+  const months=MAINT_FREQ_MONTHS[$("maintFrequency").value]||1;
+  $("maintNextScheduled").value=addMonthsClient($("maintDate").value,months);
+}
+
+async function openMaintModal(preselectIdx){
+  $("maintReportModal").classList.add("show");
+  const sel=$("maintPrinterSel");
+  sel.innerHTML='<option>Loading…</option>';
+  $("maintDetail").style.display="none";
+  try{ MAINT_PRINTERS=await getJSON("/api/printers"); }catch{ MAINT_PRINTERS=[]; }
+  if(!MAINT_PRINTERS.length){
+    sel.innerHTML='<option>No printers configured</option>';
+    return;
+  }
+  sel.innerHTML=MAINT_PRINTERS.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  const idx=(preselectIdx!=null&&MAINT_PRINTERS.some(p=>p.id===preselectIdx))?preselectIdx:MAINT_PRINTERS[0].id;
+  sel.value=idx;
+  loadMaintDetail(idx);
+}
+function openMaintenance(idx){ openMaintModal(idx); }
+function openMaintReport(){ openMaintModal(null); }
+function closeMaintReport(){ $("maintReportModal").classList.remove("show"); }
+
+async function loadMaintDetail(idx){
+  MAINT_IDX=idx;
+  $("maintDetail").style.display="";
   $("maintDate").value=new Date().toISOString().slice(0,10);
+  $("maintComponent").value="";
+  $("maintFrequency").value="monthly";
+  $("maintCost").value="0.00";
   $("maintComment").value="";
+  updateNextScheduledPreview();
+  updateMaintOfflineButton(idx);
   $("maintStatus").textContent="";
   $("maintHours").textContent="loading…";
+  $("maintWarranty").textContent="—";
+  $("maintNextWrap").style.display="none";
   $("maintHistory").innerHTML="";
   MAINT_TOTAL_SEC=null;
-  $("maintmodal").classList.add("show");
   try{
     const d=await getJSON("/api/printer-hours?printer="+idx);
     MAINT_TOTAL_SEC=d.totalSeconds!=null?d.totalSeconds:null;
     $("maintHours").textContent=MAINT_TOTAL_SEC!=null?fmtHours(MAINT_TOTAL_SEC):'unavailable';
   }catch{ $("maintHours").textContent='unavailable'; }
   try{
-    const entries=await getJSON("/api/maintenance?printer="+idx);
-    renderMaintHistory(entries);
+    const d=await getJSON("/api/maintenance?printer="+idx);
+    applyMaintDetailResponse(d);
   }catch{}
-  $("maintSave").onclick=async()=>{
-    const st=$("maintStatus");
-    const date=$("maintDate").value;
-    if(!date){ st.className="pstatus err"; st.textContent="Pick a date"; return; }
-    const comment=$("maintComment").value.trim();
-    st.className="pstatus work"; st.textContent="Saving…";
-    try{
-      const r=await postJSON("/api/maintenance",{printer:idx,entry:{date,comment,hours:MAINT_TOTAL_SEC!=null?fmtHours(MAINT_TOTAL_SEC):'—',totalSeconds:MAINT_TOTAL_SEC}});
-      const d=await r.json();
-      if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-      st.className="pstatus ok"; st.textContent="Saved";
-      $("maintComment").value="";
-      renderMaintHistory(d.maintenance||[]);
-    }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  };
 }
-function closeMaintenance(){ $("maintmodal").classList.remove("show"); }
-
-// ---- Fleet-wide maintenance report (topbar button) ----
-// Entry point for roles that can't reach the admin-only Printers settings
-// tab, where the per-printer Maintenance button normally lives.
-async function openMaintReport(){
-  const list=$("maintReportList");
-  list.innerHTML='<div class="hint">Loading…</div>';
-  $("maintReportModal").classList.add("show");
+// The fleet poll already tells us if a printer is currently parked for
+// maintenance (state:"maintenance", set server-side) — reuse it instead of
+// fetching the flag a second way. Button label is the ACTION, not the state:
+// "Offline" when currently online (click to take it offline), "Online" when
+// currently in maintenance (click to bring it back).
+function updateMaintOfflineButton(idx){
+  const fleetEntry=FLEET.find(f=>f.id===idx);
+  const inMaintenance=!!(fleetEntry&&fleetEntry.state==="maintenance");
+  const btn=$("maintOfflineToggle");
+  btn.textContent=inMaintenance?"Online":"Offline";
+  btn.dataset.next=inMaintenance?"0":"1"; // what maintenanceMode should become on click
+}
+async function toggleMaintenanceMode(){
+  const btn=$("maintOfflineToggle");
+  const st=$("maintStatus");
+  const offline=btn.dataset.next==="1";
+  btn.disabled=true;
+  st.className="pstatus work"; st.textContent=offline?"Taking offline…":"Bringing online…";
   try{
-    const printers=await getJSON("/api/printers");
-    const rows=await Promise.all(printers.map(async p=>{
-      let entries=[];
-      try{ entries=await getJSON("/api/maintenance?printer="+p.id); }catch{}
-      const last=entries.length?entries.slice().sort((a,b)=>b.date.localeCompare(a.date))[0]:null;
-      return {id:p.id,name:p.name,last};
-    }));
-    list.innerHTML=rows.map(r=>
-      `<div class="maint-report-row">`+
-      `<span class="maint-report-dot" style="background:${r.last?'var(--ok)':'var(--idle)'}"></span>`+
-      `<span class="maint-report-name">${esc(r.name)}</span>`+
-      `<span style="font-size:11px;color:var(--ink-faint)">${r.last?esc(r.last.date):'No records'}</span>`+
-      `<button class="btn ghost" ${canAct()?"":"disabled"} data-maint-open="${r.id}" data-maint-name="${esc(r.name)}">Open</button>`+
-      `</div>`
-    ).join("") || '<div class="hint">No printers configured</div>';
-    list.querySelectorAll("[data-maint-open]").forEach(b=>{
-      b.addEventListener("click",()=>{ closeMaintReport(); openMaintenance(parseInt(b.dataset.maintOpen,10), b.dataset.maintName); });
-    });
-  }catch(e){
-    list.innerHTML='<div class="hint" style="color:var(--bad)">'+esc(e.message)+'</div>';
-  }
+    const r=await postJSON("/api/maintenance-mode",{printer:MAINT_IDX,offline});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent=d.maintenanceMode?"Printer taken offline":"Printer back online";
+    // Use the endpoint's own response, not a re-fetched FLEET — loadFleet()
+    // has an in-flight guard that silently no-ops if a periodic poll happens
+    // to already be running, which would read back stale state here.
+    btn.textContent=d.maintenanceMode?"Online":"Offline";
+    btn.dataset.next=d.maintenanceMode?"0":"1";
+    loadFleet(); // still refresh in the background for the fleet card badge
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 }
-function closeMaintReport(){ $("maintReportModal").classList.remove("show"); }
+function applyMaintDetailResponse(d){
+  $("maintComponentList").innerHTML=(d.components||[]).map(c=>`<option value="${esc(c)}">`).join("");
+  $("maintWarranty").textContent=d.warranty?"Yes":"No";
+  if(d.next){
+    $("maintNextWrap").style.display="";
+    $("maintNextDate").textContent=d.next.date;
+    $("maintNextComponent").textContent=d.next.component;
+  } else {
+    $("maintNextWrap").style.display="none";
+  }
+  renderMaintHistory(d.entries||[]);
+}
+async function saveMaintenance(){
+  const st=$("maintStatus");
+  const date=$("maintDate").value;
+  if(!date){ st.className="pstatus err"; st.textContent="Pick a date"; return; }
+  const idx=MAINT_IDX;
+  const entry={
+    date, comment:$("maintComment").value.trim(),
+    hours:MAINT_TOTAL_SEC!=null?fmtHours(MAINT_TOTAL_SEC):'—', totalSeconds:MAINT_TOTAL_SEC,
+    component:$("maintComponent").value.trim(), frequency:$("maintFrequency").value,
+    cost:parseFloat($("maintCost").value)||0
+  };
+  st.className="pstatus work"; st.textContent="Saving…";
+  try{
+    const r=await postJSON("/api/maintenance",{printer:idx,entry});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent="Saved";
+    $("maintComment").value="";
+    applyMaintDetailResponse(d);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
 function renderMaintHistory(entries){
   if(!entries.length){ $("maintHistory").innerHTML='<div style="color:var(--ink-faint);font-size:12px;margin-top:6px">No maintenance records yet.</div>'; return; }
   const sorted=entries.slice().sort((a,b)=>b.date.localeCompare(a.date));
-  const rows=sorted.map(e=>`<tr><td>${esc(e.date)}</td><td>${esc(e.hours||'—')}</td><td>${esc(e.comment||'')}</td></tr>`).join('');
-  $("maintHistory").innerHTML=`<div class="maint-scroll"><table class="maint-table"><thead><tr><th>Date</th><th>Hours</th><th>Comment</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const rows=sorted.map(e=>`<tr><td>${esc(e.date)}</td><td>${esc(e.component||'—')}</td><td>${esc(e.hours||'—')}</td><td>${esc(CURRENCY)}${(Number(e.cost)||0).toFixed(2)}</td><td>${esc(e.comment||'')}</td></tr>`).join('');
+  $("maintHistory").innerHTML=`<div class="maint-scroll"><table class="maint-table"><thead><tr><th>Date</th><th>Component</th><th>Hours</th><th>Cost</th><th>Comment</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 // ---- Plate map (exclude-object) ----
 // Tap objects (on the plate or in the list) to SELECT them; nothing is sent
@@ -1719,17 +1825,6 @@ $("userSearch").addEventListener("input",()=>{
     row.style.display=!q||login.includes(q)||first.includes(q)||last.includes(q)||role.includes(q)?"":"none";
   });
 });
-$("resendTest").addEventListener("click", async ()=>{
-  const st=$("resendTestStatus");
-  const to=$("resendTestTo").value.trim();
-  if(!to){ st.className="pstatus err"; st.textContent="Enter a recipient address"; return; }
-  st.className="pstatus work"; st.textContent="Sending…";
-  try{
-    const r=await postJSON("/api/email-test",{apiKey:$("setResendKey").value.trim(),fromAddress:$("setResendFrom").value.trim(),to});
-    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-    st.className="pstatus ok"; st.textContent="Sent";
-  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-});
 // Bootstrap-first-admin: the toggle can't be turned on until this succeeds
 // (checked in saveConfig()), so no default/throwaway admin ever exists.
 let BOOTSTRAPPED_ADMIN=false;
@@ -1773,6 +1868,40 @@ function applyNtfEnabled(){
   const on=$("ntfEnabled").checked;
   $("ntfBody").classList.toggle("disabled", !on);
   $("ntfBody").querySelectorAll("input,button").forEach(i=>i.disabled=!on);
+}
+
+// Shared by the Notifications-tab ntfy topic and the OTP-via-ntfy topic — a
+// topic doubles as the ntfy access secret, so it needs real randomness.
+function genRandomTopic(){
+  const letters="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const buf=new Uint32Array(12); crypto.getRandomValues(buf);
+  return [...buf].map(n=>letters[n%letters.length]).join("");
+}
+function applyOtpServiceUI(){
+  const ntfy=$("otpSvcNtfy").checked;
+  $("otpResendBody").style.display=ntfy?"none":"";
+  $("otpNtfyBody").style.display=ntfy?"":"none";
+}
+async function doOtpTest(){
+  const st=$("otpTestStatus");
+  const ntfy=$("otpSvcNtfy").checked;
+  const body={ service: ntfy?"ntfy":"resend" };
+  if(ntfy){
+    body.ntfyTopic=$("otpNtfyTopic").value.trim();
+  } else {
+    const to=prompt("Send a test OTP email to:");
+    if(!to) return; // cancelled
+    body.apiKey=$("setResendKey").value.trim();
+    body.fromAddress=$("setResendFrom").value.trim();
+    body.to=to.trim();
+  }
+  st.className="pstatus work"; st.textContent="Sending…";
+  try{
+    const r=await postJSON("/api/otp-test",body);
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent="Sent";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 }
 
 async function loadFirmware(){
@@ -1829,6 +1958,9 @@ async function loadConfigUI(){
     const c=await getJSON("/api/config");
     $("setFolder").value=c.gcodeFolder||"";
     $("setRefresh").value=c.refreshInterval||2;
+    $("setCurrency").value=c.currency||"$";
+    CURRENCY=c.currency||"$";
+    if($("maintCostCurrency")) $("maintCostCurrency").textContent=CURRENCY;
     $("setFilamentCost").value=c.filamentCost||"";
     $("setElectricityRate").value=c.electricityRate||"";
     FILAMENT_COST=c.filamentCost||0; ELECTRICITY_RATE=c.electricityRate||0;
@@ -1842,6 +1974,10 @@ async function loadConfigUI(){
     $("setResendKey").value="";
     $("setResendKey").placeholder=rs.hasApiKey?"•••••••• (saved — leave blank to keep)":"re_...";
     $("setResendFrom").value=rs.fromAddress||"";
+    const otp=c.otp||{};
+    if(otp.service==="ntfy") $("otpSvcNtfy").checked=true; else $("otpSvcResend").checked=true;
+    $("otpNtfyTopic").value=otp.ntfyTopic||"";
+    applyOtpServiceUI();
     COMPACT=!!c.openCompact; applyCompact();
     const nf=c.notifications||{};
     $("ntfEnabled").checked=!!nf.enabled;
@@ -1906,9 +2042,9 @@ function addPrinterRow(name,url,opts,autoOpen){
   row.querySelector(".mv-up").addEventListener("click",()=>{ const prev=row.previousElementSibling; if(prev) row.parentNode.insertBefore(row,prev); });
   row.querySelector(".mv-dn").addEventListener("click",()=>{ const next=row.nextElementSibling; if(next) row.parentNode.insertBefore(next,row); });
   row.querySelector(".pmaint").addEventListener("click",()=>{
-    const u=row.querySelector(".purl").value.trim(), n=row.querySelector(".pname").value.trim();
+    const u=row.querySelector(".purl").value.trim();
     const idx=PRINTERS_CFG.findIndex(p=>p.url===u);
-    if(idx>=0) openMaintenance(idx,n);
+    if(idx>=0) openMaintenance(idx);
   });
   $("setPrinters").appendChild(row);
 }
@@ -1946,8 +2082,8 @@ function addUserRow(u,autoOpen){
     `<span class="pi-lbl">Phone</span><input class="field uphone" value="${esc(u&&u.phone||"")}" style="width:150px">`+
     `</div>`+
     `<div class="prow-extra">`+
-    `<label class="prow-chk"><input type="checkbox" class="uotp" ${u&&u.otpEnabled?"checked":""}><span>Sign in with an emailed code (no password)</span></label>`+
-    `<label title="Password">Password <input class="field upassword" type="password" maxlength="64" placeholder="${u?"leave blank to keep":"required"}" style="max-width:180px" autocomplete="new-password"></label>`+
+    `<label class="prow-chk"><input type="checkbox" class="uotp" ${u&&u.otpEnabled?"checked":""}><span>OTP Login</span></label>`+
+    `<label title="Password" class="upwrap"><span class="pi-lbl">Password</span> <input class="field upassword" type="password" maxlength="64" placeholder="${u?"leave blank to keep":"required"}" style="max-width:180px" autocomplete="new-password"></label>`+
     `<button class="btn primary usave">Save</button>`+
     `<span class="pstatus usave-status"></span>`+
     `</div></div></div></details>`;
@@ -1955,10 +2091,11 @@ function addUserRow(u,autoOpen){
   const loginEl=row.querySelector(".ulogin"), sumName=row.querySelector(".prow-sumname"), sumRole=row.querySelector(".prow-sumip");
   loginEl.addEventListener("input",()=>{ sumName.textContent=loginEl.value.trim()||"New User"; });
   roleSel.addEventListener("change",()=>{ sumRole.textContent=roleLabel(roleSel.value); });
-  const otpEl=row.querySelector(".uotp"), pwEl=row.querySelector(".upassword");
+  const otpEl=row.querySelector(".uotp"), pwEl=row.querySelector(".upassword"), pwWrap=row.querySelector(".upwrap");
   const syncPwState=()=>{
+    pwWrap.style.display=otpEl.checked?"none":"";
     pwEl.disabled=otpEl.checked;
-    pwEl.placeholder=otpEl.checked?"not used":(row.dataset.userId?"leave blank to keep":"required");
+    pwEl.placeholder=row.dataset.userId?"leave blank to keep":"required";
     if(otpEl.checked) pwEl.value="";
   };
   otpEl.addEventListener("change", syncPwState); syncPwState();
@@ -2102,9 +2239,11 @@ async function saveConfig(){
   const er=parseFloat($("setElectricityRate").value)||0;
   const tn=$("setTNotation").checked; USE_T_NOTATION=tn;
   ALLOW_MAPPING=$("setAllowMapping").checked; SUGGEST_MATCHING=$("setSuggestMatching").checked;
-  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
+  CURRENCY=$("setCurrency").value.trim()||"$";
+  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
+    otp:{ service:$("otpSvcNtfy").checked?"ntfy":"resend", ntfyTopic:$("otpNtfyTopic").value.trim() },
     notifications:{
       enabled:$("ntfEnabled").checked,
       onEvents:$("ntfEvents").checked,
@@ -2121,6 +2260,7 @@ async function saveConfig(){
     s.className="pstatus ok"; s.textContent="Saved";
     $("setupmsg").textContent="";
     FILAMENT_COST=fc>0?fc:0; ELECTRICITY_RATE=er>0?er:0;
+    if($("maintCostCurrency")) $("maintCostCurrency").textContent=CURRENCY;
     if(MAP) renderJob(); // refresh cost line immediately
     // Flipping usersEnabled on/off takes effect on THIS tab immediately: going
     // on with no session yet prompts login as the admin just created; going

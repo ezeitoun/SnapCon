@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- SnapCon — index v0.0.7 -->
+<!-- SnapCon — index v0.1.0 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -77,11 +77,10 @@
         </div>
       </div>
       <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
-      <button class="gear" id="maintBtn" title="Maintenance"><span class="topbar-emoji">🔧</span></button>
+      <button class="gear" id="maintBtn" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" alt="Maintenance"></button>
       <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
       <div class="user-badge" id="userBadge" style="display:none">
-        <span class="user-badge-name" id="userBadgeName"></span>
-        <button class="btn ghost" id="logoutBtn">Logout</button>
+        <button class="gear" id="logoutBtn" title="Logout"><img src="/logout.svg" class="topbar-icon" alt="Logout"></button>
       </div>
     </div>
     <div class="setup" id="setup">
@@ -106,6 +105,12 @@
         <label class="fl" style="margin-top:14px">Refresh interval <span class="hint">seconds between fleet updates</span></label>
         <input class="field" id="setRefresh" type="number" min="1" max="60" placeholder="2" style="max-width:100px" />
 
+        <label class="fl" style="margin-top:14px">Currency <span class="hint">used for maintenance cost entries</span></label>
+        <input class="field" id="setCurrency" list="currencyList" placeholder="$" style="max-width:100px" />
+        <datalist id="currencyList">
+          <option value="$"><option value="₪"><option value="€"><option value="£"><option value="¥"><option value="₹"><option value="₩">
+        </datalist>
+
         <label class="fl" style="margin-top:14px">Avg. filament cost <span class="hint">$ per spool</span></label>
         <input class="field" id="setFilamentCost" type="number" min="0" placeholder="20" style="max-width:100px" />
 
@@ -124,7 +129,7 @@
         <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setAllowMapping"> Enable Head Mapping <span class="hint">show color-to-head assignment UI when sending prints</span></label>
         <label style="margin-top:6px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setSuggestMatching"> Auto-Match Colors <span class="hint">suggest the closest head color; uncheck for T1→T1 order</span></label>
 
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setUsersEnabled"> Enable User Access Management <span class="hint">require login; gate actions by role</span></label>
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setUsersEnabled"> Enable user access management</label>
         <div class="bootstrap-admin" id="bootstrapAdmin" style="display:none">
           <div class="hint" style="margin-bottom:8px">Create the first Admin account — it must use a password, not an emailed code.</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -200,14 +205,31 @@
 
       <div class="set-panel" id="tab-users" style="display:none">
         <div class="setcard">
-          <div class="fl">Resend API key <span class="hint">for OTP email login — never sent back to the browser once saved</span></div>
-          <input class="field" id="setResendKey" type="password" placeholder="re_..." style="max-width:280px" autocomplete="off">
-          <label class="fl" style="margin-top:10px">From address</label>
-          <input class="field" id="setResendFrom" placeholder="snapcon@yourdomain.com" style="max-width:280px">
-          <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap">
-            <input class="field" id="resendTestTo" placeholder="test@address.com" style="max-width:220px">
-            <button class="btn ghost" id="resendTest">Send test email</button>
-            <span class="pstatus" id="resendTestStatus"></span>
+          <div class="fl" style="margin-bottom:8px">OTP Configuration</div>
+          <label style="display:flex;align-items:center;gap:6px">
+            <input type="radio" name="otpService" id="otpSvcResend" value="resend" checked> Resend
+          </label>
+          <div id="otpResendBody" style="margin:8px 0 12px 24px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span class="pi-lbl">Resend API Key</span>
+              <input class="field" id="setResendKey" type="password" placeholder="re_..." style="max-width:280px" autocomplete="off">
+            </div>
+            <label class="fl" style="margin-top:10px">From address</label>
+            <input class="field" id="setResendFrom" placeholder="snapcon@yourdomain.com" style="max-width:280px">
+          </div>
+          <label style="display:flex;align-items:center;gap:6px">
+            <input type="radio" name="otpService" id="otpSvcNtfy" value="ntfy"> ntfy.sh
+          </label>
+          <div id="otpNtfyBody" style="margin:8px 0 12px 24px;display:none">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span class="pi-lbl">Topic</span>
+              <input class="field" id="otpNtfyTopic" placeholder="my-printfarm-otp" style="max-width:220px">
+              <button class="btn ghost" type="button" id="otpNtfyGenTopic" style="flex:none;white-space:nowrap">Generate</button>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+            <button class="btn ghost" type="button" id="otpTest">Test OTP</button>
+            <span class="pstatus" id="otpTestStatus"></span>
           </div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;margin:14px 0 10px">
@@ -305,24 +327,50 @@
     </div>
   </div>
 
-  <div class="modal" id="maintmodal">
-    <div class="modalbox" style="max-width:480px">
-      <div class="modalhdr"><span id="mainttitle">Maintenance</span><button class="modalx" id="maintx">✕</button></div>
-      <div class="maint-hours-label">Printer Hours</div>
-      <div class="maint-hours" id="maintHours">—</div>
-      <div id="maintHistory"></div>
-      <div class="maint-form">
-        <label>Date <input class="field" id="maintDate" type="date" style="max-width:170px"></label>
-        <label>Comment <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea></label>
-        <div><button class="btn primary" id="maintSave">Save</button> <span class="pstatus" id="maintStatus"></span></div>
-      </div>
-    </div>
-  </div>
-
   <div class="modal" id="maintReportModal">
-    <div class="modalbox" style="max-width:520px">
+    <div class="modalbox" style="max-width:480px">
       <div class="modalhdr"><span>Maintenance</span><button class="modalx" id="maintReportX">✕</button></div>
-      <div id="maintReportList"></div>
+      <div class="maint-toprow">
+        <div class="maint-field" style="flex:1">
+          <label class="fl">Printer</label>
+          <select class="field" id="maintPrinterSel"></select>
+        </div>
+        <div class="maint-field" style="flex:none;width:150px">
+          <label class="fl">Date</label>
+          <input class="field" id="maintDate" type="date">
+        </div>
+      </div>
+      <div id="maintDetail">
+        <div class="maint-stats">
+          <div class="maint-stat"><div class="maint-hours-label">Printer Hours</div><div class="maint-hours" id="maintHours">—</div></div>
+          <div class="maint-stat"><div class="maint-hours-label">Warranty</div><div class="maint-hours" id="maintWarranty">—</div></div>
+          <div class="maint-stat" id="maintNextWrap" style="display:none">
+            <div class="maint-hours-label">Next</div>
+            <div class="maint-hours" id="maintNextDate">—</div>
+            <div class="maint-next-component" id="maintNextComponent"></div>
+          </div>
+        </div>
+        <div id="maintHistory"></div>
+        <div class="maint-form">
+          <label>Component <input class="field" id="maintComponent" list="maintComponentList" placeholder="Pick or type a component…"></label>
+          <datalist id="maintComponentList"></datalist>
+          <div class="maint-row2">
+            <label style="flex:1">Frequency <select class="field" id="maintFrequency">
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
+              <option value="6months">6 Months</option>
+            </select></label>
+            <label style="flex:1">Next Scheduled <input class="field" id="maintNextScheduled" readonly style="color:var(--ink-dim)"></label>
+          </div>
+          <label>Cost (<span id="maintCostCurrency">$</span>) <input class="field" id="maintCost" type="number" min="0" step="0.01" value="0.00" style="max-width:120px"></label>
+          <label>Comment <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea></label>
+          <div class="pstatus" id="maintStatus"></div>
+          <div class="maint-actions">
+            <button class="btn ghost" id="maintOfflineToggle">Offline</button>
+            <button class="btn primary" id="maintSave">Save</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
