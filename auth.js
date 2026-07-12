@@ -26,9 +26,10 @@ async function hashPassword(password) {
   return `scrypt:${SCRYPT_N}:${SCRYPT_R}:${SCRYPT_P}:${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
-// Returns false immediately (no scrypt call) when stored is null/blank — this
-// is what makes the password-login path an unconditional reject for OTP-only
-// accounts, since the server never lets an OTP account carry a passwordHash.
+// Returns false immediately (no scrypt call) when stored is null/blank — a
+// fresh OTP-only account has no passwordHash yet. (An account that later
+// switches to OTP keeps its old passwordHash on file, unused; server.js
+// blocks password login for it directly by checking otpEnabled first.)
 async function verifyPassword(password, stored) {
   if (!stored) return false;
   const parts = String(stored).split(":");

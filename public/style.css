@@ -209,8 +209,16 @@
   .maint-scroll{max-height:160px; overflow-y:auto; margin-top:6px;}
   .maint-form{display:flex; flex-direction:column; gap:10px; margin-top:10px;}
   .maint-form label{font-size:12px; color:var(--ink-dim);}
-  .maint-hours{font-size:22px; font-weight:700; color:var(--signal); margin:6px 0;}
+  .maint-stats{display:flex; gap:26px;}
+  .maint-hours{font-size:18px; font-weight:700; color:var(--signal); margin:6px 0;}
   .maint-hours-label{font-size:11px; color:var(--ink-dim);}
+  .maint-next-component{font-size:11px; color:var(--ink-faint); margin-top:-4px;}
+  .maint-toprow{display:flex; gap:12px; margin-bottom:12px;}
+  .maint-field{display:flex; flex-direction:column;}
+  .maint-field .fl{margin-bottom:5px;}
+  .maint-row2{display:flex; gap:12px;}
+  .maint-row2 label{flex:1;}
+  .maint-actions{display:flex; justify-content:flex-end; gap:8px;}
   .plate-box{max-width:860px;}
   .plate-layout{display:flex; gap:14px; align-items:stretch;}
   .plate-left{flex:1.7; min-width:0; display:flex; flex-direction:column; gap:10px;}
@@ -399,11 +407,7 @@
   .queued-banner .btn{padding:4px 12px;font-size:11px;flex:none;}
 
   /* ---- User Access Management ---- */
-  .topbar-emoji{font-size:17px;line-height:1;display:block;}
-
   .user-badge{display:flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line);}
-  .user-badge-name{font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;}
-  .user-badge .btn{padding:4px 10px;font-size:11px;flex:none;}
 
   .login-overlay{position:fixed;inset:0;z-index:300;background:var(--chassis);display:flex;align-items:center;justify-content:center;padding:18px;}
   .login-box{width:100%;max-width:320px;display:flex;flex-direction:column;align-items:stretch;}
@@ -414,11 +418,6 @@
   .login-box .pstatus{margin-top:10px;min-height:16px;}
 
   .bootstrap-admin{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:9px;background:var(--panel-2);}
-
-  .maint-report-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line-soft);border-radius:8px;margin-bottom:6px;background:var(--panel-2);}
-  .maint-report-name{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .maint-report-dot{width:8px;height:8px;border-radius:50%;flex:none;}
-  .maint-report-row .btn{padding:4px 12px;font-size:11px;flex:none;}
 
   /* Non-<button> action triggers (bed-temp cell, unload spool) gated for View Only */
   .inert-action{pointer-events:none;opacity:.45;cursor:not-allowed !important;}
