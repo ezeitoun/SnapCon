@@ -1,0 +1,18 @@
+{
+  "version": "2026.7.2",
+  "note": "Reviewed by hand against https://github.com/cloudflare/cloudflared/releases/tag/2026.7.2 release-notes checksum block, then independently verified by downloading each asset and computing its SHA-256. darwin-x64, darwin-arm64, and win32-arm64 are deliberately omitted: the release's published checksums for both darwin assets did not match the actual downloadable .tgz files (confirmed on two independent downloads), and no win32-arm64 asset exists in this release at all. Do not add a platform here without repeating that independent verification.",
+  "checksums": {
+    "win32-x64": {
+      "asset": "cloudflared-windows-amd64.exe",
+      "sha256": "cdb5d4432f6ae1595654a692a51308b69d2bf7af961f5578d9391837cf072df9"
+    },
+    "linux-x64": {
+      "asset": "cloudflared-linux-amd64",
+      "sha256": "ec905ea7b7e327ff8abdde8cb64697a2152de74dbcdbf6aec9db8364eb3886cd"
+    },
+    "linux-arm64": {
+      "asset": "cloudflared-linux-arm64",
+      "sha256": "405df476437e027fc6d18729a5a77155c0a33a6082aeee60a799a688f3052e66"
+    }
+  }
+}
