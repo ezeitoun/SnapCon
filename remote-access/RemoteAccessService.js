@@ -156,9 +156,10 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     Store.save(baseDir, { enabled: true });
 
     let tunnelToken;
-    if (persisted.hubId && await secureStore.get("tunnelToken")) {
+    const existingToken = persisted.hubId ? await secureStore.get("tunnelToken") : null;
+    if (existingToken) {
       // Re-enable: reuse the existing Hub/token, never provision a new one.
-      tunnelToken = await secureStore.get("tunnelToken");
+      tunnelToken = existingToken;
     } else {
       state = "provisioning";
       let hub;

@@ -180,6 +180,14 @@ function windowsDpapiStore(baseDir) {
       }
     },
     async set(key, value) {
+      // PS_ENCRYPT reads the value via [Console]::In.ReadLine() — a single
+      // line. A value containing an embedded newline would be silently
+      // truncated at the first one before it's ever encrypted, and nothing
+      // downstream (the read path, cloudflared itself) would have any way
+      // to tell the stored token isn't the real one — it would just fail
+      // with a confusing, unrelated-looking auth error. Loud failure here,
+      // while the correct value is still in hand, beats silent corruption.
+      if (/[\r\n]/.test(value)) throw new Error("Cannot store a secret containing a newline via the line-based DPAPI protocol.");
       const r = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", PS_ENCRYPT], { input: value + "\n" });
       if (r.code !== 0 || !r.stdout.trim()) throw new Error("DPAPI encrypt failed: " + r.stderr.trim());
       fs.mkdirSync(secureDir, { recursive: true });

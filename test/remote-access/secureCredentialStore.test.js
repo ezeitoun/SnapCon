@@ -93,3 +93,16 @@ test("getSecureCredentialStore() smoke test on the current platform: either reso
     assert.ok(e instanceof NoSecureStorageAvailableError);
   }
 });
+
+// Hardening: found by code review. windowsDpapiStore's PS_ENCRYPT script
+// reads the value to encrypt via [Console]::In.ReadLine() — a single line.
+// A value containing an embedded newline would be silently truncated before
+// encryption, with nothing downstream able to tell the stored secret isn't
+// the real one. This guard fails loudly at write time instead. Doesn't
+// require a real PowerShell round-trip — the check fires before any spawn.
+test("windowsDpapiStore().set() rejects a value containing a newline instead of silently truncating it", async () => {
+  const dir = tempBaseDir();
+  const store = _internal.windowsDpapiStore(dir);
+  await assert.rejects(() => store.set("tunnelToken", "line-one\nline-two"), /newline/i);
+  await assert.rejects(() => store.set("tunnelToken", "carriage\rreturn"), /newline/i);
+});
