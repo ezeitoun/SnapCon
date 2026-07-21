@@ -286,7 +286,26 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
 
   function onStatusChange(fn) { statusListener = fn; }
 
-  return { start, stop, restart, getStatus, onStatusChange };
+  // Without this, start() and stop() aren't mutually exclusive: start()
+  // awaits InstanceLock.resolveBeforeStart() before `running` ever becomes
+  // true, so a stop() call landing in that window sees "nothing running,"
+  // returns immediately, and then the in-flight start() spawns a child
+  // anyway — undoing the stop it just reported as complete. Today
+  // RemoteAccessService happens to never call start()/stop() concurrently
+  // (its own enable()/disable() are serialized), but this module shouldn't
+  // depend on every caller getting that right independently — the same class
+  // of bug had to be fixed one layer up for exactly this reason.
+  let opChain = Promise.resolve();
+  function serialize(fn) {
+    return (...args) => {
+      const run = () => fn(...args);
+      const started = opChain.then(run, run);
+      opChain = started.then(() => {}, () => {});
+      return started;
+    };
+  }
+
+  return { start: serialize(start), stop: serialize(stop), restart: serialize(restart), getStatus, onStatusChange };
 }
 
 module.exports = {

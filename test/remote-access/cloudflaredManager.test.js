@@ -174,3 +174,23 @@ test("independent createProcessManager() instances do not share state", async ()
   assert.equal(mgrA.getStatus().processRunning, true);
   assert.equal(mgrB.getStatus().processRunning, false);
 });
+
+// Hardening: found by code review, not live testing. start() awaits
+// InstanceLock.resolveBeforeStart() before `running` ever becomes true —
+// calling stop() in that window (without serialization) sees "nothing
+// running," resolves immediately, and then the in-flight start() spawns a
+// child anyway, undoing the stop it just reported as complete.
+test("stop() called immediately after start() (without awaiting either first) is serialized — the process ends up actually stopped", async () => {
+  const dir = tempBaseDir();
+  fakeInstalledBinary(dir);
+  const spawnFn = () => makeFakeChild();
+  const mgr = CFM.createProcessManager(dir, { spawnFn, ...fakeTimers() });
+
+  const startPromise = mgr.start("tok"); // deliberately not awaited yet
+  const stopPromise = mgr.stop();        // called immediately after, also not awaited
+
+  await startPromise;
+  await stopPromise;
+
+  assert.equal(mgr.getStatus().processRunning, false, "stop() must take effect even when it lands while start() is still mid-flight");
+});
