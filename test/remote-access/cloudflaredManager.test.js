@@ -56,7 +56,7 @@ test("backoffDelay() returns the documented table and caps at the last entry", (
   assert.equal(CFM.backoffDelay(100), 60000);
 });
 
-test("start() spawns with argv ['tunnel','run','--no-autoupdate'] and the token only in the spawn-scoped env, never argv", async () => {
+test("start() spawns with argv ['tunnel','--no-autoupdate','run'] and the token only in the spawn-scoped env, never argv", async () => {
   const dir = tempBaseDir();
   fakeInstalledBinary(dir);
   let seenArgs, seenEnv;
@@ -66,7 +66,10 @@ test("start() spawns with argv ['tunnel','run','--no-autoupdate'] and the token 
   const token = "super-secret-tunnel-token-value";
   await mgr.start(token);
 
-  assert.deepEqual(seenArgs, ["tunnel", "run", "--no-autoupdate"]);
+  // --no-autoupdate is a TUNNEL COMMAND OPTION, not a `run` subcommand
+  // option (confirmed against the real binary's own usage/error output) —
+  // it must precede "run", not follow it.
+  assert.deepEqual(seenArgs, ["tunnel", "--no-autoupdate", "run"]);
   assert.equal(seenEnv.TUNNEL_TOKEN, token);
   assert.ok(!seenArgs.some(a => a.includes(token)), "token must never appear in argv");
 });

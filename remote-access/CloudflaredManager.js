@@ -209,7 +209,14 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
     sawConnectionEvidence = false;
     // Spawn-scoped env object only — process.env itself is never mutated.
     const env = { ...process.env, TUNNEL_TOKEN: currentToken };
-    child = spawnFn(binPath, ["tunnel", "run", "--no-autoupdate"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    // --no-autoupdate is a TUNNEL COMMAND OPTION, not a `run` subcommand
+    // option — cloudflared's own usage line is
+    // "cloudflared tunnel [tunnel command options] run [subcommand options]",
+    // so it must come BEFORE "run". Confirmed live: placing it after "run"
+    // produces "Incorrect Usage: flag provided but not defined: -no-autoupdate"
+    // from the real binary, since `run`'s own flag parser doesn't recognize
+    // a flag that belongs to the parent `tunnel` command's flag set.
+    child = spawnFn(binPath, ["tunnel", "--no-autoupdate", "run"], { env, stdio: ["ignore", "pipe", "pipe"] });
     running = true;
     if (child.pid) InstanceLock.record(baseDir, child.pid);
 
