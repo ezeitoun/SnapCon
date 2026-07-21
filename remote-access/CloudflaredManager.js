@@ -11,6 +11,9 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
+const cp = require("child_process");
+const InstanceLock = require("./InstanceLock");
+const { redact } = require("./redact");
 
 const MANIFEST = require("./cloudflared-checksums.json");
 
@@ -148,10 +151,142 @@ function getBinaryPath(baseDir) {
   return entry ? path.join(binDir(baseDir), entry.localBin) : null;
 }
 
+// ---- Process lifecycle ----
+// Pure function, kept separate from the actual scheduling below specifically
+// so it (and the scheduling logic, via injected timer functions) can be unit
+// tested without relying on real elapsed time / fake-timer libraries.
+const BACKOFF_TABLE_MS = [2000, 5000, 10000, 30000, 60000];
+function backoffDelay(restartCount) {
+  const idx = Math.min(Math.max(restartCount, 0), BACKOFF_TABLE_MS.length - 1);
+  return BACKOFF_TABLE_MS[idx];
+}
+
+// Best-effort signal only — ONE of three inputs to the "Connected" state
+// RemoteAccessService computes (process-alive, this log evidence, and an
+// outbound public-endpoint probe). Never treated as sufficient on its own.
+// Verify this pattern against real `cloudflared tunnel run` output during
+// manual testing — exact wording can change between cloudflared versions.
+const CONNECTION_EVIDENCE_RE = /registered tunnel connection|connection.*(established|registered)|connected to/i;
+
+// spawnFn/setTimeoutFn/clearTimeoutFn are injectable purely for testing —
+// production callers use the real child_process.spawn/setTimeout/clearTimeout
+// defaults. Each call to createProcessManager owns its own private state
+// (no shared module-level mutable state), so tests can create independent
+// instances without interfering with each other.
+function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setTimeout, clearTimeoutFn = clearTimeout } = {}) {
+  let child = null;
+  let running = false;
+  let intentionalStop = false;
+  let restartCount = 0;
+  let restartTimer = null;
+  let sawConnectionEvidence = false;
+  let lastExitInfo = null;
+  let lastError = null;
+  let currentToken = null;
+  let statusListener = null;
+
+  function scheduleRestart() {
+    if (intentionalStop || restartTimer) return;
+    const delay = backoffDelay(restartCount);
+    restartTimer = setTimeoutFn(() => {
+      restartTimer = null;
+      restartCount++;
+      spawnChild();
+    }, delay);
+  }
+
+  function handleLine(line) {
+    if (CONNECTION_EVIDENCE_RE.test(line)) sawConnectionEvidence = true;
+    if (statusListener) statusListener({ line: redact(line, [currentToken]) });
+  }
+
+  function spawnChild() {
+    const binPath = getBinaryPath(baseDir);
+    if (!binPath || !fs.existsSync(binPath)) {
+      lastError = "cloudflared binary is not installed — call ensureInstalled() first.";
+      return;
+    }
+    sawConnectionEvidence = false;
+    // Spawn-scoped env object only — process.env itself is never mutated.
+    const env = { ...process.env, TUNNEL_TOKEN: currentToken };
+    child = spawnFn(binPath, ["tunnel", "run", "--no-autoupdate"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    running = true;
+    if (child.pid) InstanceLock.record(baseDir, child.pid);
+
+    let stdoutBuf = "", stderrBuf = "";
+    if (child.stdout) child.stdout.on("data", d => {
+      stdoutBuf += d.toString("utf8");
+      let idx;
+      while ((idx = stdoutBuf.indexOf("\n")) !== -1) { handleLine(stdoutBuf.slice(0, idx)); stdoutBuf = stdoutBuf.slice(idx + 1); }
+    });
+    if (child.stderr) child.stderr.on("data", d => {
+      stderrBuf += d.toString("utf8");
+      let idx;
+      while ((idx = stderrBuf.indexOf("\n")) !== -1) {
+        const line = stderrBuf.slice(0, idx); stderrBuf = stderrBuf.slice(idx + 1);
+        lastError = redact(line, [currentToken]);
+        handleLine(line);
+      }
+    });
+    child.on("exit", (code, signal) => {
+      running = false;
+      child = null;
+      lastExitInfo = { code, signal, at: new Date().toISOString() };
+      InstanceLock.clear(baseDir);
+      if (intentionalStop) { restartCount = 0; }
+      else { scheduleRestart(); }
+    });
+    child.on("error", e => { lastError = redact(e.message, [currentToken]); });
+  }
+
+  async function start(token) {
+    currentToken = token;
+    if (running) return getStatus(); // duplicate-start is a no-op, not an error
+    if (restartTimer) { clearTimeoutFn(restartTimer); restartTimer = null; }
+    await InstanceLock.resolveBeforeStart(baseDir); // own-orphan cleanup — see InstanceLock.js; never "attaches"
+    intentionalStop = false;
+    spawnChild();
+    return getStatus();
+  }
+
+  function stop() {
+    intentionalStop = true;
+    if (restartTimer) { clearTimeoutFn(restartTimer); restartTimer = null; }
+    restartCount = 0;
+    if (!running || !child) { InstanceLock.clear(baseDir); return Promise.resolve(getStatus()); }
+    const proc = child;
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(getStatus()); } };
+      proc.once("exit", finish);
+      try { proc.kill("SIGTERM"); } catch { finish(); return; }
+      setTimeoutFn(() => {
+        if (settled) return;
+        try { proc.kill("SIGKILL"); } catch {}
+      }, 5000);
+    });
+  }
+
+  async function restart() {
+    const token = currentToken;
+    await stop();
+    return start(token);
+  }
+
+  function getStatus() {
+    return { processRunning: running, restartCount, sawConnectionEvidence, lastExitInfo, lastError };
+  }
+
+  function onStatusChange(fn) { statusListener = fn; }
+
+  return { start, stop, restart, getStatus, onStatusChange };
+}
+
 module.exports = {
   RELEASES, MANIFEST,
   UnsupportedPlatformError, ChecksumMismatchError,
   platformKey, binDir, ensureInstalled, download, getVersion, getBinaryPath,
+  backoffDelay, createProcessManager,
   // exported for tests only
   _internal: { readMeta, metaPath, sha256 }
 };

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test",
+    "test": "node --test \"test/remote-access/**/*.test.js\"",
     "build": "pkg . --targets node22-win-x64,node22-macos-x64,node22-macos-arm64,node22-linux-x64 --out-path dist"
   },
   "dependencies": {
