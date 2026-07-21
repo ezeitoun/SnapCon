@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const cp = require("child_process");
 const InstanceLock = require("./InstanceLock");
 const { redact } = require("./redact");
+const { createSerializer } = require("./serialize");
 
 const MANIFEST = require("./cloudflared-checksums.json");
 
@@ -316,16 +317,10 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
   // RemoteAccessService happens to never call start()/stop() concurrently
   // (its own enable()/disable() are serialized), but this module shouldn't
   // depend on every caller getting that right independently — the same class
-  // of bug had to be fixed one layer up for exactly this reason.
-  let opChain = Promise.resolve();
-  function serialize(fn) {
-    return (...args) => {
-      const run = () => fn(...args);
-      const started = opChain.then(run, run);
-      opChain = started.then(() => {}, () => {});
-      return started;
-    };
-  }
+  // of bug had to be fixed one layer up for exactly this reason. Shared with
+  // RemoteAccessService's own enable()/disable()/startupInit() serialization
+  // — see remote-access/serialize.js.
+  const serialize = createSerializer();
 
   return { start: serialize(start), stop: serialize(stop), restart: serialize(restart), getStatus, onStatusChange };
 }

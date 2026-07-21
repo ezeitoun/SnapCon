@@ -10,6 +10,7 @@ const CFM = require("./CloudflaredManager");
 const ApiClient = require("./RemoteAccessApiClient");
 const { getSecureCredentialStore } = require("./SecureCredentialStore");
 const { redact } = require("./redact");
+const { createSerializer } = require("./serialize");
 
 // Any completed HTTP response counts as "reachable" — the point is proving
 // the request round-tripped through Cloudflare's edge back to this SnapCon
@@ -359,15 +360,10 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   // rather than racing. disableForShutdown() is deliberately NOT included:
   // process exit is bounded (server.js force-exits 3s after signaling
   // shutdown) and must not wait behind a slow in-flight enable().
-  let opChain = Promise.resolve();
-  function serialize(fn) {
-    return (...args) => {
-      const run = () => fn(...args);
-      const started = opChain.then(run, run);
-      opChain = started.then(() => {}, () => {}); // keep the chain alive for the next call even if this one rejects
-      return started;
-    };
-  }
+  //
+  // Shared with CloudflaredManager's start()/stop()/restart(), which needed
+  // the identical fix one layer down — see remote-access/serialize.js.
+  const serialize = createSerializer();
 
   return {
     validateRemoteAccessSecurity,
