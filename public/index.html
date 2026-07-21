@@ -42,7 +42,7 @@
   <aside class="side">
     <div class="head">
       <div class="sort-wrap">
-        <button class="refresh" id="fileSortBtn">↕ Newest</button>
+        <button class="refresh icon-btn" id="fileSortBtn" title="Sort: Newest"><img src="/file-sort.svg" class="side-icon" alt="Sort"></button>
         <div class="sort-menu left" id="fileSortMenu">
           <button class="sort-opt" data-fsort="new"><span class="sort-check" id="fsc-new"></span>Newest</button>
           <button class="sort-opt" data-fsort="old"><span class="sort-check" id="fsc-old"></span>Oldest</button>
@@ -52,11 +52,21 @@
           <button class="sort-opt" data-fsort="small"><span class="sort-check" id="fsc-small"></span>Smallest</button>
         </div>
       </div>
-      <button class="refresh" id="refresh">Refresh</button>
+      <div class="head-btns">
+        <button class="refresh icon-btn" id="newFolderBtn" title="Create a new folder here"><img src="/new-folder.svg" class="side-icon" alt="New Folder"></button>
+        <button class="refresh icon-btn" id="uploadFilesBtn" title="Upload files from this computer"><img src="/upload-file.svg" class="side-icon" alt="Upload"></button>
+        <button class="refresh icon-btn" id="refresh" title="Refresh"><img src="/refresh-icon.svg" class="side-icon" alt="Refresh"></button>
+      </div>
     </div>
     <div class="folderline" id="folderline">…</div>
-    <div class="filter"><input id="filter" placeholder="Filter files…" /></div>
+    <div class="multiselect-bar" id="multiselectBar" style="display:none">
+      <span id="multiselectCount"></span>
+      <button class="btn ghost" id="multiselectClear">Clear</button>
+    </div>
+    <div class="pstatus" id="fileOpStatus" style="padding:0 14px"></div>
+    <div class="filter"><input id="filter" placeholder="Search files…" /></div>
     <div class="list" id="list"></div>
+    <input type="file" id="uploadFilesInput" multiple accept=".gcode,.gco,.g,.gx,.3mf" style="display:none">
   </aside>
   <main class="main">
     <div class="topbar">
@@ -92,6 +102,7 @@
         <button class="set-tab" data-tab="printers">Printers</button>
         <button class="set-tab" data-tab="firmware">Firmware</button>
         <button class="set-tab" data-tab="users">Users</button>
+        <button class="set-tab" data-tab="remote">Remote Access</button>
       </div>
 
       <div class="set-panel" id="tab-general">
@@ -143,6 +154,12 @@
             <span class="pstatus" id="bootStatus"></span>
           </div>
         </div>
+
+        <div class="row" id="dockerRestartRow" style="margin-top:16px;align-items:center;gap:10px;display:none">
+          <button class="btn ghost" id="dockerRestartBtn">Restart App</button>
+          <span class="hint">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
+          <span class="pstatus" id="dockerRestartStatus"></span>
+        </div>
       </div>
 
       </div>
@@ -161,10 +178,12 @@
               <input class="field" id="ntfTopic" placeholder="my-printfarm" style="max-width:220px">
               <button class="btn ghost" type="button" id="ntfGenTopic" style="flex:none;white-space:nowrap">Generate</button>
             </label>
-            <label style="display:flex;align-items:center;gap:6px">
+            <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <input type="radio" name="ntfService" id="ntfSvcTelegram" value="telegram"> Telegram
-              <span class="pi-lbl" style="margin-left:10px">Chat ID</span>
-              <input class="field" id="ntfChatId" placeholder="123456789" style="max-width:220px">
+              <span class="pi-lbl" style="margin-left:10px">Bot Token</span>
+              <input class="field" id="ntfBotToken" type="password" placeholder="123456:ABC-token-from-BotFather" style="max-width:240px" autocomplete="off">
+              <span class="pi-lbl">Chat ID</span>
+              <input class="field" id="ntfChatId" placeholder="123456789" style="max-width:160px">
             </label>
           </div>
           <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
@@ -241,6 +260,40 @@
         </div>
       </div>
 
+      <div class="set-panel" id="tab-remote" style="display:none">
+        <div class="setcard">
+          <div id="raDevBadge" style="display:none;background:#3a2f14;border:1px solid #6b5420;color:#e8c37a;border-radius:6px;padding:6px 10px;font-size:12px;margin-bottom:12px">
+            Development Preview — uses a shared development provisioning key, not a customer-ready mechanism. Do not rely on this for production use.
+          </div>
+          <div id="raInsecureWarning" style="display:none;background:#3a1414;border:1px solid #6b2020;color:#f0a0a0;border-radius:6px;padding:6px 10px;font-size:12px;margin-bottom:12px">
+            ⚠ The tunnel token is stored in an INSECURE local file fallback (no OS credential store was available). This is not real secure storage.
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="pi-lbl">Status</span>
+            <span class="status-badge" id="raStatusBadge" style="--status-color:#6A7180">Disabled</span>
+            <button class="btn primary" id="raEnableBtn">Enable Remote Access</button>
+            <button class="btn ghost" id="raDisableBtn" style="display:none">Disable Remote Access</button>
+          </div>
+
+          <div id="raUrlRow" style="display:none;margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="pi-lbl">Public URL</span>
+            <code id="raPublicUrl" style="font-family:var(--mono)"></code>
+            <a class="btn ghost" id="raOpenBtn" href="#" target="_blank" rel="noopener">Open Remote URL</a>
+            <button class="btn ghost" id="raCopyBtn">Copy URL</button>
+          </div>
+
+          <div class="hint" style="margin-top:14px;line-height:1.9">
+            <div>Tunnel process: <b id="raProcRow">—</b></div>
+            <div>Cloudflare connection: <b id="raConnRow">—</b></div>
+            <div>Local SnapCon service: <b id="raLocalRow">—</b></div>
+            <div>Last connected: <b id="raLastConnRow">—</b></div>
+            <div>Last error: <b id="raLastErrRow">—</b></div>
+          </div>
+          <span class="pstatus" id="raStatus" style="margin-top:10px;display:block"></span>
+        </div>
+      </div>
+
       <div class="row" style="margin-top:16px">
         <button class="btn primary" id="saveCfg">Save</button>
         <button class="btn primary" id="addAllSave" style="display:none">Add All &amp; Save</button>
@@ -257,8 +310,8 @@
           <div class="jt-row">
             <div class="jt" id="jt"></div>
             <div class="jcard-actions">
-              <button class="jcard-btn" id="jobEject" title="Deselect job">⏏</button>
-              <button class="jcard-btn" id="jobSend" title="Send to printers"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></button>
+              <button class="jcard-btn" id="jobEject" title="Deselect job"><img src="/eject-pill.svg" class="jcard-icon" alt="Deselect"></button>
+              <button class="jcard-btn" id="jobSend" title="Send to printers"><img src="/send-pill.svg" class="jcard-icon" alt="Send to printers"></button>
             </div>
           </div>
           <div class="jmeta" id="jmeta"></div>
@@ -304,10 +357,23 @@
     <div class="modalbox" style="text-align:center;max-width:360px">
       <div class="modalhdr"><span id="unloadtitle">Unload Filament</span><button class="modalx" id="unloadx">✕</button></div>
       <p style="color:var(--ink-dim);font-size:13px;margin:12px 0 18px" id="unloadmsg"></p>
-      <div style="display:flex;gap:8px;justify-content:center">
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="btn primary" id="unloadYes">Yes</button>
         <button class="btn ghost" id="unloadNo">No</button>
         <button class="btn ghost" id="unloadAll">Unload All</button>
+        <button class="btn ghost" id="unloadColorBtn" style="display:none">Color</button>
+      </div>
+      <div id="unloadColorPicker" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-soft)">
+        <div id="unloadColorGrid" class="color-grid" style="display:none"></div>
+        <div id="unloadColorGeneric" style="display:none">
+          <div style="display:flex;align-items:center;justify-content:center;gap:10px">
+            <input type="color" id="unloadColorSwatch" value="#ffffff" style="width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:none">
+            <input class="field" id="unloadColorHex" placeholder="#RRGGBB" maxlength="7" style="width:110px;text-align:center;font-family:var(--mono);text-transform:uppercase">
+          </div>
+          <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
+            <button class="btn primary" id="unloadColorSave">Save Color</button>
+          </div>
+        </div>
       </div>
       <div class="pstatus" id="unloadStatus" style="margin-top:10px"></div>
     </div>
@@ -324,6 +390,31 @@
         <button class="btn ghost" id="bedmodalcancel">Cancel</button>
       </div>
       <div class="pstatus" id="bedmodalstatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="subnetModal">
+    <div class="modalbox" style="text-align:center;max-width:380px">
+      <div class="modalhdr"><span>Discover Subnet</span><button class="modalx" id="subnetModalX">✕</button></div>
+      <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px">Enter a subnet to scan — e.g. <code>192.168.2.0</code>, or CIDR like <code>192.168.22.128/25</code></p>
+      <input class="field" id="subnetModalInput" placeholder="192.168.2.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto">
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+        <button class="btn purple" id="subnetModalScan">Scan</button>
+        <button class="btn ghost" id="subnetModalCancel">Cancel</button>
+      </div>
+      <div class="pstatus" id="subnetModalStatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="newFolderModal">
+    <div class="modalbox" style="text-align:center;max-width:340px">
+      <div class="modalhdr"><span>New Folder</span><button class="modalx" id="newFolderModalX">✕</button></div>
+      <input class="field" id="newFolderModalInput" placeholder="Folder name" maxlength="80" style="text-align:center;font-size:14px;max-width:240px;margin:8px auto 0">
+      <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
+        <button class="btn purple" id="newFolderModalCreate">Create</button>
+        <button class="btn ghost" id="newFolderModalCancel">Cancel</button>
+      </div>
+      <div class="pstatus" id="newFolderModalStatus" style="margin-top:10px"></div>
     </div>
   </div>
 
