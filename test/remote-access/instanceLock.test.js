@@ -53,3 +53,21 @@ test("looksLikeCloudflared is false for an unrelated process (this test's own ru
   const isCloudflared = await InstanceLock.looksLikeCloudflared(process.pid);
   assert.equal(isCloudflared, false);
 });
+
+// Hardening: found by code review. resolveBeforeStart() awaits this from
+// inside start(), and start()/stop() are serialized at the CloudflaredManager
+// level — an unbounded tasklist/proc read here would mean a subsequent
+// stop() call (including the one server.js's graceful-shutdown path depends
+// on) could queue behind it indefinitely, breaking the "shutdown is always
+// bounded" guarantee that whole path exists for. A 1ms timeout can't
+// possibly complete a real tasklist/proc read in time, so this reliably
+// exercises the timeout path itself (resolving false, the safe default)
+// rather than a normal fast completion — proving the function actually
+// bounds itself instead of only being fast by coincidence on this machine.
+test("looksLikeCloudflared resolves false (not hung) when given a timeout too short for a real OS lookup to complete", async () => {
+  const start = Date.now();
+  const result = await InstanceLock.looksLikeCloudflared(process.pid, 1);
+  const elapsed = Date.now() - start;
+  assert.equal(result, false, "timing out must resolve the safe default (false), never leave the caller hanging");
+  assert.ok(elapsed < 2000, "must resolve at ~the timeout, not wait for the real OS call to finish on its own (took " + elapsed + "ms)");
+});

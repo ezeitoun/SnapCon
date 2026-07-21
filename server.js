@@ -1846,9 +1846,19 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log("\n  Received " + signal + " — shutting down...");
   httpServer.close(); // stop accepting new connections; lets in-flight ones finish
+
+  // Independent, unconditional deadline — scheduled up front, not nested
+  // inside the graceful path's .finally(). A .finally() only ever runs once
+  // the promise it's attached to actually settles, so if disableForShutdown()
+  // (or anything several layers beneath it — a subprocess spawn with no
+  // timeout of its own, say) ever hung, the "bounded" exit would silently
+  // stop being bounded at all. This timer fires no matter what.
+  const forceExitTimer = setTimeout(() => process.exit(0), 8000);
+  if (forceExitTimer.unref) forceExitTimer.unref();
+
   Promise.resolve(remoteAccess.disableForShutdown()) // stop cloudflared only — token/config are retained so the next boot reconnects
     .catch(e => console.error("[remote-access] shutdown:", e.message))
-    .finally(() => setTimeout(() => process.exit(0), 3000)); // bounded — never hangs on a stuck child or a lingering connection
+    .finally(() => { clearTimeout(forceExitTimer); process.exit(0); });
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

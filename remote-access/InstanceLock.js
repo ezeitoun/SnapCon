@@ -43,18 +43,33 @@ function isPidAlive(pid) {
 // Best-effort: does the given live PID still look like a cloudflared
 // process? Used only to decide "is this our own orphan" — never to justify
 // touching a PID that doesn't match.
-function looksLikeCloudflared(pid) {
+//
+// Time-bounded (unlike an earlier version of this function): resolveBeforeStart()
+// awaits this from inside start(), and start()/stop() are serialized at the
+// CloudflaredManager level — an unbounded tasklist/proc read here would mean
+// a subsequent stop() call (including the one the graceful-shutdown path in
+// server.js depends on) could queue behind it indefinitely, breaking the
+// "shutdown is always bounded" guarantee that whole path exists for. A
+// timeout here resolves false (the safe default — "doesn't clearly look like
+// ours," per this function's own contract of never justifying touching a
+// PID that doesn't match) rather than leaving the caller hanging.
+function looksLikeCloudflared(pid, timeoutMs = 3000) {
   return new Promise(resolve => {
+    let settled = false;
+    const finish = v => { if (!settled) { settled = true; resolve(v); } };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
     if (os.platform() === "win32") {
       const child = spawn("tasklist", ["/FI", "PID eq " + pid, "/FO", "CSV", "/NH"]);
       let out = "";
       child.stdout.on("data", d => { out += d; });
-      child.on("error", () => resolve(false));
-      child.on("close", () => resolve(/cloudflared/i.test(out)));
+      child.on("error", () => { clearTimeout(timer); finish(false); });
+      child.on("close", () => { clearTimeout(timer); finish(/cloudflared/i.test(out)); });
     } else {
       fs.readFile("/proc/" + pid + "/cmdline", (err, data) => {
-        if (err) { resolve(false); return; }
-        resolve(/cloudflared/i.test(data.toString("utf8")));
+        clearTimeout(timer);
+        if (err) { finish(false); return; }
+        finish(/cloudflared/i.test(data.toString("utf8")));
       });
     }
   });
