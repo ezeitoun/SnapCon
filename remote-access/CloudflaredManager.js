@@ -58,11 +58,26 @@ function readMeta(baseDir) {
   catch { return null; }
 }
 
-async function fetchWithTimeout(url, opts, timeoutMs) {
+// The timeout here covers the FULL download — connecting AND reading the
+// entire body — not just getting the Response object back. A naive
+// `await fetch(url, {signal})` followed by a separate `await
+// res.arrayBuffer()`, with the timer cleared as soon as fetch() resolves,
+// would leave the actual multi-MB body read completely unbounded: a
+// connection that stalls partway through would hang forever. That matters
+// more here than it might look — ensureInstalled() is only ever called from
+// within enable()/startupInit(), which are now serialized through one
+// operation queue, so a single hung download would block every future
+// Remote Access operation indefinitely, not just itself.
+async function fetchBufferWithTimeout(url, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
-  finally { clearTimeout(timer); }
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return Buffer.from(await res.arrayBuffer());
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Downloads the asset for `key`, verifies it against the committed manifest
@@ -80,9 +95,12 @@ async function download(baseDir, key, manifest = MANIFEST) {
   if (!entry || !checksumEntry) throw new UnsupportedPlatformError(key);
 
   const url = "https://github.com/cloudflare/cloudflared/releases/download/" + manifest.version + "/" + entry.asset;
-  const res = await fetchWithTimeout(url, {}, 60000);
-  if (!res.ok) throw new Error("Failed to download cloudflared (" + url + "): HTTP " + res.status);
-  const buf = Buffer.from(await res.arrayBuffer());
+  let buf;
+  try {
+    buf = await fetchBufferWithTimeout(url, 60000);
+  } catch (e) {
+    throw new Error("Failed to download cloudflared (" + url + "): " + e.message);
+  }
   const hash = sha256(buf);
   if (hash !== checksumEntry.sha256) {
     throw new ChecksumMismatchError(
@@ -314,5 +332,5 @@ module.exports = {
   platformKey, binDir, ensureInstalled, download, getVersion, getBinaryPath,
   backoffDelay, createProcessManager,
   // exported for tests only
-  _internal: { readMeta, metaPath, sha256 }
+  _internal: { readMeta, metaPath, sha256, fetchBufferWithTimeout }
 };

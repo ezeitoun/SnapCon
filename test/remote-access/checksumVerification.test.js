@@ -104,3 +104,33 @@ test("the real committed manifest's checksums are well-formed 64-char hex SHA-25
     assert.ok(entry.asset && entry.asset.length > 0, key + " must name a real asset");
   }
 });
+
+// Hardening: found by code review. The original download() used a helper
+// whose timeout only covered getting the Response object back — cleared as
+// soon as fetch() resolved, well before the (separate) `await
+// res.arrayBuffer()` body-read call. A connection that stalls mid-download
+// would hang forever, uncaught by any timeout. This matters more than it
+// might look: ensureInstalled() only ever runs from within enable()/
+// startupInit(), which are now serialized through one operation queue — a
+// single hung download would block every future Remote Access operation
+// indefinitely, not just itself.
+test("fetchBufferWithTimeout aborts a stalled body read instead of hanging forever", async () => {
+  const prevFetch = global.fetch;
+  global.fetch = (url, opts) => Promise.resolve({
+    ok: true,
+    // Simulates a connection that returns headers fine but then stalls
+    // partway through the body — never resolves on its own, only reacts to
+    // the abort signal, exactly like a real stalled network read would.
+    arrayBuffer: () => new Promise((resolve, reject) => {
+      opts.signal.addEventListener("abort", () => reject(new Error("aborted")));
+    })
+  });
+  try {
+    const start = Date.now();
+    await assert.rejects(() => CFM._internal.fetchBufferWithTimeout("https://example.invalid/asset", 200));
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 2000, "must abort at ~200ms, not hang indefinitely (took " + elapsed + "ms)");
+  } finally {
+    global.fetch = prevFetch;
+  }
+});
