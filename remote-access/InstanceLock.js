@@ -86,10 +86,20 @@ async function resolveBeforeStart(baseDir) {
   return { action: "spawn-fresh" };
 }
 
+// Best-effort: the lock file is a safety net for detecting an orphan on a
+// FUTURE run, not something the CURRENT run's tunnel depends on to function.
+// A write failure here (permissions, disk full) shouldn't be allowed to
+// propagate up through spawnChild() — called synchronously right after a
+// real spawn succeeds — and fail the whole start() call over what is, this
+// session, a non-essential bookkeeping write.
 function record(baseDir, pid) {
-  const dir = path.dirname(lockPath(baseDir));
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(lockPath(baseDir), JSON.stringify({ pid, recordedAt: Date.now() }));
+  try {
+    const dir = path.dirname(lockPath(baseDir));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(lockPath(baseDir), JSON.stringify({ pid, recordedAt: Date.now() }));
+  } catch (e) {
+    console.error("[remote-access] failed to record instance lock (non-fatal):", e.message);
+  }
 }
 
 function clear(baseDir) {

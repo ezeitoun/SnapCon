@@ -337,3 +337,48 @@ test("concurrent enable() calls are serialized — provisionHub is only ever cal
   assert.equal(provisionCalls, 1, "the second call, once it actually runs after the first fully settles, must reuse the existing hub rather than provisioning again");
   await svc.disable();
 });
+
+// Hardening: found by code review. processManager.start() isn't expected to
+// throw (spawn failures land in its own getStatus().lastError instead) —
+// but enable()/startupInit() previously had no try/catch around the call at
+// all, so if it ever DID throw for any reason (e.g. InstanceLock.record()
+// failing to write — itself hardened separately), the exception would
+// propagate uncaught past the "state = 'starting'" assignment, leaving the
+// UI stuck on "Starting" forever with no error surfaced anywhere — the same
+// class of bug fixed earlier for a different failure path.
+test("enable() surfaces a clean error state if processManager.start() unexpectedly throws, instead of leaving state stuck on starting", async () => {
+  const dir = tempBaseDir();
+  const pm = {
+    async start() { throw new Error("simulated unexpected spawn failure"); },
+    async stop() {},
+    getStatus() { return { processRunning: false, sawConnectionEvidence: false, restartCount: 0, lastError: null }; },
+    onStatusChange() {}
+  };
+  const svc = makeService(dir, { processManager: pm });
+
+  const result = await svc.enable();
+  assert.equal(result.ok, false);
+  assert.match(svc.getStatus().lastError, /simulated unexpected spawn failure/);
+  assert.equal(svc.getStatus().state, "error", "must not remain stuck on 'starting' when start() throws");
+});
+
+test("startupInit() surfaces a clean error state if processManager.start() unexpectedly throws", async () => {
+  const dir = tempBaseDir();
+  const workingPm = fakeProcessManager();
+  const svc1 = makeService(dir, { processManager: workingPm });
+  await svc1.enable(); // establishes a real stored hub/token to restore from
+  await svc1.disable();
+
+  const throwingPm = {
+    async start() { throw new Error("simulated unexpected spawn failure on restart"); },
+    async stop() {},
+    getStatus() { return { processRunning: false, sawConnectionEvidence: false, restartCount: 0, lastError: null }; },
+    onStatusChange() {}
+  };
+  Store.save(dir, { enabled: true }); // simulate the config still being enabled at next boot
+  const svc2 = makeService(dir, { processManager: throwingPm });
+  await svc2.startupInit();
+
+  assert.equal(svc2.getStatus().state, "error");
+  assert.match(svc2.getStatus().lastError, /simulated unexpected spawn failure on restart/);
+});

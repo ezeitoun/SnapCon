@@ -187,7 +187,18 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
 
     state = "starting";
     processManager.onStatusChange(onCloudflaredEvent);
-    await processManager.start(tunnelToken);
+    try {
+      await processManager.start(tunnelToken);
+    } catch (e) {
+      // Defensive: processManager.start() isn't expected to throw (spawn
+      // failures land in its own lastError, surfaced via getStatus()
+      // already) — but if it ever does for an unforeseen reason, this is
+      // what stops the UI getting stuck on "Starting" forever with no
+      // console trace either, same class of bug as the earlier fix for
+      // invisible process-manager errors.
+      state = "error"; lastError = redact(e.message, [tunnelToken]);
+      return { ok: false, error: lastError };
+    }
     Store.save(baseDir, { autoStart: true, cloudflaredVersion: CFM.getVersion(baseDir) });
     everConnectedThisSession = false;
     scheduleProbe(0);
@@ -267,7 +278,12 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
 
     state = "starting";
     processManager.onStatusChange(onCloudflaredEvent);
-    await processManager.start(token);
+    try {
+      await processManager.start(token);
+    } catch (e) {
+      state = "error"; lastError = redact(e.message, [token]);
+      return;
+    }
     everConnectedThisSession = false;
     scheduleProbe(0);
     recomputeState();
