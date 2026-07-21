@@ -124,6 +124,26 @@ test("provisionHub rejects a response with a tunnelToken but a missing/blank hos
   });
 });
 
+// Hardening: found by code review. publicUrl gets set as a clickable
+// anchor's href in the browser (Settings → Remote Access → Open Remote
+// URL) — a javascript:/data: scheme there would turn our own UI into a
+// self-XSS vector the moment an admin clicked it. Only https:// (the only
+// scheme a real Cloudflare Tunnel hostname would ever use) is accepted.
+test("provisionHub rejects a publicUrl that isn't an https:// URL", async () => {
+  await withEnv({ SNAPCON_PROVISIONING_KEY: "dev-key" }, async () => {
+    const base = { hubId: "hub_1", hostname: "hub1.snapcon.app", tunnelId: "t1", tunnelToken: "tok", status: "provisioned" };
+    for (const badUrl of ["javascript:alert(1)", "data:text/html,<script>alert(1)</script>", "http://hub1.snapcon.app", "ftp://hub1.snapcon.app"]) {
+      await withFetch(async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ...base, publicUrl: badUrl }) }), async () => {
+        await assert.rejects(
+          () => provisionHub({ installationId: "i", localOrigin: "http://localhost:4545" }),
+          e => e instanceof ProvisioningError && e.code === CODES.INVALID_RESPONSE,
+          JSON.stringify(badUrl) + " must be rejected"
+        );
+      });
+    }
+  });
+});
+
 test("provisionHub maps a network failure / timeout to AMBIGUOUS_TIMEOUT, not any 'retry-safe' code", async () => {
   await withEnv({ SNAPCON_PROVISIONING_KEY: "dev-key" }, async () => {
     await withFetch(async () => { const e = new Error("aborted"); e.name = "AbortError"; throw e; }, async () => {

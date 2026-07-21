@@ -123,6 +123,16 @@ async function provisionHub({ installationId, localOrigin }) {
       throw new ProvisioningError(CODES.INVALID_RESPONSE, "Provisioning response is missing a valid '" + field + "'.");
     }
   }
+  // publicUrl gets persisted, displayed, and set as a clickable link's href
+  // in the browser (Settings → Remote Access → Open Remote URL) — a
+  // compromised or simply buggy backend response with a javascript:/data:
+  // scheme there would turn our own UI into a self-XSS vector the moment an
+  // admin clicked it. Requiring https:// (the only scheme a real Cloudflare
+  // Tunnel hostname would ever use) closes that off at the source, rather
+  // than relying on every future consumer of this value to re-validate it.
+  if (!/^https:\/\//i.test(body.publicUrl)) {
+    throw new ProvisioningError(CODES.INVALID_RESPONSE, "Provisioning response's publicUrl is not an https:// URL.");
+  }
   return {
     hubId: body.hubId, hostname: body.hostname, publicUrl: body.publicUrl,
     tunnelId: body.tunnelId, tunnelToken: body.tunnelToken, status: body.status
