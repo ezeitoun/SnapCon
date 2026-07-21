@@ -382,3 +382,107 @@ test("startupInit() surfaces a clean error state if processManager.start() unexp
   assert.equal(svc2.getStatus().state, "error");
   assert.match(svc2.getStatus().lastError, /simulated unexpected spawn failure on restart/);
 });
+
+// Regression tests for fixes applied after a code review of this feature.
+
+function controllableProcessManager() {
+  let status = { processRunning: false, sawConnectionEvidence: false, restartCount: 0, lastError: null };
+  let listener = null;
+  return {
+    async start() { status.processRunning = true; },
+    async stop() { status.processRunning = false; },
+    getStatus() { return { ...status }; },
+    onStatusChange(fn) { listener = fn; },
+    // test-only: simulates CloudflaredManager reporting a status change
+    // (e.g. a new stdout line, a crash, a successful restart) and firing
+    // the registered onCloudflaredEvent callback exactly like the real
+    // stdout/stderr 'data' handlers do.
+    simulate(patch) { Object.assign(status, patch); if (listener) listener({}); }
+  };
+}
+
+test("recomputeState() does not crash when Store.save() throws (e.g. a disk-full/permissions error at the exact moment of first connecting)", async () => {
+  const dir = tempBaseDir();
+  const pm = controllableProcessManager();
+  const svc = makeService(dir, { processManager: pm, probeFn: async () => true });
+  await svc.enable();
+
+  const originalSave = Store.save;
+  Store.save = () => { throw new Error("simulated disk-full error"); };
+  try {
+    // Drives recomputeState() into the branch that calls Store.save() —
+    // must not throw synchronously out of simulate()/onCloudflaredEvent,
+    // which in the real system is called from an uncatchable context
+    // (a child-process stream 'data' handler / an un-awaited setTimeout).
+    await new Promise(r => setTimeout(r, 50)); // let the probe (probeFn always true) resolve at least once
+    pm.simulate({ sawConnectionEvidence: true });
+  } finally {
+    Store.save = originalSave;
+  }
+  // No assertion beyond "didn't throw" — reaching here at all is the point.
+  await svc.disable();
+});
+
+test("recomputeState() recovers out of 'error' once the process genuinely comes back up (no longer permanently stuck)", async () => {
+  const dir = tempBaseDir();
+  const pm = controllableProcessManager();
+  const svc = makeService(dir, { processManager: pm, probeFn: async () => true });
+  await svc.enable();
+
+  // Simulate an early crash with a captured error, before ever connecting.
+  pm.simulate({ processRunning: false, lastError: "simulated early crash" });
+  assert.equal(svc.getStatus().state, "error", "a genuine early failure must still be reported as an error");
+
+  // Simulate CloudflaredManager's own backoff-restart succeeding afterwards.
+  pm.simulate({ processRunning: true, sawConnectionEvidence: true, lastError: null });
+  await new Promise(r => setTimeout(r, 50)); // let the (always-true) probe mark publicEndpointHealthy
+  pm.simulate({}); // re-trigger recomputeState() now that the probe has resolved
+
+  assert.equal(svc.getStatus().state, "connected", "a real recovery must be reflected, not stuck on 'error' forever");
+  await svc.disable();
+});
+
+test("a successful reconnect clears a stale lastError instead of showing it next to a Connected badge", async () => {
+  const dir = tempBaseDir();
+  const pm = controllableProcessManager();
+  const svc = makeService(dir, { processManager: pm, probeFn: async () => true });
+  await svc.enable();
+
+  pm.simulate({ processRunning: false, lastError: "simulated early crash" });
+  assert.match(svc.getStatus().lastError, /simulated early crash/);
+
+  pm.simulate({ processRunning: true, sawConnectionEvidence: true, lastError: null });
+  await new Promise(r => setTimeout(r, 50));
+  pm.simulate({});
+
+  assert.equal(svc.getStatus().state, "connected");
+  assert.equal(svc.getStatus().lastError, null, "a stale error from an earlier failed attempt must not linger once genuinely connected");
+  await svc.disable();
+});
+
+test("enable() refuses (does not provision a second Hub) when a Hub is already persisted but its token can't be read back", async () => {
+  const dir = tempBaseDir();
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned" });
+  const pm = fakeProcessManager();
+  const svc = makeService(dir, { apiClient, processManager: pm });
+  await svc.enable(); // establishes a real persisted hubId + token
+  await svc.disable();
+
+  // Simulate the token becoming unreadable (corrupted/deleted keychain
+  // entry) while hubId remains persisted — the exact scenario that
+  // previously fell through to silently provisioning a second Hub.
+  const brokenSecureStore = async () => ({
+    usingInsecureFallback: false,
+    async get() { return null; }, // token unreadable
+    async set() {}, async delete() {}
+  });
+  const svc2 = makeService(dir, { apiClient, processManager: pm, getSecureCredentialStoreFn: brokenSecureStore });
+  Store.save(dir, { enabled: false }); // disable() already did this; explicit for clarity
+  const result = await svc2.enable();
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /already provisioned|missing or could not be decrypted/i);
+  assert.equal(apiClient.calls.length, 1, "must NOT call provisionHub again — the original enable() call above is the only one that should have");
+  const persisted = Store.load(dir);
+  assert.equal(persisted.hubId, "hub_1", "the original hubId must be left untouched, not overwritten by a second provisioning attempt");
+});

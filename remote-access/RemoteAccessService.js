@@ -72,12 +72,31 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   function recomputeState() {
     const persisted = Store.load(baseDir);
     if (!persisted.enabled) { state = "disabled"; return; }
-    if (state === "error") return; // sticky until the next enable()/startupInit() attempt
+    // No longer sticky: an "error" set here (cfmStatus.lastError branch,
+    // below) must be able to clear itself once CloudflaredManager's own
+    // backoff-restart actually succeeds — otherwise the UI is stuck showing
+    // "Error" forever even after a genuine, automatic recovery, and the only
+    // way out is a manual disable/enable. "Fatal" errors set directly by
+    // enable()/startupInit() (missing token, checksum mismatch, security
+    // failure) are unaffected: those return before the process is ever
+    // (re)started, so cfmStatus.processRunning stays false and none of the
+    // branches below fire — state simply stays whatever those functions set.
     const cfmStatus = processManager.getStatus();
     const allThreeGood = cfmStatus.processRunning && cfmStatus.sawConnectionEvidence && publicEndpointHealthy;
     if (allThreeGood) {
-      if (state !== "connected") Store.save(baseDir, { lastConnectedAt: new Date().toISOString() });
+      if (state !== "connected") {
+        try {
+          Store.save(baseDir, { lastConnectedAt: new Date().toISOString() });
+        } catch (e) {
+          // Best-effort bookkeeping, not something worth taking the whole
+          // server down over — recomputeState() is reachable from a
+          // synchronous stream-data handler and an un-awaited setTimeout
+          // callback, neither of which has anything else to catch this.
+          console.error("[remote-access] failed to persist lastConnectedAt (non-fatal):", e.message);
+        }
+      }
       state = "connected";
+      lastError = null; // a stale error from an earlier failed attempt shouldn't linger next to a healthy "Connected" badge
       everConnectedThisSession = true;
     } else if (everConnectedThisSession) {
       state = "reconnecting"; // was healthy before, this is a transient blip the backoff-restart is already handling
@@ -86,10 +105,9 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     } else if (cfmStatus.lastError) {
       // Never successfully connected this session AND the process isn't
       // running AND there's a concrete captured error (e.g. spawn failed,
-      // exited immediately) — this is not "still starting up," it's stuck.
-      // Distinct from the reconnecting case above: a healthy system's own
-      // transient crash-and-auto-restart cycle never reaches this branch
-      // because everConnectedThisSession is already true by then.
+      // exited immediately) — this is not "still starting up," it's stuck
+      // (unless/until a later backoff-triggered restart succeeds, at which
+      // point processRunning flips true and this branch stops being reached).
       state = "error";
       if (!lastError) lastError = cfmStatus.lastError;
     }
@@ -156,8 +174,19 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     Store.save(baseDir, { enabled: true });
 
     let tunnelToken;
-    const existingToken = persisted.hubId ? await secureStore.get("tunnelToken") : null;
-    if (existingToken) {
+    if (persisted.hubId) {
+      const existingToken = await secureStore.get("tunnelToken");
+      if (!existingToken) {
+        // A Hub is already provisioned but its token can't be read back —
+        // NEVER silently provision a second one to paper over this (that
+        // orphans the first Hub on the backend forever; there's no working
+        // delete yet). Matches startupInit()'s identical guard for the same
+        // scenario — this function must refuse the exact same way, not
+        // fall through to re-provisioning.
+        state = "error";
+        lastError = "A Hub (" + persisted.hubId + ") is already provisioned, but its stored tunnel token is missing or could not be decrypted. Disable and re-enable only after restoring or clearing the stored credential — re-enabling as-is will not create a new Hub automatically.";
+        return { ok: false, error: lastError };
+      }
       // Re-enable: reuse the existing Hub/token, never provision a new one.
       tunnelToken = existingToken;
     } else {

@@ -225,6 +225,10 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
       return;
     }
     sawConnectionEvidence = false;
+    // Reset on every fresh spawn attempt (initial start and every backoff-
+    // triggered restart alike) so a stale error from several restarts ago
+    // never lingers in getStatus() once a newer attempt is underway.
+    lastError = null;
     // Spawn-scoped env object only — process.env itself is never mutated.
     const env = { ...process.env, TUNNEL_TOKEN: currentToken };
     // --no-autoupdate is a TUNNEL COMMAND OPTION, not a `run` subcommand
