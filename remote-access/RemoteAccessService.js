@@ -137,9 +137,13 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
 
   async function runProbe(myGeneration) {
     const persisted = Store.load(baseDir);
-    const localOk = await probeFn("http://127.0.0.1:" + port + "/api/remote-access/probe", 5000);
-    let publicOk = false;
-    if (persisted.publicUrl) publicOk = await probeFn(persisted.publicUrl.replace(/\/+$/, "") + "/api/remote-access/probe", 5000);
+    // Independent checks (local vs. public) — run concurrently rather than
+    // sequentially, so a probe cycle costs ~one 5s timeout in the worst case
+    // instead of up to two stacked ones.
+    const [localOk, publicOk] = await Promise.all([
+      probeFn("http://127.0.0.1:" + port + "/api/remote-access/probe", 5000),
+      persisted.publicUrl ? probeFn(persisted.publicUrl.replace(/\/+$/, "") + "/api/remote-access/probe", 5000) : Promise.resolve(false)
+    ]);
 
     // disable()/disableForShutdown() ran while the two awaits above were in
     // flight — don't apply stale results and, critically, don't reschedule:
