@@ -20,8 +20,28 @@ function checkAuthFailure(r){ if(r.status===401 && USERS_ENABLED && Date.now()-L
 const getJSON = url => fetch(url).then(r => { checkAuthFailure(r); return r.json(); });
 const postJSON = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)}).then(r => { checkAuthFailure(r); return r; });
 let FILES = [], FOLDERS = [], CURRENT_SUB = "", SELECTED = null, MAP = null, FLEET = [], MAPSEL = {};
+// Multi-select state for the file manager (shift/ctrl-click, Explorer-style)
+// — keyed by the same "/"-joined relative path used everywhere else
+// (CURRENT_SUB+"/"+name), so a selected file is unambiguous even once a
+// search spans multiple folders.
+let SELECTED_FILES = new Set();
+// The last plain- or ctrl-clicked file — a shift-click ranges from here to
+// the newly clicked row, exactly like Explorer/Finder.
+let SELECT_ANCHOR = null;
+let SEARCH_RESULTS = null; // non-null while the search box has a query — replaces the normal folder view
 let USE_T_NOTATION = false, FILAMENT_COST = 0, ELECTRICITY_RATE = 0, CURRENCY = "$";
 let ALLOW_MAPPING = true, SUGGEST_MATCHING = true;
+let RA_POLL_TIMER = null, RA_INFLIGHT = false;
+// Printer "Connector" types + their capabilities, fetched once from the
+// server (single source of truth — connectors/index.js) instead of a
+// hardcoded list duplicated in this file.
+let CONNECTOR_TYPES = [];
+async function loadConnectorTypes(){
+  try{ CONNECTOR_TYPES=await getJSON("/api/connectors"); }catch{ CONNECTOR_TYPES=[]; }
+}
+function connectorCaps(type){
+  return (CONNECTOR_TYPES.find(c=>c.type===type)||{}).capabilities||{};
+}
 
 // ---- User Access Management: session state + role helpers ----
 // Both hard-return true when USERS_ENABLED is false, so every gated call site
@@ -55,7 +75,7 @@ function applyFileSortUI(){
     const el = $('fsc-'+k);
     if(el) el.textContent = FILE_SORT === k ? '✓' : '';
   });
-  $('fileSortBtn').textContent = '↕ ' + (FILE_SORT_LABELS[FILE_SORT] || 'Newest');
+  $('fileSortBtn').title = 'Sort: ' + (FILE_SORT_LABELS[FILE_SORT] || 'Newest');
 }
 
 // ---- Fleet sort ----
@@ -246,9 +266,14 @@ async function authGate(){
 // open UI whenever the feature is off.
 function applyRoleUI(){
   const admin=isAdmin(), act=canAct();
+  // Settings hides filesBtn itself while open ($("gear")'s click handler) —
+  // this runs on every login/logout AND after a mid-settings Save, so it must
+  // not re-show it out from under that, or the folder button flashes back in
+  // on top of the settings panel.
+  const settingsOpen = $("setup").classList.contains("show");
   $("gear").style.display = admin ? "" : "none";
   if($("maintBtn")) $("maintBtn").disabled = !act;
-  if($("filesBtn")) $("filesBtn").style.display = act ? "" : "none";
+  if($("filesBtn")) $("filesBtn").style.display = (act && !settingsOpen) ? "" : "none";
   if($("jobSend")) $("jobSend").style.display = act ? "" : "none";
   if(USERS_ENABLED && CURRENT_USER){
     // First name if set, else fall back to the login name.
@@ -308,7 +333,28 @@ function wireUI(){
   wireModal("thumbmodal", closeThumb, ["thumbx"]);
   wireModal("snapmodal", closeSnapshot, ["snapx"]);
   wireModal("unloadmodal", closeUnload, ["unloadx","unloadNo"]);
+  $("unloadColorSwatch").addEventListener("input",()=>{ $("unloadColorHex").value=$("unloadColorSwatch").value.toUpperCase(); });
+  $("unloadColorHex").addEventListener("input",()=>{
+    let v=$("unloadColorHex").value.trim();
+    if(v && v[0]!=="#") v="#"+v;
+    if(/^#[0-9a-fA-F]{6}$/.test(v)) $("unloadColorSwatch").value=v;
+  });
+  $("unloadColorHex").addEventListener("blur",()=>{
+    let v=$("unloadColorHex").value.trim();
+    if(v && v[0]!=="#") v="#"+v;
+    if(/^#[0-9a-fA-F]{6}$/.test(v)) $("unloadColorHex").value=v.toUpperCase();
+  });
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
+  wireModal("subnetModal", closeSubnetModal, ["subnetModalX","subnetModalCancel"]);
+  $("subnetModalScan").addEventListener("click", doSubnetScan);
+  wireModal("newFolderModal", closeNewFolderModal, ["newFolderModalX","newFolderModalCancel"]);
+  $("newFolderModalCreate").addEventListener("click", doCreateFolder);
+  $("newFolderModalInput").addEventListener("keydown", e=>{ if(e.key==="Enter") doCreateFolder(); });
+  $("newFolderBtn").addEventListener("click", openNewFolderModal);
+  $("uploadFilesBtn").addEventListener("click", ()=>$("uploadFilesInput").click());
+  $("uploadFilesInput").addEventListener("change", e=>{ uploadLocalFiles(e.target.files); e.target.value=""; });
+  $("multiselectClear").addEventListener("click", ()=>{ SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); renderList(); });
+  wireFileDrag();
   wireModal("maintReportModal", closeMaintReport, ["maintReportX"]);
   $("maintBtn").addEventListener("click", openMaintReport);
   $("maintPrinterSel").addEventListener("change", ()=>loadMaintDetail(parseInt($("maintPrinterSel").value,10)));
@@ -396,15 +442,18 @@ function wireUI(){
   // Test uses the values currently in the form, so it works before saving.
   $("ntfTest").addEventListener("click", async ()=>{
     const st=$("ntfTestStatus");
+    const telegram=$("ntfSvcTelegram").checked;
     st.className="pstatus work"; st.textContent="Sending test…";
     try{
       const r=await postJSON("/api/notify-test",{
-        service:$("ntfSvcTelegram").checked?"telegram":"ntfy",
+        service:telegram?"telegram":"ntfy",
         topic:$("ntfTopic").value.trim(),
+        chatId:$("ntfChatId").value.trim(),
+        botToken:$("ntfBotToken").value.trim(),
         includeImage:$("ntfImage").checked
       });
       const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-      st.className="pstatus ok"; st.textContent="Sent — check your ntfy app";
+      st.className="pstatus ok"; st.textContent=telegram?"Sent — check Telegram":"Sent — check your ntfy app";
     }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
   });
 
@@ -446,11 +495,33 @@ async function checkVersion(){
   renderVbadge();
 }
 $("refresh").addEventListener("click", ()=>{ loadFiles(); loadFleet(); });
-$("filter").addEventListener("input", renderList);
+// Empty box = browse the current folder as normal (renderList). Any text =
+// a recursive search from the gcode root, across every subfolder, replacing
+// the folder view with a flat list of matches (debounced so fast typing
+// doesn't fire a request per keystroke).
+let SEARCH_DEBOUNCE=null;
+$("filter").addEventListener("input", ()=>{
+  const q=$("filter").value.trim();
+  clearTimeout(SEARCH_DEBOUNCE);
+  if(!q){ SEARCH_RESULTS=null; renderList(); return; }
+  SEARCH_DEBOUNCE=setTimeout(()=>runSearch(q), 250);
+});
+async function runSearch(q){
+  try{
+    const d=await getJSON("/api/files/search?q="+encodeURIComponent(q));
+    // The box may have changed (or been cleared) while this was in flight.
+    if($("filter").value.trim()!==q) return;
+    SEARCH_RESULTS=d.files||[];
+    renderList();
+  }catch(e){ /* leave the previous view up rather than blank it on a blip */ }
+}
 $("fleetSearch").addEventListener("input", renderFleet);
 
 async function loadFiles(sub){
-  if(sub!==undefined) CURRENT_SUB=sub;
+  // Only an actual navigation (an explicit sub, from a folder click/Back/
+  // move/mkdir refresh) clears checked files — the periodic no-arg refresh
+  // (timer, Refresh button) must not wipe an in-progress multi-select.
+  if(sub!==undefined){ CURRENT_SUB=sub; SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); }
   try{ const d = await getJSON("/api/files?sub="+encodeURIComponent(CURRENT_SUB));
     if(d.error){ $("folderline").textContent=d.error; FILES=[]; FOLDERS=[]; renderList(); return; }
     $("folderline").textContent=d.folder; FILES=d.files; FOLDERS=d.folders||[]; renderList();
@@ -500,8 +571,9 @@ function needsDarkText(hex){
 }
 
 function renderList(){
-  const q=$("filter").value.trim().toLowerCase(), list=$("list");
+  const list=$("list");
   list.innerHTML="";
+  if(SEARCH_RESULTS!==null){ renderSearchResults(); return; }
   if(CURRENT_SUB){
     const back=document.createElement("button"); back.className="folder-back";
     back.innerHTML="← Back";
@@ -513,23 +585,183 @@ function renderList(){
     list.appendChild(back);
   }
   FOLDERS.forEach(name=>{
-    if(q&&!name.toLowerCase().includes(q)) return;
     const b=document.createElement("button"); b.className="folder-item";
     b.innerHTML=`📁 ${esc(name)}`;
+    b.dataset.folder=CURRENT_SUB?CURRENT_SUB+"/"+name:name;
     b.addEventListener("click",()=>loadFiles(CURRENT_SUB?CURRENT_SUB+"/"+name:name));
     list.appendChild(b);
   });
-  const shown=FILES.filter(f=>!q||f.name.toLowerCase().includes(q)).sort(FILE_SORTS[FILE_SORT]||FILE_SORTS.new);
-  if(!FOLDERS.length&&!shown.length&&!CURRENT_SUB){ list.innerHTML='<div class="empty-list">No <code>.gcode</code> files here yet.</div>'; return; }
-  if(!shown.length){ const m=document.createElement("div"); m.className="empty-list"; m.textContent="No .gcode files in this folder."; list.appendChild(m); return; }
+  const shown=FILES.slice().sort(FILE_SORTS[FILE_SORT]||FILE_SORTS.new);
+  if(!FOLDERS.length&&!shown.length&&!CURRENT_SUB){ list.innerHTML='<div class="empty-list">No sliced files here yet.</div>'; return; }
+  if(!shown.length){ const m=document.createElement("div"); m.className="empty-list"; m.textContent="No sliced files in this folder."; list.appendChild(m); return; }
+  const shownPaths=shown.map(f=>CURRENT_SUB?CURRENT_SUB+"/"+f.name:f.name);
+  shown.forEach((f,i)=>{
+    const filePath=shownPaths[i];
+    const b=document.createElement("div");
+    b.className="job"+(SELECTED===filePath?" active":"")+(SELECTED_FILES.has(filePath)?" multi-selected":"");
+    b.draggable=true; b.dataset.file=filePath;
+    const fsBadge=(SELECTED===filePath&&MAP&&MAP.isFS)?` <img src="/fs-badge.svg" class="fs-badge" title="Full Spectrum">`:``;
+    b.innerHTML=`<div class="jn">${esc(stripExt(f.name))}${fsBadge}</div>`+
+      `<div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
+    b.addEventListener("click",e=>fileRowClick(e,filePath,shownPaths));
+    list.appendChild(b);
+  });
+}
+
+// Flat cross-folder results (SEARCH_RESULTS) — read-only browse/select, no
+// checkboxes or drag: a search spans folders, so "the current folder" a move
+// would target is ambiguous here, unlike the normal per-folder view.
+function renderSearchResults(){
+  const list=$("list");
+  const shown=(SEARCH_RESULTS||[]).slice().sort(FILE_SORTS[FILE_SORT]||FILE_SORTS.new);
+  if(!shown.length){ list.innerHTML='<div class="empty-list">No sliced files match your search.</div>'; return; }
   shown.forEach(f=>{
-    const filePath=CURRENT_SUB?CURRENT_SUB+"/"+f.name:f.name;
+    const filePath=f.sub?f.sub+"/"+f.name:f.name;
     const b=document.createElement("button"); b.className="job"+(SELECTED===filePath?" active":"");
     const fsBadge=(SELECTED===filePath&&MAP&&MAP.isFS)?` <img src="/fs-badge.svg" class="fs-badge" title="Full Spectrum">`:``;
-    b.innerHTML=`<div class="jn">${esc(stripExt(f.name))}${fsBadge}</div><div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
+    const where=f.sub?`<span class="jm-path">${esc(f.sub)}/</span>`:``;
+    b.innerHTML=`<div class="jn">${where}${esc(stripExt(f.name))}${fsBadge}</div><div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
     b.addEventListener("click",()=>selectFile(filePath));
     list.appendChild(b);
   });
+}
+
+// ---- Multi-select (shift/ctrl-click) → drag-to-move, and "New Folder"/"Upload" ----
+// shiftKey: range-select between SELECT_ANCHOR and this row (replaces the
+// current selection, matching Explorer/Finder — not additive to it).
+// ctrlKey/metaKey: toggle just this row in/out, keeping everything else.
+// Plain click: clear multi-select and fall back to the normal single-select
+// (open the job details panel), same as before this feature existed.
+function fileRowClick(e, filePath, orderedPaths){
+  if(e.shiftKey){
+    e.preventDefault();
+    const anchorIdx=SELECT_ANCHOR!=null?orderedPaths.indexOf(SELECT_ANCHOR):-1;
+    const clickIdx=orderedPaths.indexOf(filePath);
+    SELECTED_FILES.clear();
+    if(anchorIdx===-1){ SELECTED_FILES.add(filePath); SELECT_ANCHOR=filePath; }
+    else{
+      const [lo,hi]=anchorIdx<clickIdx?[anchorIdx,clickIdx]:[clickIdx,anchorIdx];
+      for(let i=lo;i<=hi;i++) SELECTED_FILES.add(orderedPaths[i]);
+    }
+    updateMultiSelectUI(); renderList();
+  } else if(e.ctrlKey||e.metaKey){
+    e.preventDefault();
+    if(SELECTED_FILES.has(filePath)) SELECTED_FILES.delete(filePath); else SELECTED_FILES.add(filePath);
+    SELECT_ANCHOR=filePath;
+    updateMultiSelectUI(); renderList();
+  } else {
+    SELECTED_FILES.clear(); SELECT_ANCHOR=filePath;
+    updateMultiSelectUI();
+    selectFile(filePath);
+  }
+}
+function updateMultiSelectUI(){
+  const n=SELECTED_FILES.size, bar=$("multiselectBar");
+  if(n>0){
+    bar.style.display="";
+    $("multiselectCount").textContent=n+(n===1?" file":" files")+" selected — drag onto a folder to move";
+    $("jobcard").classList.remove("show");
+    $("jobloading").classList.remove("show");
+    if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none";
+  } else {
+    bar.style.display="none";
+    if(SELECTED&&MAP){
+      if(!URL_PRINTER_FILTER) $("jobsechead").style.display="";
+      $("jobcard").classList.add("show");
+    }
+  }
+}
+function wireFileDrag(){
+  const list=$("list");
+  list.addEventListener("dragstart", e=>{
+    const row=e.target.closest(".job[draggable]");
+    if(!row){ e.preventDefault(); return; }
+    const file=row.dataset.file;
+    const files=(SELECTED_FILES.has(file)&&SELECTED_FILES.size>1) ? [...SELECTED_FILES] : [file];
+    e.dataTransfer.effectAllowed="move";
+    e.dataTransfer.setData("text/plain", JSON.stringify(files));
+    row.classList.add("dragging");
+  });
+  list.addEventListener("dragend", ()=>{
+    list.querySelectorAll(".job.dragging").forEach(r=>r.classList.remove("dragging"));
+    list.querySelectorAll(".folder-item.drag-over").forEach(r=>r.classList.remove("drag-over"));
+  });
+  list.addEventListener("dragover", e=>{
+    const target=e.target.closest(".folder-item");
+    if(!target) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect="move";
+    list.querySelectorAll(".folder-item.drag-over").forEach(t=>{ if(t!==target) t.classList.remove("drag-over"); });
+    target.classList.add("drag-over");
+  });
+  list.addEventListener("drop", e=>{
+    const target=e.target.closest(".folder-item");
+    list.querySelectorAll(".folder-item.drag-over").forEach(t=>t.classList.remove("drag-over"));
+    if(!target) return;
+    e.preventDefault();
+    let files;
+    try{ files=JSON.parse(e.dataTransfer.getData("text/plain")); }catch{ return; }
+    if(Array.isArray(files)&&files.length) moveFilesTo(files, target.dataset.folder);
+  });
+}
+async function moveFilesTo(filePaths, targetSub){
+  const files=filePaths.map(fp=>{
+    const i=fp.lastIndexOf("/");
+    return i===-1 ? {sub:"",name:fp} : {sub:fp.slice(0,i),name:fp.slice(i+1)};
+  });
+  const st=$("fileOpStatus");
+  try{
+    const r=await postJSON("/api/files/move",{files,targetSub});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    const failed=(d.results||[]).filter(x=>!x.ok);
+    if(failed.length){ st.className="pstatus err"; st.textContent="Couldn't move "+failed.map(x=>x.name+" ("+x.error+")").join(", "); }
+    else { st.className="pstatus ok"; st.textContent="Moved "+files.length+(files.length===1?" file":" files"); setTimeout(()=>{ if(st.textContent.startsWith("Moved")) st.textContent=""; },3000); }
+  }catch(e){ st.className="pstatus err"; st.textContent="Move failed: "+e.message; }
+  SELECTED_FILES.clear(); SELECT_ANCHOR=null;
+  updateMultiSelectUI();
+  loadFiles(CURRENT_SUB);
+}
+
+function openNewFolderModal(){
+  $("newFolderModalInput").value="";
+  $("newFolderModalStatus").textContent="";
+  $("newFolderModal").classList.add("show");
+  setTimeout(()=>$("newFolderModalInput").focus(),100);
+}
+function closeNewFolderModal(){ $("newFolderModal").classList.remove("show"); }
+async function doCreateFolder(){
+  const name=$("newFolderModalInput").value.trim();
+  const st=$("newFolderModalStatus");
+  if(!name){ st.className="pstatus err"; st.textContent="Enter a folder name"; return; }
+  st.className="pstatus work"; st.textContent="Creating…";
+  try{
+    const r=await postJSON("/api/files/mkdir",{sub:CURRENT_SUB,name});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    closeNewFolderModal();
+    loadFiles(CURRENT_SUB);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+
+async function uploadLocalFiles(fileList){
+  const files=[...fileList];
+  if(!files.length) return;
+  const st=$("fileOpStatus");
+  for(let i=0;i<files.length;i++){
+    const f=files[i];
+    st.className="pstatus work"; st.textContent="Uploading "+f.name+" ("+(i+1)+"/"+files.length+")…";
+    try{
+      const r=await fetch("/api/files/upload?sub="+encodeURIComponent(CURRENT_SUB)+"&name="+encodeURIComponent(f.name), {
+        method:"POST", headers:{"Content-Type":"application/octet-stream"}, body:f
+      });
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    }catch(e){
+      st.className="pstatus err"; st.textContent=f.name+": "+e.message;
+      await new Promise(res=>setTimeout(res,1500));
+    }
+  }
+  st.className="pstatus ok"; st.textContent="Upload complete";
+  setTimeout(()=>{ if(st.textContent==="Upload complete") st.textContent=""; },3000);
+  loadFiles(CURRENT_SUB);
 }
 
 async function selectFile(name){
@@ -548,6 +780,10 @@ async function selectFile(name){
 }
 
 function neededColors(){ return MAP ? MAP.palette.filter(s=>s.used) : []; }
+// Same as neededColors(), but a single-material file (empty palette) still
+// needs a slot picked to feed it from — falls back to one unnamed slot
+// standing in for the whole file instead of hiding the picker entirely.
+function neededColorsOrSlot(){ const need=neededColors(); return need.length?need:[{i:0,hex:null,type:'',wt:''}]; }
 
 function renderJob(){
   $("jobcard").classList.add("show");
@@ -789,6 +1025,25 @@ function thumbToken(p, stem){
   return token;
 }
 
+// A failed thumbnail load only gets a fresh <img> (and thus a fresh fetch)
+// when the NEXT /api/fleet poll's body actually differs from the last one
+// (renderFleet's cheap re-render guard) — for an idle/complete/cancelled
+// printer that's often never, since nothing else on the card is changing
+// either. Without this, one transient blip (a slow/busy printer, a dropped
+// connection) leaves the card permanently showing the "—" placeholder until
+// something unrelated changes or the page is reloaded. Retry a few times
+// with backoff before actually giving up.
+function thumbRetry(img){
+  const n=parseInt(img.dataset.retry||"0",10);
+  if(n<4){
+    img.dataset.retry=n+1;
+    const base=img.src.split("&r=")[0];
+    setTimeout(()=>{ if(img.isConnected) img.src=base+"&r="+Date.now(); }, 1500*(n+1));
+  } else if(img.parentNode){
+    img.parentNode.innerHTML='<span class="stats-thumb-empty">—</span>';
+  }
+}
+
 // /orca/<printer> mode: narrow any printer list down to just that one printer.
 const urlFilterFleet = arr => URL_PRINTER_FILTER ? arr.filter(p=>(p.name||'').trim().toLowerCase()===URL_PRINTER_FILTER) : arr;
 
@@ -850,11 +1105,15 @@ function renderFleet(){
     const canSend = p.online && SELECTED && !busy && !maintMode;
     // per-color head picker (default: greedy nearest distinct head)
     let mapHtml="";
-    if(canSend && need.length && ALLOW_MAPPING){
-      const dft=defaultMapping(need, heads);
+    if(canSend && ALLOW_MAPPING && p.capabilities?.filamentHeads){
+      // A single-material file reports no used colors — that still means
+      // "pick which loaded head feeds this print", so fall back to one
+      // unnamed slot standing in for the whole file (see neededColorsOrSlot()).
+      const cmapNeed=neededColorsOrSlot();
+      const dft=defaultMapping(cmapNeed, heads);
       const allHeads=Array.from({length:4},(_,i)=>({hi:i,h:heads[i]||null}));
       if(allHeads.some(x=>x.h&&x.h.loaded)){
-        const rows=need.map(n=>{
+        const rows=cmapNeed.map(n=>{
           const saved=MAPSEL[p.id+":"+n.i];
           const chosen=(saved!==undefined)?String(saved):String(dft[n.i]??"");
           if(saved===undefined && dft[n.i]!==undefined) MAPSEL[p.id+":"+n.i]=String(dft[n.i]);
@@ -879,7 +1138,7 @@ function renderFleet(){
       }
     }
     card.innerHTML=`
-      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}<button class="pill-btn" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button><a class="pill-btn" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Fluidd"><img src="/fluidd-pill.svg" alt="Fluidd"></a></div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Web Interface"><img src="/fluidd-pill.svg" alt="Web Interface"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
       ${p.queuedFile?queuedFileBannerHtml(p):''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
@@ -897,9 +1156,14 @@ function renderFleet(){
         const cold=extT===0&&bedT===0;
         const extPct=Math.min(100,Math.max(0,(extA/Math.max(extT+10,1))*100));
         const bedPct=Math.min(100,Math.max(0,(bedA/Math.max(bedT+5,1))*100));
-        const stem=p.filename?p.filename.replace(/\.gcode$/i,""):"";
+        // The real filename, unmodified — Moonraker's own thumbnail-path
+        // convention (stripping the extension for its "<stem>-300x300.png"
+        // cache) is a Klipper-specific detail that belongs inside that
+        // connector's getThumbnail(), not baked in here, since a different
+        // connector (FlashForge) needs the exact filename instead.
+        const stem=p.filename||"";
         const thumbCell=stem
-          ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="this.parentNode.innerHTML='<span class=stats-thumb-empty>—</span>'"></div>`
+          ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
           `<div class="stats-cell"><div class="stats-cell-label">HOTEND</div><div class="stats-cell-val">${extA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':extT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'hot-fill'}" style="width:${extPct}%"></div></div></div>`+
@@ -927,19 +1191,19 @@ function renderFleet(){
           `<div class="prog-time-cell end"><span class="prog-time-label">Remaining</span><span class="prog-time-val">${fmtRemaining(p.elapsed,p.progress)}</span></div>`+
           `</div>`)+`</div>`;
       })():""}
-      ${p.online&&!(p.errorCode||p.message)?afcLanesHtml(heads,p.activeExt,p.id):''}
+      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id):''}
       ${mapHtml}
       <div class="foot${busy?'':' foot-idle'}">
         ${busy
           ? (p.state==="paused"
-                ? `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="Resume"><img src="/b-resume.svg" alt="Resume"></button>`
-                : `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="Pause"><img src="/b-pause.svg" alt="Pause"></button>`)
-            + `<button class="btn-svg" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="Cancel"><img src="/b-cancel.svg" alt="Cancel"></button>`
-            + (p.plate&&p.plate.total>1?`<button class="btn-svg" ${canAct()?"":"disabled"} data-plate="${p.id}" title="Plate"><img src="/b-plate.svg" alt="Plate ${p.plate.total-p.plate.excluded}/${p.plate.total}"></button>`:"")
-            + `<button class="btn-svg" ${canAct()?"":"disabled"} data-estop="${p.id}" title="Emergency Stop"><img src="/b-estop.svg" alt="E-Stop"></button>`
-          : `<button class="btn-svg" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?"Printer is in maintenance mode":"Upload to printer"}"><img src="/b-upload.svg" alt="Upload"></button>`
-            + `<button class="btn-svg" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?"Printer is in maintenance mode":SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/b-print.svg" alt="Print"></button>`
-            + `<button class="btn-svg" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/b-preheat.svg" alt="Preheat"></button>`
+                ? `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="Resume"><img src="/print-icon.svg" alt=""><span>Resume</span></button>`
+                : `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="Pause"><img src="/pause-icon.svg" alt=""><span>Pause</span></button>`)
+            + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="Cancel"><img src="/stop-icon.svg" alt=""><span>Stop</span></button>`
+            + (p.capabilities?.excludeObject&&p.plate&&p.plate.total>1?`<button class="btn-chip" ${canAct()?"":"disabled"} data-plate="${p.id}" title="Plate ${p.plate.total-p.plate.excluded}/${p.plate.total}"><img src="/plate-icon.svg" alt=""><span>Plate</span></button>`:"")
+            + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-estop="${p.id}" title="Emergency Stop"><img src="/estop-icon.svg" alt=""><span>E-Stop</span></button>`
+          : `<button class="btn-chip" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?"Printer is in maintenance mode":"Upload to printer"}"><img src="/upload-file.svg" alt=""><span>Upload</span></button>`
+            + `<button class="btn-chip" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?"Printer is in maintenance mode":SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/print-icon.svg" alt=""><span>Print</span></button>`
+            + `<button class="btn-chip" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/preheat-icon.svg" alt=""><span>Preheat</span></button>`
         }
       </div>
       <div class="pstatus" id="pst-${p.id}"></div>`;
@@ -998,6 +1262,7 @@ function renderFleet(){
 // by /api/notify-load) — a quiet banner + one-click Print, in any view mode.
 function queuedFileBannerHtml(p){
   const qf=p.queuedFile;
+  if(qf.status==='queued') return `<div class="queued-banner work">Queued <b>${esc(qf.name)}</b> — waiting for this printer to go idle…</div>`;
   if(qf.status==='uploading') return `<div class="queued-banner work">Staging <b>${esc(qf.name)}</b> on this printer…</div>`;
   if(qf.status==='error') return `<div class="queued-banner err">Couldn't stage ${esc(qf.name)}: ${esc(qf.error||'')}</div>`;
   return `<div class="queued-banner ok"><span>Ready to print: <b>${esc(qf.name)}</b></span><button class="btn ghost" data-queued-print="${p.id}" data-queued-file="${esc(qf.name)}">Print</button></div>`;
@@ -1077,7 +1342,7 @@ let PUSHES=0;
 async function pushTo(printer, start, extraUI){
   if(!SELECTED){ return false; }
   const map={};
-  if(ALLOW_MAPPING) neededColors().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
+  if(ALLOW_MAPPING) neededColorsOrSlot().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
   const mapped=Object.keys(map).length;
   const st=$("pst-"+printer);
   if(st){ st.className="pstatus"; st.textContent=""; }
@@ -1090,8 +1355,18 @@ async function pushTo(printer, start, extraUI){
   let ok=false;
   try{
     const r=await postJSON("/api/print",{file:SELECTED,printer,start,map});
-    const d=await r.json(); if(!r.ok||d.error||!d.jobId) throw new Error(d.error||("HTTP "+r.status));
-    ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI);
+    const d=await r.json(); if(!r.ok||d.error||(!d.jobId&&d.mode!=="pending")) throw new Error(d.error||("HTTP "+r.status));
+    if(d.mode==="pending"){
+      // Printer's busy — server queued the file instead of racing an upload
+      // against the active print; loadFleet() below picks up p.queuedFile
+      // and renders the existing "ready to print" banner once it lands.
+      if(st){ st.className="pstatus ok"; st.textContent="Queued — will upload once idle"; }
+      if(extraUI) setRowUI(extraUI, 100, "ok", "Queued");
+      if(progressBtn){ progressBtn.style.background=''; progressBtn.disabled=false; }
+      ok=true;
+    } else {
+      ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI);
+    }
   }catch(e){
     if(st){ st.className="pstatus err"; st.textContent=e.message; }
     if(extraUI) setRowUI(extraUI, 100, "err", e.message);
@@ -1240,7 +1515,11 @@ let PFILE_PRINTER=null, PFILE_SELECTED=null, PFILE_META=null, PFILE_MAP={}, PFIL
 function renderPfileInfo(){
   const wrap=$("pfileinfo");
   if(!PFILE_META||!PFILE_SELECTED){ wrap.innerHTML=""; return; }
-  const thumb=`/api/thumbnail?printer=${PFILE_PRINTER}&file=${encodeURIComponent(stripExt(PFILE_SELECTED))}`;
+  // Pass the filename unmodified — Moonraker connectors strip the extension
+  // themselves internally (their thumbnail cache is stem-keyed), but
+  // FlashForge's getThumbnail wants the exact filename and misreads a
+  // pre-stripped one as "not found", falling back to a generic icon.
+  const thumb=`/api/thumbnail?printer=${PFILE_PRINTER}&file=${encodeURIComponent(PFILE_SELECTED)}`;
   const totalGrams=PFILE_META.palette.reduce((sum,s)=>sum+(parseFloat(s.wt)||0),0);
   const timeSec=PFILE_META.estimatedTime||0;
   const fCost=(FILAMENT_COST>0&&totalGrams>0)?(FILAMENT_COST/1000)*totalGrams:0;
@@ -1331,9 +1610,13 @@ function renderPfileMap(){
   if(!PFILE_META||!ALLOW_MAPPING){ wrap.innerHTML=""; return; }
   const p=FLEET.find(f=>f.id===PFILE_PRINTER);
   const allHeads=Array.from({length:4},(_,i)=>{ const h=(p&&p.heads&&p.heads[i])||null; return {hi:i,h}; });
-  const need=PFILE_META.palette.filter(s=>s.used);
-  if(!need.length){ wrap.innerHTML='<div class="browse-empty">No color info in this file.</div>'; return; }
   if(!allHeads.some(x=>x.h&&x.h.loaded)){ wrap.innerHTML='<div class="browse-empty">No filament loaded on this printer.</div>'; return; }
+  // A single-material file (or a connector, like the AD5X, whose per-color
+  // metadata only exists for multi-material jobs) reports an empty palette —
+  // that still means "pick which loaded slot feeds this print", not "nothing
+  // to pick", so fall back to one unnamed slot standing in for the whole file.
+  const paletteNeed=PFILE_META.palette.filter(s=>s.used);
+  const need=paletteNeed.length?paletteNeed:[{i:0,hex:null,type:'',wt:''}];
   const rows=need.map(n=>{
     const chosen=PFILE_MAP[n.i]!==undefined?String(PFILE_MAP[n.i]):"";
     const hbtns=allHeads.map(({hi,h})=>{
@@ -1429,7 +1712,7 @@ function openThumb(printerId){
   const w=$("thumbwrap");
   if(!p.filename){ w.innerHTML='<span style="color:var(--ink-dim)">No file loaded</span>'; }
   else {
-    const stem=p.filename.replace(/\.gcode$/i,"");
+    const stem=p.filename;
     w.innerHTML='<img src="/api/thumbnail?printer='+p.id+'&file='+encodeURIComponent(stem)+'&t='+thumbToken(p,stem)+'" style="max-width:100%;border-radius:8px" onerror="this.parentNode.innerHTML=\'<span style=color:var(--ink-dim)>No thumbnail available</span>\'">';
   }
   $("thumbmodal").classList.add("show");
@@ -1445,6 +1728,42 @@ function openUnload(printerId,ext){
   $("unloadStatus").textContent="";
   $("unloadYes").onclick=()=>doUnload(printerId,[ext]);
   $("unloadAll").onclick=()=>doUnload(printerId,[0,1,2,3]);
+  // Only some connectors can write a slot's color/material label back to the
+  // printer itself (currently just FlashForge's AD5X material station) — the
+  // button stays hidden for everything else rather than pretending it works.
+  const supportsColor=!!(p.capabilities&&p.capabilities.setColor);
+  $("unloadColorPicker").style.display="none";
+  $("unloadColorGrid").style.display="none";
+  $("unloadColorGeneric").style.display="none";
+  $("unloadColorBtn").style.display=supportsColor?"":"none";
+  if(supportsColor){
+    let current=((p.heads&&p.heads[ext]&&p.heads[ext].hex)||"#FFFFFF").toUpperCase();
+    // <input type="color"> silently rejects anything without a leading "#"
+    // (falling back to black) rather than erroring — guard here too, not
+    // just at the connector, since a stray unprefixed hex anywhere upstream
+    // would otherwise show as "you picked X but got black" with no clue why.
+    if(current[0]!=="#") current="#"+current;
+    $("unloadColorBtn").onclick=()=>{ $("unloadColorPicker").style.display="block"; };
+    if(Array.isArray(p.colorPalette)&&p.colorPalette.length){
+      // AD5X (so far the only connector with this): the printer only has
+      // icons for a fixed color set, so the picker only ever offers exactly
+      // those — no arbitrary hex entry, nothing to snap.
+      const grid=$("unloadColorGrid");
+      grid.innerHTML=p.colorPalette.map(c=>{
+        const hex=c.hex.toUpperCase();
+        return `<button class="color-swatch${hex===current?' active':''}" style="background:${esc(c.hex)}" title="${esc(c.name)}" data-hex="${esc(c.hex)}"></button>`;
+      }).join("");
+      grid.style.display="grid";
+      grid.querySelectorAll(".color-swatch").forEach(btn=>{
+        btn.addEventListener("click",()=>doSetColor(printerId,ext,btn.dataset.hex));
+      });
+    } else {
+      $("unloadColorSwatch").value=current;
+      $("unloadColorHex").value=current;
+      $("unloadColorGeneric").style.display="block";
+      $("unloadColorSave").onclick=()=>doSetColor(printerId,ext,$("unloadColorHex").value);
+    }
+  }
   $("unloadmodal").classList.add("show");
 }
 function closeUnload(){ $("unloadmodal").classList.remove("show"); }
@@ -1457,6 +1776,29 @@ async function doUnload(printerId,extruders){
     if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
     st.className="pstatus ok"; st.textContent="Unload command sent";
     setTimeout(()=>{ closeUnload(); loadFleet(); },1500);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+async function doSetColor(printerId,ext,hex){
+  let v=(hex||"").trim();
+  if(v && v[0]!=="#") v="#"+v;
+  const st=$("unloadStatus");
+  if(!/^#[0-9a-fA-F]{6}$/.test(v)){ st.className="pstatus err"; st.textContent="Enter a valid color, e.g. #FF0000"; return; }
+  st.className="pstatus work"; st.textContent="Saving color…";
+  try{
+    const r=await postJSON("/api/filament-color",{printer:printerId,extruder:ext,hex:v});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    // The printer may snap to its own supported palette (e.g. AD5X's
+    // touchscreen only has icons for a fixed color set) — say so rather than
+    // implying the exact pick was applied when it might not have been.
+    const applied=(d.hex||v).toUpperCase();
+    if(applied!==v.toUpperCase()){
+      st.className="pstatus ok"; st.textContent="Closest supported color applied: "+applied;
+      $("unloadColorSwatch").value=applied; $("unloadColorHex").value=applied;
+    } else {
+      st.className="pstatus ok"; st.textContent="Color updated";
+    }
+    setTimeout(()=>{ closeUnload(); loadFleet(); },applied!==v.toUpperCase()?2200:1200);
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 }
 
@@ -1795,7 +2137,18 @@ $("gear").addEventListener("click",()=>{
   $("filesBtn").style.display = open ? "none" : "";
   if($("maintBtn")) $("maintBtn").style.display = open ? "none" : "";
   if(open){ document.body.classList.remove("showfiles"); loadUsersUI(); }
-  else { applyFilesOpen(); $("sortMenu").classList.remove("open"); }
+  else {
+    applyFilesOpen(); $("sortMenu").classList.remove("open");
+    if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; } // Settings closed — stop polling even if "remote" was the last-open tab
+  }
+});
+$("raEnableBtn").addEventListener("click",enableRemoteAccess);
+$("raDisableBtn").addEventListener("click",disableRemoteAccess);
+$("raCopyBtn").addEventListener("click",async ()=>{
+  const url=$("raPublicUrl").textContent;
+  if(!url) return;
+  try{ await navigator.clipboard.writeText(url); $("raStatus").className="pstatus ok"; $("raStatus").textContent="Copied"; }
+  catch{ $("raStatus").className="pstatus err"; $("raStatus").textContent="Could not copy — copy the URL manually"; }
 });
 $("addPrinter").addEventListener("click",()=>addPrinterRow("","",{},true));
 $("collapseAll").addEventListener("click",()=>{
@@ -1851,16 +2204,31 @@ $("bootSubmit").addEventListener("click", async ()=>{
     $("bootstrapAdmin").style.display="none";
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 });
-$("discover").addEventListener("click",()=>runDiscover());
-$("discoverSubnet").addEventListener("click",()=>{
-  const subnet=prompt("Enter subnet to scan (e.g. 192.168.2.0):","");
-  if(!subnet) return;
-  const parts=subnet.trim().split(".");
-  if(parts.length!==4||parts.some(p=>isNaN(p)||+p<0||+p>255)){
-    alert("Invalid subnet. Expected format: x.x.x.0"); return;
-  }
-  runDiscover(parts.slice(0,3).join(".")+".0");
+if($("dockerRestartBtn")) $("dockerRestartBtn").addEventListener("click", async ()=>{
+  if(!confirm("Restart SnapCon now?\n\nThe dashboard will be briefly unreachable while the container restarts.")) return;
+  const st=$("dockerRestartStatus");
+  st.className="pstatus work"; st.textContent="Restarting…";
+  try{
+    const r=await postJSON("/api/restart",{});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 });
+$("discover").addEventListener("click",()=>runDiscover());
+function openSubnetModal(){
+  $("subnetModalInput").value="";
+  $("subnetModalStatus").textContent="";
+  $("subnetModal").classList.add("show");
+  setTimeout(()=>$("subnetModalInput").focus(),100);
+}
+function closeSubnetModal(){ $("subnetModal").classList.remove("show"); }
+function doSubnetScan(){
+  const subnet=$("subnetModalInput").value.trim();
+  if(!subnet){ $("subnetModalStatus").className="pstatus err"; $("subnetModalStatus").textContent="Enter a subnet first"; return; }
+  closeSubnetModal();
+  runDiscover(subnet);
+}
+$("discoverSubnet").addEventListener("click",openSubnetModal);
+$("subnetModalInput").addEventListener("keydown",e=>{ if(e.key==="Enter") doSubnetScan(); });
 $("saveCfg").addEventListener("click",saveConfig);
 
 // Grey out and disable the notification options while the master box is off.
@@ -1951,9 +2319,80 @@ async function loadFirmware(){
 function showSetTab(name){
   document.querySelectorAll(".set-tab").forEach(b=>b.classList.toggle("active", b.dataset.tab===name));
   document.querySelectorAll(".set-panel").forEach(p=>{ p.style.display = p.id==="tab-"+name ? "" : "none"; });
+  // Remote Access has its own live status poller — only run it while its tab
+  // is actually visible, same reasoning as the fleet poller not running
+  // forever in the background for no reason.
+  if(name==="remote"){ loadRemoteAccessStatus(); if(!RA_POLL_TIMER) RA_POLL_TIMER=setInterval(loadRemoteAccessStatus, 4000); }
+  else if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; }
+}
+
+// ---- Remote Access (Cloudflare Tunnel, managed) — Development Preview ----
+// Same in-flight-guard pattern as loadFleet() — a slow/offline probe
+// shouldn't let polls stack up on top of each other.
+async function loadRemoteAccessStatus(){
+  if(RA_INFLIGHT) return;
+  RA_INFLIGHT=true;
+  try{
+    const s=await getJSON("/api/remote-access/status");
+    renderRemoteAccess(s);
+  }catch(e){
+    $("raStatus").className="pstatus err"; $("raStatus").textContent=e.message;
+  }finally{ RA_INFLIGHT=false; }
+}
+
+function renderRemoteAccess(s){
+  $("raDevBadge").style.display = s.developmentPreview ? "" : "none";
+  $("raInsecureWarning").style.display = s.usingInsecureFallback ? "" : "none";
+
+  const stateLabels = { disabled:"Disabled", provisioning:"Starting", downloading:"Starting", starting:"Starting", connected:"Connected", reconnecting:"Reconnecting", error:"Error" };
+  const stateColors = { disabled:"#6A7180", provisioning:"#fbbf24", downloading:"#fbbf24", starting:"#fbbf24", connected:"#46C18C", reconnecting:"#fbbf24", error:"#E06A5C" };
+  $("raStatusBadge").textContent = stateLabels[s.state] || s.state;
+  $("raStatusBadge").style.setProperty("--status-color", stateColors[s.state] || "#6A7180");
+
+  const running = s.state!=="disabled";
+  $("raEnableBtn").style.display = running ? "none" : "";
+  $("raDisableBtn").style.display = running ? "" : "none";
+
+  const hasUrl = !!s.publicUrl;
+  $("raUrlRow").style.display = hasUrl ? "flex" : "none";
+  if(hasUrl){
+    $("raPublicUrl").textContent = s.publicUrl;
+    $("raOpenBtn").href = s.publicUrl;
+  }
+
+  $("raProcRow").textContent = s.processRunning ? "Running" : "Stopped";
+  $("raConnRow").textContent = (s.logConnectionSeen && s.publicEndpointHealthy) ? "Connected" : "Disconnected";
+  $("raLocalRow").textContent = s.localServiceReachable ? "Reachable" : "Unreachable";
+  $("raLastConnRow").textContent = s.lastConnectedAt ? new Date(s.lastConnectedAt).toLocaleString() : "—";
+  $("raLastErrRow").textContent = s.lastError || "—";
+}
+
+async function enableRemoteAccess(){
+  const st=$("raStatus"); st.className="pstatus work"; st.textContent="Starting…";
+  $("raEnableBtn").disabled=true;
+  try{
+    const r=await postJSON("/api/remote-access/enable",{});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    st.className="pstatus ok"; st.textContent="";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ $("raEnableBtn").disabled=false; loadRemoteAccessStatus(); }
+}
+async function disableRemoteAccess(){
+  if(!confirm("Disable Remote Access? This stops remote access immediately. The tunnel identity is kept so re-enabling doesn't require setting it up again.")) return;
+  const st=$("raStatus"); st.className="pstatus work"; st.textContent="Stopping…";
+  $("raDisableBtn").disabled=true;
+  try{
+    const r=await postJSON("/api/remote-access/disable",{});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    st.className="pstatus ok"; st.textContent="";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ $("raDisableBtn").disabled=false; loadRemoteAccessStatus(); }
 }
 
 async function loadConfigUI(){
+  await loadConnectorTypes();
   try{
     const c=await getJSON("/api/config");
     $("setFolder").value=c.gcodeFolder||"";
@@ -1970,6 +2409,7 @@ async function loadConfigUI(){
     SUGGEST_MATCHING=c.suggestMatching!==false; $("setSuggestMatching").checked=SUGGEST_MATCHING;
     $("setUsersEnabled").checked=!!c.usersEnabled;
     $("bootstrapAdmin").style.display="none";
+    if($("dockerRestartRow")) $("dockerRestartRow").style.display=c.isDocker?"flex":"none";
     const rs=c.resend||{};
     $("setResendKey").value="";
     $("setResendKey").placeholder=rs.hasApiKey?"•••••••• (saved — leave blank to keep)":"re_...";
@@ -1987,20 +2427,29 @@ async function loadConfigUI(){
     if(nf.service==="telegram") $("ntfSvcTelegram").checked=true; else $("ntfSvcNtfy").checked=true;
     $("ntfTopic").value=nf.ntfyTopic||"";
     $("ntfChatId").value=nf.telegramChatId||"";
+    // Bot token never round-trips (real secret) — mirror the Resend API key
+    // convention: blank field + placeholder shows whether one's on file.
+    $("ntfBotToken").value="";
+    $("ntfBotToken").placeholder=nf.hasTelegramBotToken?"configured — leave blank to keep":"123456:ABC-token-from-BotFather";
     applyNtfEnabled();
     $("setPrinters").innerHTML="";
     PRINTERS_CFG=c.printers||[];
-    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{brand:p.brand,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,pushNotify:p.pushNotify,serial:p.serial,verificationCode:p.verificationCode,token:p.token}));
+    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,brand:p.brand,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,pushNotify:p.pushNotify,connector:p.connector,serial:p.serial,verificationCode:p.verificationCode,token:p.token}));
     // The onboarding "add your first printer" flow drops into the admin-only
     // Printers settings tab — never force that open for a non-Admin role,
     // who couldn't reach or complete it (Settings itself is hidden for them).
-    if(!c.configured && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
+    if(!c.configured && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("sortBtn").style.display="none"; $("compactBtn").style.display="none"; if($("filesBtn")) $("filesBtn").style.display="none"; if($("maintBtn")) $("maintBtn").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
   }catch(e){}
 }
 function addPrinterRow(name,url,opts,autoOpen){
   opts=opts||{};
   const displayIp=(url||"").replace(/^https?:\/\//,"").replace(/\/+$/,"");
   const row=document.createElement("div"); row.className="prow";
+  // Round-tripped so the server can match "this is the same printer" by a
+  // stable id even if name/URL are edited — not just by URL, which broke the
+  // moment someone re-IP'd a printer (maintenance history would silently
+  // detach). Blank for a brand-new row; the server mints one on first save.
+  row.dataset.printerId=opts.id||"";
   row.innerHTML=
     `<details class="prow-details"${autoOpen?" open":""}>`+
     `<summary><span class="prow-chevron">▶</span>`+
@@ -2012,8 +2461,8 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="prow-irow">`+
     `<span class="pi-lbl">Name</span><input class="field pname" maxlength="25" placeholder="U1" value="${esc(name||"")}" style="width:160px">`+
     `<span class="pi-lbl">Brand</span><input class="field pbrand" maxlength="25" placeholder="SnapMaker" value="${esc(opts.brand||"")}" style="width:160px">`+
-    `<span class="pi-lbl">Serial</span><input class="field pserial" value="${esc(opts.serial||"")}" readonly style="width:185px">`+
-    `<span class="pi-lbl">Code</span><input class="field pvcode" placeholder="XXXX" maxlength="4" value="${esc(opts.verificationCode||"")}" style="width:65px">`+
+    `<span class="pi-lbl">Serial</span><input class="field pserial" placeholder="optional, or auto-filled on Save" value="${esc(opts.serial||"")}" style="width:185px">`+
+    `<span class="pi-lbl">Code</span><input class="field pvcode" placeholder="XXXX" maxlength="8" value="${esc(opts.verificationCode||"")}" style="width:65px">`+
     `</div>`+
     `<div class="prow-irow">`+
     `<span class="pi-lbl">URL</span><input class="field purl" placeholder="http://192.168.1.50" value="${esc(url||"")}" style="flex:2;min-width:0">`+
@@ -2022,11 +2471,23 @@ function addPrinterRow(name,url,opts,autoOpen){
     `</div>`+
     `<div class="prow-extra">`+
     `<label class="prow-wh"><input class="field pkwh" type="number" min="0" placeholder="0" value="${esc(opts.costKwh||"")}" style="max-width:72px"><span class="pi-lbl" style="text-transform:none">Wh</span></label>`+
-    `<label class="prow-chk"><input type="checkbox" class="pautolevel" ${opts.autoLevel?"checked":""}><span>Auto-level</span></label>`+
+    `<label class="prow-chk autolevel-wrap"><input type="checkbox" class="pautolevel" ${opts.autoLevel?"checked":""}><span>Auto-level</span></label>`+
     `<label class="prow-chk"><input type="checkbox" class="ppushnotify" ${opts.pushNotify?"checked":""}><span>Push notifications</span></label>`+
+    `<label title="How SnapCon talks to this printer">Connector <select class="field pconnector" style="max-width:190px">`+
+    CONNECTOR_TYPES.map(c=>`<option value="${esc(c.type)}">${esc(c.label||c.type)}</option>`).join("")+
+    `</select></label>`+
     `<label title="Moonraker API token">Token <input class="field ptoken" type="${opts.token?"password":"text"}" maxlength="32" placeholder="optional" value="${esc(opts.token||"")}" style="max-width:200px"></label>`+
     `<button class="btn ghost pmaint" style="white-space:nowrap">Maintenance</button>`+
     `</div></div></div></details>`;
+  const connectorEl=row.querySelector(".pconnector"), autolevelWrap=row.querySelector(".autolevel-wrap"), autolevelEl=row.querySelector(".pautolevel");
+  connectorEl.value=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper";
+  const syncAutoLevelVisibility=()=>{
+    const supported=!!connectorCaps(connectorEl.value).autoLevel;
+    autolevelWrap.style.display=supported?"":"none";
+    if(!supported) autolevelEl.checked=false;
+  };
+  connectorEl.addEventListener("change", syncAutoLevelVisibility);
+  syncAutoLevelVisibility();
   // Live-update the summary header as user types
   const nameEl=row.querySelector(".pname"), urlEl=row.querySelector(".purl");
   const sumName=row.querySelector(".prow-sumname"), sumIp=row.querySelector(".prow-sumip");
@@ -2150,6 +2611,7 @@ function addUserRow(u,autoOpen){
 
 function gatherPrinters(){
   return [...$("setPrinters").querySelectorAll(".prow")].map(r=>({
+    id:r.dataset.printerId||undefined,
     name:r.querySelector(".pname").value.trim(),
     url:r.querySelector(".purl").value.trim(),
     brand:r.querySelector(".pbrand").value.trim()||undefined,
@@ -2158,6 +2620,7 @@ function gatherPrinters(){
     purchaseDate:r.querySelector(".pdate").value||undefined,
     autoLevel:r.querySelector(".pautolevel").checked||undefined,
     pushNotify:r.querySelector(".ppushnotify").checked||undefined,
+    connector:r.querySelector(".pconnector").value,
     serial:r.querySelector(".pserial").value.trim()||undefined,
     verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
     token:r.querySelector(".ptoken").value.trim()||undefined
@@ -2251,7 +2714,8 @@ async function saveConfig(){
       includeImage:$("ntfImage").checked,
       service:$("ntfSvcTelegram").checked?"telegram":"ntfy",
       ntfyTopic:$("ntfTopic").value.trim(),
-      telegramChatId:$("ntfChatId").value.trim()
+      telegramChatId:$("ntfChatId").value.trim(),
+      telegramBotToken:$("ntfBotToken").value.trim()
     },
     printers:gatherPrinters() };
   try{
