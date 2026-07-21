@@ -112,6 +112,17 @@ async function provisionHub({ installationId, localOrigin }) {
   if (!body || typeof body.tunnelToken !== "string" || !body.tunnelToken) {
     throw new ProvisioningError(CODES.MISSING_TOKEN, "Provisioning response did not include a tunnelToken.");
   }
+  // A malformed hubId/hostname/publicUrl wouldn't fail loudly anywhere
+  // downstream — it'd get persisted as-is, and the periodic public probe
+  // would just silently skip checking an empty publicUrl forever (falsy →
+  // treated as "not configured yet" rather than "backend sent garbage"),
+  // leaving the state stuck with no explanation. Reject it here instead,
+  // while there's still a clear, specific reason to report.
+  for (const field of ["hubId", "hostname", "publicUrl"]) {
+    if (typeof body[field] !== "string" || !body[field]) {
+      throw new ProvisioningError(CODES.INVALID_RESPONSE, "Provisioning response is missing a valid '" + field + "'.");
+    }
+  }
   return {
     hubId: body.hubId, hostname: body.hostname, publicUrl: body.publicUrl,
     tunnelId: body.tunnelId, tunnelToken: body.tunnelToken, status: body.status

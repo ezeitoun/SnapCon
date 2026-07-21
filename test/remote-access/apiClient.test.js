@@ -104,6 +104,26 @@ test("provisionHub maps a missing tunnelToken to MISSING_TOKEN", async () => {
   });
 });
 
+// Hardening: found by code review. A response with a tunnelToken but a
+// missing/blank hostname or publicUrl wouldn't fail anywhere downstream —
+// it'd get persisted as-is, and the periodic public probe would silently
+// skip an empty publicUrl forever (treated as "not configured" rather than
+// "backend sent garbage"), leaving the state stuck with no explanation.
+test("provisionHub rejects a response with a tunnelToken but a missing/blank hostname, publicUrl, or hubId", async () => {
+  await withEnv({ SNAPCON_PROVISIONING_KEY: "dev-key" }, async () => {
+    const base = { hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "t1", tunnelToken: "tok", status: "provisioned" };
+    for (const field of ["hubId", "hostname", "publicUrl"]) {
+      await withFetch(async () => ({ ok: true, status: 200, headers: { get: () => null }, json: async () => ({ ...base, [field]: "" }) }), async () => {
+        await assert.rejects(
+          () => provisionHub({ installationId: "i", localOrigin: "http://localhost:4545" }),
+          e => e instanceof ProvisioningError && e.code === CODES.INVALID_RESPONSE,
+          "missing '" + field + "' must be rejected"
+        );
+      });
+    }
+  });
+});
+
 test("provisionHub maps a network failure / timeout to AMBIGUOUS_TIMEOUT, not any 'retry-safe' code", async () => {
   await withEnv({ SNAPCON_PROVISIONING_KEY: "dev-key" }, async () => {
     await withFetch(async () => { const e = new Error("aborted"); e.name = "AbortError"; throw e; }, async () => {
