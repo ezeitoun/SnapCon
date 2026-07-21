@@ -10,10 +10,13 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const os = require("os");
+const crypto = require("crypto");
 const readline = require("readline");
-const { Transform } = require("stream");
-const { parseGcodeMap, parseGcodeMapLines, normHex } = require("./parser");
+const { parseGcodeMap, parseGcodeMapLines } = require("./parser");
 const auth = require("./auth");
+const { getConnector, listConnectorTypes, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
+const connHttp = require("./connectors/http-utils");
+const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 
 // When packaged as a single executable (pkg), __dirname points inside the
 // read-only bundle. User-editable files (config.json, the gcode folder) must
@@ -22,6 +25,15 @@ const auth = require("./auth");
 const IS_PKG = typeof process.pkg !== "undefined";
 const BASE_DIR = IS_PKG ? path.dirname(process.execPath) : __dirname;
 const ASSET_DIR = __dirname;
+
+// /.dockerenv is created by the Docker Engine in every Linux container —
+// the standard, reliable way to tell "are we in a container" without any
+// extra permissions. Gates the Settings "Restart App" button: exiting only
+// actually recovers when something is set up to relaunch us (the shipped
+// docker-compose.yml sets `restart: unless-stopped`); on a bare `node
+// server.js` or the packaged .exe there's no supervisor, so that button
+// would just kill the app for good.
+const IS_DOCKER = (() => { try { return fs.existsSync("/.dockerenv"); } catch { return false; } })();
 
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
 const USERS_PATH = path.join(BASE_DIR, "users.json");
@@ -38,6 +50,28 @@ function loadConfig() {
 }
 loadConfig();
 const PORT = CFG.port || 4545;
+
+const newPrinterId = () => "p_" + crypto.randomBytes(6).toString("hex");
+// One-time migration for a config.json predating persistent printer ids:
+// assigns one to any printer missing it, and moves that printer's inline
+// maintenance log into CFG.maintenanceHistory (keyed by id, not nested in
+// the printer object) — the whole point being that history now survives a
+// printer being deleted, renamed, or re-IP'd, since it's no longer stored
+// inside the array entry that disappears when that happens.
+function ensurePrinterIds() {
+  if (!CFG.maintenanceHistory || typeof CFG.maintenanceHistory !== "object") CFG.maintenanceHistory = {};
+  let changed = false;
+  for (const p of PRINTERS) {
+    if (!p.id) { p.id = newPrinterId(); changed = true; }
+    if (Array.isArray(p.maintenance)) {
+      CFG.maintenanceHistory[p.id] = p.maintenance;
+      delete p.maintenance;
+      changed = true;
+    }
+  }
+  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+}
+ensurePrinterIds();
 
 // Users for the optional User Access Management feature. No file exists until
 // the first user is actually created — CFG.usersEnabled being true with zero
@@ -145,6 +179,12 @@ app.use(express.static(path.join(ASSET_DIR, "public")));
 // requireAdmin on top where they need to actually enforce something.
 app.use("/api", auth.makeAuthMiddleware(() => CFG, () => USERS));
 const { requireAuth, requireRegular, requireAdmin } = auth;
+
+// Remote Access (Cloudflare Tunnel, managed) — Development Preview. Cheap to
+// construct (no I/O here); the actual startupInit() call — which may spawn
+// a process — happens later, inside app.listen's callback, not here (see
+// that callback for why: the server must be accepting requests first).
+const remoteAccess = createRemoteAccessService({ baseDir: BASE_DIR, getConfig: () => CFG, getUsers: () => USERS, port: PORT });
 // Explicit index route so the UI is served even when running from a packaged
 // binary (where express.static from the snapshot can be unreliable).
 app.get("/", (req, res) => {
@@ -158,26 +198,11 @@ app.get(/^\/orca\/.+$/i, (req, res) => {
   catch (e) { res.status(500).send("index.html not found"); }
 });
 
-// fetch with a built-in timeout via AbortController.
-// NOTE: the timer only covers the response HEADERS — reading the body after
-// this resolves is unbounded. Use fetchJSONTimeout when you consume the body.
-async function fetchTimeout(url, ms = 3500, opts = {}) {
-  const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms);
-  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
-  finally { clearTimeout(id); }
-}
-
-// Fetch + parse JSON under ONE timeout. A printer that accepts the connection
-// but stalls mid-body would otherwise hang the caller forever.
-async function fetchJSONTimeout(url, ms = 3500) {
-  const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms);
-  try {
-    const r = await fetch(url, { signal: ctrl.signal });
-    return { ok: r.ok, status: r.status, json: r.ok ? await r.json() : null };
-  } finally { clearTimeout(id); }
-}
+// fetchTimeout/fetchJSONTimeout/baseUrl/pickIface are generic HTTP helpers
+// (not printer-protocol-specific) shared with connectors/ — see
+// connectors/http-utils.js. Everything printer-protocol-specific now lives
+// behind getConnector(p.connector), never called directly from here.
+const { fetchTimeout, fetchJSONTimeout, baseUrl } = connHttp;
 
 // Resolve a requested path safely INSIDE the watched folder (no traversal).
 function safePath(sub) {
@@ -185,19 +210,6 @@ function safePath(sub) {
   const p = path.resolve(FOLDER, sub);
   return p.startsWith(FOLDER) ? p : null;
 }
-
-// Printer URLs from config may carry a trailing slash — strip it once here.
-const baseUrl = p => String(p.url).replace(/\/+$/, "");
-
-// POST to a printer's Moonraker endpoint. Throws a user-showable error on
-// network failure or a non-2xx response.
-async function moonrakerPost(p, apiPath) {
-  let r;
-  try { r = await fetch(baseUrl(p) + apiPath, { method: "POST" }); }
-  catch (e) { throw new Error("Could not reach " + p.name + ": " + e.message); }
-  if (!r.ok) throw new Error("Moonraker " + r.status + ": " + (await r.text()).slice(0, 160));
-}
-const sendGcode = (p, script) => moonrakerPost(p, "/printer/gcode/script?script=" + encodeURIComponent(script));
 
 
 app.get("/api/printers", requireAuth, (req, res) => {
@@ -212,7 +224,10 @@ app.get("/api/files", requireAuth, (req, res) => {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const folders = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
     const files = entries
-      .filter(e => e.isFile() && /\.(gcode|gco|g)$/i.test(e.name))
+      // .gx/.3mf are FlashForge's slicer output (.3mf specifically for
+      // multi-material/IFS jobs on the AD5X) — without these, a FlashForge
+      // user's sliced files never show up here at all.
+      .filter(e => e.isFile() && /\.(gcode|gco|g|gx|3mf)$/i.test(e.name))
       .map(e => {
         const fp = path.join(dir, e.name);
         const st = fs.statSync(fp);
@@ -223,6 +238,96 @@ app.get("/api/files", requireAuth, (req, res) => {
   } catch (e) {
     res.status(500).json({ error: "Cannot read folder — " + e.message });
   }
+});
+
+// Recursive walk under `dir`, filtering to the same sliced-file extensions
+// /api/files uses — `relSub` is the "/"-joined relative path the client
+// already speaks (CURRENT_SUB), built independently of the OS path separator
+// so it round-trips straight back into safePath()/loadFiles() unchanged.
+function walkFilesRecursive(dir, relSub, q, results, limit) {
+  if (results.length >= limit) return;
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (results.length >= limit) return;
+    if (e.name.startsWith(".")) continue; // skip .thumbs and other hidden dirs
+    const fp = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      walkFilesRecursive(fp, relSub ? relSub + "/" + e.name : e.name, q, results, limit);
+    } else if (e.isFile() && /\.(gcode|gco|g|gx|3mf)$/i.test(e.name) && e.name.toLowerCase().includes(q)) {
+      const st = fs.statSync(fp);
+      results.push({ name: e.name, sub: relSub, size: st.size, mtime: st.mtimeMs });
+    }
+  }
+}
+
+app.get("/api/files/search", requireAuth, (req, res) => {
+  const q = String(req.query.q || "").trim().toLowerCase();
+  if (!q) return res.json({ files: [] });
+  const results = [];
+  walkFilesRecursive(FOLDER, "", q, results, 300);
+  results.sort((a, b) => b.mtime - a.mtime);
+  res.json({ files: results });
+});
+
+app.post("/api/files/mkdir", requireRegular, (req, res) => {
+  const { sub, name } = req.body || {};
+  const dir = sub ? safePath(sub) : FOLDER;
+  if (!dir || !fs.existsSync(dir)) return res.status(400).json({ error: "Invalid folder" });
+  const clean = String(name || "").trim();
+  if (!clean || /[\\/]/.test(clean) || clean === "." || clean === "..") {
+    return res.status(400).json({ error: "Invalid folder name" });
+  }
+  const target = path.join(dir, clean);
+  if (!target.startsWith(FOLDER)) return res.status(400).json({ error: "Invalid folder name" });
+  if (fs.existsSync(target)) return res.status(409).json({ error: "Already exists" });
+  try { fs.mkdirSync(target); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Move one or more files (each identified by its own {sub, name}, since a
+// multi-select drag can span several source folders at once) into targetSub.
+app.post("/api/files/move", requireRegular, (req, res) => {
+  const { files, targetSub } = req.body || {};
+  if (!Array.isArray(files) || !files.length) return res.status(400).json({ error: "No files given" });
+  const targetDir = targetSub ? safePath(targetSub) : FOLDER;
+  if (!targetDir || !fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+    return res.status(400).json({ error: "Invalid target folder" });
+  }
+  const results = files.map(f => {
+    const name = String((f || {}).name || "");
+    const rel = (f.sub ? f.sub + "/" : "") + name;
+    const srcPath = safePath(rel);
+    if (!name || !srcPath || !fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
+      return { name, ok: false, error: "Not found" };
+    }
+    const destPath = path.join(targetDir, name);
+    if (path.dirname(srcPath) === targetDir) return { name, ok: false, error: "Already there" };
+    if (fs.existsSync(destPath)) return { name, ok: false, error: "Already exists in target" };
+    try { fs.renameSync(srcPath, destPath); return { name, ok: true }; }
+    catch (e) { return { name, ok: false, error: e.message }; }
+  });
+  res.json({ results });
+});
+
+// Local-PC → gcode-folder upload (the reverse direction of /api/print's
+// printer upload): one file per request, raw bytes, name/sub in the query
+// string — mirrors /api/notify-load's existing raw-body convention instead
+// of pulling in a multipart-parsing dependency for a single call site.
+app.post("/api/files/upload", requireRegular, rawGcodeBody, (req, res) => {
+  const sub = String(req.query.sub || "");
+  const dir = sub ? safePath(sub) : FOLDER;
+  if (!dir || !fs.existsSync(dir)) return res.status(400).json({ error: "Invalid folder" });
+  const name = path.basename(String(req.query.name || "").trim());
+  if (!name || !/\.(gcode|gco|g|gx|3mf)$/i.test(name)) {
+    return res.status(400).json({ error: "Only sliced files (.gcode/.gco/.g/.gx/.3mf) can be uploaded here" });
+  }
+  const target = path.join(dir, name);
+  if (!target.startsWith(FOLDER)) return res.status(400).json({ error: "Invalid file name" });
+  if (fs.existsSync(target)) return res.status(409).json({ error: "Already exists" });
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "Empty upload" });
+  try { fs.writeFileSync(target, req.body); res.json({ ok: true, name }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get("/api/map", requireAuth, async (req, res) => {
@@ -302,36 +407,6 @@ app.get("/api/local-thumbnail", requireAuth, (req, res) => {
   } catch (e) { res.status(500).send(e.message); }
 });
 
-// Stream a file to the printer as multipart/form-data, reporting bytes sent so
-// the UI can show a real upload progress bar. Resolves on the printer's 2xx.
-function uploadWithProgress(base, fp, name, job) {
-  return new Promise((resolve, reject) => {
-    const boundary = "----snapcon" + Math.random().toString(16).slice(2);
-    const pre = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
-    const post = Buffer.from(`\r\n--${boundary}--\r\n`);
-    const fileSize = fs.statSync(fp).size;
-    job.total = pre.length + fileSize + post.length;
-    job.sent = 0;
-    const u = new URL(base + "/server/files/upload");
-    const req = http.request({
-      protocol: u.protocol, hostname: u.hostname, port: u.port || 80, path: u.pathname, method: "POST",
-      headers: { "Content-Type": "multipart/form-data; boundary=" + boundary, "Content-Length": job.total }
-    }, res => {
-      let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
-      res.on("end", () => (res.statusCode < 300 ? resolve(b) : reject(new Error("Upload " + res.statusCode + ": " + b.slice(0, 160)))));
-    });
-    req.on("error", reject);
-    req.write(pre); job.sent += pre.length;
-    const fileStream = fs.createReadStream(fp);
-    const counter = new Transform({ transform(chunk, _e, cb) { job.sent += chunk.length; cb(null, chunk); } });
-    fileStream.on("error", reject);
-    counter.on("error", reject);
-    counter.on("data", chunk => { if (!req.write(chunk)) { counter.pause(); req.once("drain", () => counter.resume()); } });
-    counter.on("end", () => { req.write(post); job.sent += post.length; req.end(); });
-    fileStream.pipe(counter);
-  });
-}
-
 const JOBS = new Map();   // jobId -> { phase, sent, total, done, error, result, ts }
 const newJobId = () => "j" + Date.now() + Math.random().toString(16).slice(2, 6);
 
@@ -344,7 +419,7 @@ setInterval(() => {
   for (const [id, job] of JOBS) if (job.done && job.ts < cutoff) JOBS.delete(id);
 }, 60 * 1000).unref();
 
-app.post("/api/print", requireRegular, (req, res) => {
+app.post("/api/print", requireRegular, async (req, res) => {
   const { file, printer, start, map } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -356,17 +431,34 @@ app.post("/api/print", requireRegular, (req, res) => {
   // but only when actually starting a print. A plain upload just stages the file
   // on the printer; the mapping isn't acted on until print start, so a conflicting
   // (or mismatched-material) mapping shouldn't block getting the file there.
+  // The conflict itself is real on every multi-color connector — a single-
+  // toolhead-with-material-changer printer (AD5X's IFS) still can't have two
+  // colors sharing one physical filament slot in the same print, same as two
+  // colors can't share one independent toolhead on the U1 — only the WORDING
+  // needs to differ, since "head" reads as "not possible on this printer at
+  // all" to someone whose printer only has one physical nozzle.
   let tools = [];
   if (map && Object.keys(map).length) {
     tools = Object.keys(map).map(Number).sort((a, b) => a - b);
     const heads = tools.map(t => map[t]);
     if (start && new Set(heads).size !== heads.length) {
-      return res.status(400).json({ error: "Two colors are mapped to the same head — give each its own head." });
+      const unit = (getConnector(p.connector).capabilities || {}).singleToolhead ? "slot" : "head";
+      return res.status(400).json({ error: `Two colors are mapped to the same ${unit} — give each its own ${unit}.` });
     }
   }
 
-  const base = baseUrl(p);
+  const c = getConnector(p.connector);
   const name = path.basename(fp);
+
+  // Upload-only click (Upload button, not Print) while this printer is
+  // actively busy: queue it instead of racing an upload against whatever's
+  // already printing — the same pendingLoad/queuedFile mechanism the --load
+  // CLI hook already uses, so it uploads automatically the moment this
+  // printer goes idle and shows the same "ready to print" banner either way.
+  if (!start && !(await isPrinterIdle(p))) {
+    pendingLoad.set(printer, { file: fp, name, ts: Date.now(), tools, map });
+    return res.json({ ok: true, mode: "pending", printer: p.name });
+  }
 
   // Kick the work off in the background and hand the client a job id to poll.
   const jobId = newJobId();
@@ -376,15 +468,15 @@ app.post("/api/print", requireRegular, (req, res) => {
 
   (async () => {
     try {
-      await uploadWithProgress(base, fp, name, job);     // 1) upload (with progress)
-      if (tools.length) {                                 // 2) toolhead mapping macros
+      await c.uploadFile(p, fp, name, job);               // 1) upload (with progress)
+      // 2) toolhead mapping + print-preference macros (connector-optional) —
+      // still needed with no mapping chosen (tools=[]) when the printer has
+      // its own preferences (e.g. auto-level) to send before print start.
+      if (c.applyHeadMapping && (tools.length || p.autoLevel)) {
         job.phase = "mapping";
-        const lines = tools.map(t => `SET_PRINT_EXTRUDER_MAP CONFIG_EXTRUDER=${t} MAP_EXTRUDER=${map[t]}`);
-        lines.push("SET_PRINT_USED_EXTRUDERS EXTRUDERS=" + tools.map(t => map[t]).join(","));
-        lines.push("SET_PRINT_PREFERENCES BED_LEVEL=" + (p.autoLevel ? "1" : "0") + " FLOW_CALIBRATE=0 TIME_LAPSE_CAMERA=0");
-        await sendGcode(p, lines.join("\n"));
+        await c.applyHeadMapping(p, tools, map);
       }
-      if (start) { job.phase = "starting"; await sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${name}"`); }
+      if (start) { job.phase = "starting"; await c.startPrintFile(p, name); }
       job.result = { printer: p.name, started: !!start, mapped: tools.length };
       job.phase = "done"; job.done = true;
     } catch (e) {
@@ -407,12 +499,7 @@ app.get("/api/printer-files", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   try {
-    const { ok, status, json } = await fetchJSONTimeout(baseUrl(p) + "/server/files/list?root=gcodes", 8000);
-    if (!ok) return res.status(502).json({ error: "Moonraker " + status });
-    const files = (json.result || [])
-      .map(f => ({ path: f.path, size: f.size, modified: f.modified }))
-      .sort((a, b) => b.modified - a.modified);
-    res.json({ files });
+    res.json({ files: await getConnector(p.connector).listFiles(p) });
   } catch (e) {
     res.status(502).json({ error: "Could not reach " + p.name + ": " + e.message });
   }
@@ -426,41 +513,10 @@ app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
   if (!file) return res.status(400).json({ error: "Missing file" });
+  const c = getConnector(p.connector);
+  if (!c.getFileMetadata) return res.json({ palette: [], estimatedTime: null, isFS: false, fsFork: null });
   try {
-    const { ok, status, json } = await fetchJSONTimeout(baseUrl(p) + "/server/files/metadata?filename=" + encodeURIComponent(file), 8000);
-    if (!ok) return res.status(502).json({ error: "Moonraker " + status });
-    const m = json.result || {};
-    const colours = String(m.filament_colour || "").split(";");
-    const types = String(m.filament_type || "").split(";");
-    const weights = Array.isArray(m.filament_weight) ? m.filament_weight : [];
-    const n = Math.max(colours.length, types.length, weights.length);
-    const palette = [];
-    for (let i = 0; i < n; i++) {
-      const hex = normHex(colours[i]);
-      const type = (types[i] || "").trim();
-      const wt = weights[i];
-      palette.push({
-        i, hex, type,
-        wt: wt != null ? String(wt) : "",
-        used: (typeof wt === "number") ? wt > 0 : !!(hex || type)
-      });
-    }
-    // Fetch the last 50 KB of the gcode to run FS detection (config block is at EOF).
-    let isFS = false, fsFork = null;
-    try {
-      const encodedPath = file.split("/").map(encodeURIComponent).join("/");
-      const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 10000);
-      try {
-        const r = await fetch(baseUrl(p) + "/server/files/gcodes/" + encodedPath,
-          { signal: ctrl.signal, headers: { Range: "bytes=-51200" } });
-        if (r.ok || r.status === 206) {
-          const fsResult = parseGcodeMap(await r.text(), { scanBody: false });
-          isFS = fsResult.isFS; fsFork = fsResult.fsFork;
-        }
-      } finally { clearTimeout(tid); }
-    } catch {}
-    res.json({ palette, estimatedTime: m.estimated_time || null, isFS, fsFork });
+    res.json(await c.getFileMetadata(p, file));
   } catch (e) {
     res.status(502).json({ error: "Could not reach " + p.name + ": " + e.message });
   }
@@ -478,15 +534,12 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
   if (map && Object.keys(map).length) {
     tools = Object.keys(map).map(Number).sort((a, b) => a - b);
   }
+  const c = getConnector(p.connector);
   try {
-    if (tools.length) {
-      const lines = tools.map(t => `SET_PRINT_EXTRUDER_MAP CONFIG_EXTRUDER=${t} MAP_EXTRUDER=${map[t]}`);
-      const usedHeads = [...new Set(tools.map(t => map[t]))];
-      lines.push("SET_PRINT_USED_EXTRUDERS EXTRUDERS=" + usedHeads.join(","));
-      lines.push("SET_PRINT_PREFERENCES BED_LEVEL=" + (p.autoLevel ? "1" : "0") + " FLOW_CALIBRATE=0 TIME_LAPSE_CAMERA=0");
-      await sendGcode(p, lines.join("\n"));
-    }
-    await sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${filename}"`);
+    // Still needed with no mapping chosen (tools=[]) when the printer has its
+    // own preferences (e.g. auto-level) to send before print start.
+    if (c.applyHeadMapping && (tools.length || p.autoLevel)) await c.applyHeadMapping(p, tools, map);
+    await c.startPrintFile(p, filename);
     // Printing it is what "ready to print" was waiting for — clear the badge.
     if (queuedFile.get(printer)?.name === filename) queuedFile.delete(printer);
     res.json({ ok: true, printer: p.name, filename, mapped: tools.length });
@@ -500,14 +553,11 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
   const { printer, action } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  const c = getConnector(p.connector);
+  const method = { pause: c.pause, resume: c.resume, cancel: c.cancel, eject: c.eject, estop: c.estop }[action];
+  if (!method) return res.status(400).json({ error: "Bad action" });
   try {
-    if (action === "estop") {
-      await moonrakerPost(p, "/printer/emergency_stop");
-      return res.json({ ok: true, action });
-    }
-    const cmd = { pause: "PAUSE", resume: "RESUME", cancel: "CANCEL_PRINT", eject: "SDCARD_RESET_FILE" }[action];
-    if (!cmd) return res.status(400).json({ error: "Bad action" });
-    await sendGcode(p, cmd);
+    await method.call(c, p);
     res.json({ ok: true, action });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -518,15 +568,10 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
 app.get("/api/plate", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  const c = getConnector(p.connector);
+  if (!c.getPlate) return res.json({ objects: [], current: null, excluded: [] });
   try {
-    const { ok, status, json } = await fetchJSONTimeout(baseUrl(p) + "/printer/objects/query?exclude_object", 3500);
-    if (!ok) return res.status(502).json({ error: "Moonraker " + status });
-    const eo = ((json.result || {}).status || {}).exclude_object || {};
-    res.json({
-      objects: (eo.objects || []).map(o => ({ name: o.name, center: o.center, polygon: o.polygon })),
-      current: eo.current_object || null,
-      excluded: eo.excluded_objects || []
-    });
+    res.json(await c.getPlate(p));
   } catch (e) {
     res.status(502).json({ error: "Could not reach " + p.name + ": " + e.message });
   }
@@ -537,8 +582,10 @@ app.post("/api/exclude", requireRegular, async (req, res) => {
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (!name || /["\r\n]/.test(name)) return res.status(400).json({ error: "Bad object name" });
+  const c = getConnector(p.connector);
+  if (!c.excludeObject) return res.status(400).json({ error: p.name + " does not support excluding objects" });
   try {
-    await sendGcode(p, `EXCLUDE_OBJECT NAME=${name}`);
+    await c.excludeObject(p, name);
     res.json({ ok: true, excluded: name });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -546,99 +593,10 @@ app.post("/api/exclude", requireRegular, async (req, res) => {
 });
 
 // ---- Fleet: live per-head filament + status across all printers ----
-// Colors come from print_task_config (the touchscreen-assigned filament, which
-// persists with the physical spools until unloaded). filament_detect was wrong:
-// it only reports RFID-tagged official spools, so third-party heads read blank.
-function decodeHeads(ptc) {
-  const ex   = ptc.filament_exist || [];
-  const rgba = ptc.filament_color_rgba || [];
-  const typ  = ptc.filament_type || [];
-  const sub  = ptc.filament_sub_type || [];
-  const off  = ptc.filament_official || [];
-  return [0, 1, 2, 3].map(i => {
-    const loaded = !!ex[i];
-    let hex = null;
-    if (loaded && rgba[i]) {
-      const m = /^#?([0-9a-fA-F]{6})/.exec(rgba[i]);
-      if (m) hex = "#" + m[1].toUpperCase();
-    }
-    return {
-      loaded,
-      hex,
-      material: loaded ? (typ[i] || null) : null,
-      sub: (loaded && sub[i] && sub[i] !== "NONE") ? sub[i] : null,
-      official: !!off[i]
-    };
-  });
-}
-
-async function probe(p) {
-  const url = baseUrl(p) + "/printer/objects/query?print_task_config&print_stats&display_status&virtual_sdcard&heater_bed&extruder&extruder1&extruder2&extruder3&fan&gcode_move&toolhead&exclude_object";
-  try {
-    const { ok, status, json: j } = await fetchJSONTimeout(url, 3500);
-    if (!ok) return { name: p.name, online: false, error: "HTTP " + status };
-    const st = (j.result && j.result.status) || {};
-    const ptc = st.print_task_config || {};
-    const heads = decodeHeads(ptc);
-    const ps = st.print_stats || {};
-    const ds = st.display_status || {};
-    const hb = st.heater_bed || {};
-    const extKeys = ["extruder", "extruder1", "extruder2", "extruder3"];
-    let hotend = null;
-    for (const k of extKeys) {
-      const e = st[k];
-      if (e && typeof e.temperature === "number" && e.target > 80 && (e.temperature - e.target) <= 5) {
-        // Whole degrees only (the UI never shows finer) — sensor jitter would
-        // otherwise make every fleet payload unique and defeat the client's
-        // skip-render-when-unchanged check.
-        hotend = { temp: Math.round(e.temperature), target: Math.round(e.target) };
-        break;
-      }
-    }
-    const th = st.toolhead || {};
-    const activeExt = typeof th.extruder === "string" ? parseInt(th.extruder.replace("extruder", "") || "0", 10) : null;
-    const fan = st.fan || {};
-    const gm = st.gcode_move || {};
-    const psi = ps.info || {};
-    const eo = st.exclude_object || {};
-    const plate = (eo.objects && eo.objects.length)
-      ? { total: eo.objects.length, excluded: (eo.excluded_objects || []).length, current: eo.current_object || null }
-      : null;
-    // Decode Snapmaker structured error from print_stats.exception / print_stats.message (JSON)
-    let errorCode = "", errorMsg = "";
-    if (ps.exception && typeof ps.exception === "object") {
-      const { level = 0, id = 0, index = 0, code = 0, message: exMsg = "" } = ps.exception;
-      const candidate = [level, id, index, code].map(n => String(n).padStart(4, "0")).join("-");
-      if (candidate !== "0000-0000-0000-0000") { errorCode = candidate; errorMsg = exMsg; }
-    } else if (ps.message) {
-      try {
-        const parsed = JSON.parse(ps.message);
-        if (parsed.coded) errorCode = parsed.coded.split("-").map(g => g.trim().padStart(4, "0")).join("-");
-        if (parsed.msg) errorMsg = parsed.msg;
-      } catch { errorMsg = ps.message; }
-    }
-    return {
-      name: p.name, online: true,
-      state: ps.state || "unknown",
-      message: errorMsg,
-      errorCode,
-      filename: ps.filename || "",
-      progress: typeof (st.virtual_sdcard || {}).progress === "number" ? st.virtual_sdcard.progress : (typeof ds.progress === "number" ? ds.progress : 0),
-      elapsed: typeof ps.print_duration === "number" ? ps.print_duration : null,
-      filamentUsed: typeof ps.filament_used === "number" ? ps.filament_used : null,
-      bed: (typeof hb.temperature === "number") ? { temp: Math.round(hb.temperature), target: Math.round(hb.target || 0) } : null,
-      hotend,
-      layer: (psi.current_layer != null) ? { current: psi.current_layer, total: psi.total_layer || 0 } : null,
-      speed: (typeof gm.speed_factor === "number") ? Math.round(gm.speed_factor * 100) : null,
-      fanPct: (typeof fan.speed === "number") ? Math.round(fan.speed * 100) : null,
-      activeExt,
-      plate,
-      heads
-    };
-  } catch (e) {
-    return { name: p.name, online: false, error: e.name === "AbortError" ? "timeout" : e.message };
-  }
-}
+// The actual protocol call (probe()) is delegated to the printer's connector
+// (connectors/<type>.js) — this layer only handles the parts that are the
+// same no matter what's behind the URL: offline retry caching and the
+// maintenanceMode override.
 
 // A printer that failed its last probe is served from this cache and only
 // re-probed every OFFLINE_RETRY_MS — otherwise every unreachable printer costs
@@ -646,14 +604,43 @@ async function probe(p) {
 const OFFLINE_RETRY_MS = 10 * 1000;
 const offlineCache = new Map();   // printer url -> { result, until }
 
+// /api/fleet's client only re-renders a card when the raw JSON body differs
+// from the last poll (see app.js's FLEET_PREV_BODY check) — cheap, but it
+// means any value that wobbles by ±1 on its own, with no real state change,
+// forces a full card rebuild every single poll, which is what shows up as
+// visible flicker/jitter. Bed/hotend temps are the common offender: a
+// connector already rounds them to whole degrees, but real sensor noise
+// straddling a .5° boundary (e.g. reading 21.49 then 21.52) still flips the
+// rounded integer back and forth forever. Require a new value to repeat on
+// two consecutive polls before it's accepted, so a single noisy reading
+// can't reach the client — a genuine temperature change still shows up,
+// just one poll interval (a couple seconds) later.
+const tempStableCache = new Map(); // "printerUrl:bed"|"printerUrl:hotend" -> { shown, pendingVal, pendingCount }
+function stabilizeTemp(key, incoming) {
+  if (!incoming) return incoming;
+  let st = tempStableCache.get(key);
+  if (!st) { st = { shown: incoming.temp, pendingVal: incoming.temp, pendingCount: 0 }; tempStableCache.set(key, st); }
+  else if (incoming.temp === st.shown) {
+    st.pendingVal = incoming.temp; st.pendingCount = 0;
+  } else {
+    if (incoming.temp === st.pendingVal) st.pendingCount++;
+    else { st.pendingVal = incoming.temp; st.pendingCount = 1; }
+    if (st.pendingCount >= 2) { st.shown = incoming.temp; st.pendingCount = 0; }
+  }
+  return { temp: st.shown, target: incoming.target };
+}
+
 async function probeCached(p) {
   const hit = offlineCache.get(p.url);
   let result;
   if (hit && Date.now() < hit.until) result = hit.result;
   else {
-    result = await probe(p);
+    result = await getConnector(p.connector).probe(p);
     if (result.online) offlineCache.delete(p.url);
     else offlineCache.set(p.url, { result, until: Date.now() + OFFLINE_RETRY_MS });
+  }
+  if (result.online) {
+    result = { ...result, bed: stabilizeTemp(p.url + ":bed", result.bed), hotend: stabilizeTemp(p.url + ":hotend", result.hotend) };
   }
   // Checked fresh every call, independent of the reachability cache above —
   // maintenanceMode can flip without a new probe cycle needing to happen.
@@ -682,9 +669,15 @@ async function isPrinterIdle(p) {
 }
 async function uploadNotifiedFile(idx, pl) {
   const p = PRINTERS[idx];
+  const c = getConnector(p.connector);
   queuedFile.set(idx, { name: pl.name, status: "uploading", ts: Date.now() });
   try {
-    await uploadWithProgress(baseUrl(p), pl.file, pl.name, { sent: 0, total: 0 });
+    await c.uploadFile(p, pl.file, pl.name, { sent: 0, total: 0 });
+    // Only ever set when this came from the Upload-button queue (not the
+    // --load CLI hook, which has no color-mapping concept) — apply the same
+    // head mapping an immediate upload would have gotten, now that the
+    // printer that was busy is finally idle enough to receive it.
+    if (c.applyHeadMapping && ((pl.tools && pl.tools.length) || p.autoLevel)) await c.applyHeadMapping(p, pl.tools || [], pl.map);
     queuedFile.set(idx, { name: pl.name, status: "ready", ts: Date.now() });
   } catch (e) {
     queuedFile.set(idx, { name: pl.name, status: "error", error: e.message, ts: Date.now() });
@@ -715,12 +708,22 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     const i = parseInt(req.query.printer, 10);
     const p = PRINTERS[i];
     if (!p) return res.status(400).json({ error: "Unknown printer" });
-    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", ...(await probeCached(p)) });
+    const conn = getConnector(p.connector);
+    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) });
   }
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
-    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", ...(await probeCached(p)) };
+    const conn = getConnector(p.connector);
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) };
     const qf = queuedFile.get(i);
+    const pl = pendingLoad.get(i);
+    // queuedFile (uploading/ready/error) reflects the retry sweep actually
+    // acting on this printer; pendingLoad is the earlier "still waiting for
+    // it to go idle" state — surface that too, as the same field with its
+    // own status, or the client has no way to tell "already queued" from
+    // "hasn't been queued yet" while the printer stays busy, and would just
+    // keep re-showing the queue prompt on every poll.
     if (qf) row.queuedFile = qf;
+    else if (pl) row.queuedFile = { name: pl.name, status: "queued", ts: pl.ts };
     return row;
   }));
   res.json(out);
@@ -787,70 +790,14 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
   res.json({ ok: true, mode: "queued", printer: p.name });
 });
 
-// ---- Camera snapshot: Snapmaker U1 monitor.jpg via Moonraker WebSocket RPC ----
-// Mirrors the Python camera-proxy logic: start_monitor → fetch JPEG → idle stop_monitor.
-const CAM_START_COOLDOWN = 5;   // seconds between repeated start_monitor calls
-const CAM_IDLE_STOP      = 60;  // seconds of inactivity before stop_monitor
-const camState = new Map();     // per printer-index: { lastStart, lastRequest, stopTimer }
-
-function getCamState(idx) {
-  if (!camState.has(idx)) camState.set(idx, { lastStart: 0, lastRequest: 0, stopTimer: null });
-  return camState.get(idx);
-}
-
-// Send a single JSON-RPC call over Moonraker's WebSocket then close immediately.
-function cameraRpc(p, method, params = {}) {
-  return new Promise(resolve => {
-    if (typeof WebSocket === "undefined") return resolve(); // Node <21: skip silently
-    let done = false;
-    const finish = () => { if (!done) { done = true; resolve(); } };
-    try {
-      const ip   = new URL(baseUrl(p)).hostname;
-      const token = p.token || "";
-      const wsUrl = `ws://${ip}/websocket${token ? "?token=" + encodeURIComponent(token) : ""}`;
-      const ws   = new WebSocket(wsUrl);
-      const payload = JSON.stringify({ id: Date.now(), jsonrpc: "2.0", method, params });
-      const timer = setTimeout(() => { try { ws.close(); } catch {} finish(); }, 3000);
-      ws.onopen    = () => ws.send(payload);
-      ws.onmessage = () => { clearTimeout(timer); try { ws.close(); } catch {} finish(); };
-      ws.onerror   = () => { clearTimeout(timer); finish(); };
-      ws.onclose   = () => { clearTimeout(timer); finish(); };
-    } catch { finish(); }
-  });
-}
-
-async function ensureCameraRunning(idx, printer) {
-  const st     = getCamState(idx);
-  const domain = printer.cameraDomain || "lan";
-  const now    = Date.now() / 1000;
-
-  if (now - st.lastStart >= CAM_START_COOLDOWN) {
-    st.lastStart = now;
-    await cameraRpc(printer, "camera.start_monitor", { domain, interval: 0 });
-    // Give the camera a moment to capture and write the first frame
-    await new Promise(r => setTimeout(r, 1200));
-  }
-
-  st.lastRequest = now;
-  if (st.stopTimer) clearTimeout(st.stopTimer);
-  st.stopTimer = setTimeout(async () => {
-    st.stopTimer = null;
-    await cameraRpc(printer, "camera.stop_monitor", { domain });
-  }, CAM_IDLE_STOP * 1000);
-}
-
-// Grab one camera frame as a JPEG buffer. Throws with a user-showable message.
-async function getSnapshot(idx, p) {
-  await ensureCameraRunning(idx, p);
-  const snapUrl = baseUrl(p) + "/server/files/camera/monitor.jpg";
-  let r = await fetchTimeout(snapUrl, 6000);
-  // If still 404 after the initial wait, retry once after another second
-  if (r.status === 404) {
-    await new Promise(ok => setTimeout(ok, 1000));
-    r = await fetchTimeout(snapUrl, 6000);
-  }
-  if (!r.ok) throw new Error("Camera HTTP " + r.status + " — is the camera connected?");
-  return Buffer.from(await r.arrayBuffer());
+// ---- Camera snapshot: delegated entirely to the connector — cooldown/idle-
+// stop timer state (if any) lives inside it, not here. See
+// connectors/snapmaker-u1-klipper.js's getCameraSnapshot for why: it's a
+// quirk of Snapmaker's own camera plugin, not a generic "camera" concept.
+async function getSnapshot(p) {
+  const c = getConnector(p.connector);
+  if (!c.getCameraSnapshot) throw new Error(p.name + " has no camera");
+  return c.getCameraSnapshot(p);
 }
 
 app.get("/api/snapshot", requireAuth, async (req, res) => {
@@ -858,10 +805,10 @@ app.get("/api/snapshot", requireAuth, async (req, res) => {
   const p   = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   try {
-    const buf = await getSnapshot(idx, p);
-    res.set("Content-Type", "image/jpeg");
+    const { contentType, buffer } = await getSnapshot(p);
+    res.set("Content-Type", contentType);
     res.set("Cache-Control", "no-store");
-    res.send(buf);
+    res.send(buffer);
   } catch (e) {
     res.status(502).json({ error: "No camera frame: " + e.message });
   }
@@ -873,19 +820,16 @@ app.get("/api/thumbnail", requireAuth, async (req, res) => {
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
   if (!file) return res.status(400).json({ error: "Missing file" });
-  const thumbUrl = baseUrl(p) + "/server/files/gcodes/.thumbs/" + encodeURIComponent(file) + "-300x300.png";
   try {
-    const r = await fetchTimeout(thumbUrl, 5000);
-    if (!r.ok) return res.status(r.status).end();
-    res.set("Content-Type", r.headers.get("content-type") || "image/png");
+    const { contentType, buffer } = await getConnector(p.connector).getThumbnail(p, file);
+    res.set("Content-Type", contentType);
     // Effectively permanent: the client puts a per-job token in the URL, so a
     // new print job (even of a re-sliced same-name file) is a new cache entry —
     // one printer read per job, zero re-reads mid-print.
     res.set("Cache-Control", "private, max-age=31536000, immutable");
-    const buf = Buffer.from(await r.arrayBuffer());
-    res.send(buf);
+    res.send(buffer);
   } catch (e) {
-    res.status(502).end();
+    res.status(e.status || 502).end();
   }
 });
 
@@ -895,11 +839,31 @@ app.post("/api/unload", requireRegular, async (req, res) => {
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (!Array.isArray(extruders) || !extruders.length) return res.status(400).json({ error: "No extruders specified" });
+  const c = getConnector(p.connector);
+  if (!c.unloadFilament) return res.status(400).json({ error: p.name + " does not support filament unload" });
   try {
-    for (const e of extruders) {
-      await sendGcode(p, "AUTO_FEEDING EXTRUDER=" + parseInt(e, 10) + " UNLOAD=1");
-    }
+    await c.unloadFilament(p, extruders);
     res.json({ ok: true, printer: p.name, extruders });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// ---- Relabel a slot's stored color/material on the printer itself ----
+app.post("/api/filament-color", requireRegular, async (req, res) => {
+  const { printer, extruder, hex } = req.body || {};
+  const p = PRINTERS[printer];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (typeof extruder !== "number" || extruder < 0) return res.status(400).json({ error: "Invalid extruder" });
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(hex || ""))) return res.status(400).json({ error: "Invalid color" });
+  const c = getConnector(p.connector);
+  if (!c.setFilamentColor) return res.status(400).json({ error: p.name + " does not support setting filament color" });
+  try {
+    // May differ from the requested hex (e.g. AD5X snaps to its touchscreen's
+    // fixed color palette) — the client shows this back to the user rather
+    // than assuming its own request was applied verbatim.
+    const applied = await c.setFilamentColor(p, extruder, hex);
+    res.json({ ok: true, printer: p.name, extruder, hex: applied || hex });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
@@ -913,91 +877,23 @@ app.post("/api/bedtemp", requireRegular, async (req, res) => {
   const t = Number(temp);
   if (!Number.isFinite(t) || t < 0 || t > 120) return res.status(400).json({ error: "Temp must be 0–120 °C" });
   try {
-    await sendGcode(p, "M140 S" + Math.round(t));
+    await getConnector(p.connector).bedTemp(p, t);
     res.json({ ok: true, printer: p.name, target: Math.round(t) });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
 });
 
-// ---- Network inventory: name / IP / MAC / serial, for DHCP reservations ----
-function pickIface(net) {
-  let fallback = null;
-  for (const name in net) {
-    const ifc = net[name] || {};
-    const v4 = (ifc.ip_addresses || []).find(a => a.family === "ipv4" && !a.is_link_local);
-    if (v4) return { iface: name, mac: ifc.mac_address || null, ip: v4.address };
-    if (!fallback && ifc.mac_address) fallback = { iface: name, mac: ifc.mac_address, ip: null };
-  }
-  return fallback || { iface: null, mac: null, ip: null };
-}
-
-async function probeInfo(p) {
-  try {
-    const { ok, status, json } = await fetchJSONTimeout(baseUrl(p) + "/machine/system_info", 3500);
-    if (!ok) return { name: p.name, online: false, error: "HTTP " + status };
-    const si = json.result.system_info || {};
-    const pi = si.product_info || {};
-    const { iface, mac, ip } = pickIface(si.network || {});
-    return {
-      name: p.name, online: true,
-      device_name: pi.device_name || null,
-      machine_type: pi.machine_type || null,
-      serial: pi.serial_number || null,
-      iface, mac, ip
-    };
-  } catch (e) {
-    return { name: p.name, online: false, error: e.name === "AbortError" ? "timeout" : e.message };
-  }
-}
-
 // ---- Firmware inventory (same Moonraker APIs fluidd reads) ----
 // Full firmware detail is only pulled from printers that aren't moving:
 // standby / complete / cancelled. Busy or offline machines are listed as
-// skipped with the reason.
+// skipped with the reason. probeCached already has an up-to-date probe();
+// no reason for the connector to probe a second time.
 async function probeFirmware(p) {
+  const c = getConnector(p.connector);
+  if (!c.getFirmwareInfo) return { name: p.name, online: true, skipped: true, reason: "not supported" };
   const st = await probeCached(p);
-  if (!st.online) return { name: p.name, online: false, skipped: true, reason: st.error || "offline" };
-  if (!["standby", "complete", "cancelled"].includes(st.state)) {
-    return { name: p.name, online: true, skipped: true, reason: "busy (" + st.state + ")" };
-  }
-  const base = baseUrl(p);
-  try {
-    const [pi, si, ol] = await Promise.all([
-      fetchJSONTimeout(base + "/printer/info", 5000),
-      fetchJSONTimeout(base + "/machine/system_info", 5000),
-      fetchJSONTimeout(base + "/printer/objects/list", 5000)
-    ]);
-    const info = pi.ok ? (pi.json.result || {}) : {};
-    const sys  = si.ok ? ((si.json.result || {}).system_info || {}) : {};
-    const prod = sys.product_info || {};
-    const dist = sys.distribution || {};
-
-    // Every MCU the printer exposes: "mcu" is the mainboard, "mcu e0".."e3"
-    // are the U1 toolheads.
-    let mcus = [];
-    const mcuNames = ol.ok ? ((ol.json.result || {}).objects || []).filter(o => /^mcu(\s|$)/.test(o)) : [];
-    if (mcuNames.length) {
-      const q = await fetchJSONTimeout(base + "/printer/objects/query?" + mcuNames.map(encodeURIComponent).join("&"), 5000);
-      const stq = q.ok ? (((q.json.result || {}).status) || {}) : {};
-      mcus = mcuNames.map(n => ({
-        name: n === "mcu" ? "mainboard" : "toolhead " + n.replace(/^mcu\s*/, ""),
-        version: (stq[n] || {}).mcu_version || null
-      }));
-    }
-
-    return {
-      name: p.name, online: true, skipped: false,
-      machine: prod.machine_type || null,
-      firmware: prod.firmware_version || null,
-      software: prod.software_version || null,
-      klipper: info.software_version || null,
-      os: [dist.name, dist.kernel_version ? "kernel " + dist.kernel_version : ""].filter(Boolean).join(" · ") || null,
-      mcus
-    };
-  } catch (e) {
-    return { name: p.name, online: true, skipped: true, reason: e.message };
-  }
+  return c.getFirmwareInfo(p, st);
 }
 
 app.get("/api/firmware", requireAuth, async (req, res) => {
@@ -1038,7 +934,10 @@ app.get("/api/browse", requireAdmin, (req, res) => {
 });
 
 app.get("/api/inventory", requireAuth, async (req, res) => {
-  const out = await Promise.all(PRINTERS.map((p, i) => probeInfo(p).then(r => ({ id: i, ...r }))));
+  const out = await Promise.all(PRINTERS.map((p, i) => {
+    const c = getConnector(p.connector);
+    return c.getInventory ? c.getInventory(p).then(r => ({ id: i, ...r })) : Promise.resolve({ id: i, name: p.name, online: null, skipped: true, reason: "not supported" });
+  }));
   res.json(out);
 });
 
@@ -1096,7 +995,10 @@ app.get("/api/maintenance", requireAuth, (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
-  const entries = p.maintenance || [];
+  // Keyed by the printer's persistent id (CFG.maintenanceHistory), never
+  // nested inside the printer's own config entry — so this survives the
+  // printer being renamed, re-IP'd, or deleted (see ensurePrinterIds()).
+  const entries = (CFG.maintenanceHistory && CFG.maintenanceHistory[p.id]) || [];
   // warranty/next are computed server-side and returned as plain values (not
   // the raw purchaseDate) so Regular/View roles — who never receive printers[]
   // from publicCfg() — can still see them without gaining printer-config access.
@@ -1109,10 +1011,12 @@ app.post("/api/maintenance", requireRegular, (req, res) => {
   const p = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (!entry || !entry.date) return res.status(400).json({ error: "Missing date" });
-  if (!p.maintenance) p.maintenance = [];
+  if (!CFG.maintenanceHistory || typeof CFG.maintenanceHistory !== "object") CFG.maintenanceHistory = {};
+  if (!Array.isArray(CFG.maintenanceHistory[p.id])) CFG.maintenanceHistory[p.id] = [];
+  const entries = CFG.maintenanceHistory[p.id];
   const frequency = MAINT_FREQ_MONTHS[entry.frequency] ? entry.frequency : "monthly";
   const component = String(entry.component || "").trim();
-  p.maintenance.push({
+  entries.push({
     date: String(entry.date),
     comment: String(entry.comment || ""),
     hours: String(entry.hours || "—"),
@@ -1125,7 +1029,7 @@ app.post("/api/maintenance", requireRegular, (req, res) => {
   if (component && !maintComponents().includes(component)) CFG.maintenanceComponents = [...maintComponents(), component];
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
-    res.json({ ok: true, entries: p.maintenance, components: maintComponents(), warranty: computeWarranty(p.purchaseDate), next: computeNextMaintenance(p.maintenance) });
+    res.json({ ok: true, entries, components: maintComponents(), warranty: computeWarranty(p.purchaseDate), next: computeNextMaintenance(entries) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1169,7 +1073,13 @@ function publicCfg(role) {
   if (role !== "admin") return base;
   return {
     ...base,
-    notifications: CFG.notifications || null,
+    isDocker: IS_DOCKER,
+    // telegramBotToken never round-trips to the browser, same treatment as
+    // the Resend API key below — a bot token is a real secret (anyone who
+    // has it can send messages as your bot).
+    notifications: CFG.notifications
+      ? { ...CFG.notifications, telegramBotToken: undefined, hasTelegramBotToken: !!CFG.notifications.telegramBotToken }
+      : null,
     printers: PRINTERS,
     // The Resend API key never round-trips to the browser, even for Admin —
     // unlike printer tokens (which do, into a masked <input>), this secret
@@ -1181,6 +1091,48 @@ function publicCfg(role) {
 }
 app.get("/api/config", requireAuth, (req, res) => res.json(publicCfg(req.user.role)));
 app.get("/api/version", (req, res) => res.json({ version: VERSION }));
+
+// Exits the process so Docker's `restart: unless-stopped` policy relaunches
+// it fresh — picks up an externally-edited config.json or a `docker compose
+// pull`'d image. Gated to Docker only (see IS_DOCKER above): with no
+// supervisor to catch the exit, this would just kill the app for good.
+app.post("/api/restart", requireAdmin, (req, res) => {
+  if (!IS_DOCKER) return res.status(400).json({ error: "Not running in Docker — nothing would bring it back up" });
+  res.json({ ok: true });
+  setTimeout(() => process.exit(0), 200);
+});
+
+// Predefined printer "Connector" types — how SnapCon talks to that printer.
+// Registered in connectors/index.js; this is the single source of truth the
+// client reads (GET /api/connectors) instead of a hardcoded <option> list.
+app.get("/api/connectors", requireAuth, (req, res) => res.json(listConnectorTypes()));
+
+// ---- Remote Access (Cloudflare Tunnel, managed) — Development Preview ----
+// Every route here is requireAdmin (matches /api/config, /api/restart, /api/
+// users) except the probe, which is deliberately unauthenticated — its only
+// job is proving a request reached this instance through the tunnel, not
+// testing the login system, and its response carries no information at all.
+app.get("/api/remote-access/status", requireAdmin, (req, res) => res.json(remoteAccess.getStatus()));
+app.post("/api/remote-access/enable", requireAdmin, (req, res) => {
+  // Fast-fail synchronously on the security precondition — never even
+  // attempt the network/child-process work if login protection isn't on.
+  const security = remoteAccess.validateRemoteAccessSecurity();
+  if (!security.allowed) return res.status(400).json({ ok: false, error: security.reason });
+  // The rest (provisioning, download, process start) can take a while — the
+  // client polls /api/remote-access/status rather than this request hanging.
+  res.json({ ok: true, pending: true });
+  remoteAccess.enable().catch(e => console.error("[remote-access] enable failed:", e.message));
+});
+app.post("/api/remote-access/disable", requireAdmin, (req, res) => {
+  res.json({ ok: true, pending: true });
+  remoteAccess.disable().catch(e => console.error("[remote-access] disable failed:", e.message));
+});
+// No requireAuth: body/headers are fixed and carry zero identifying or
+// operational information — see remote-access plan, "Public endpoint probe."
+app.get("/api/remote-access/probe", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ ok: true });
+});
 
 app.post("/api/config", requireAdmin, (req, res) => {
   const b = req.body || {};
@@ -1216,9 +1168,20 @@ app.post("/api/config", requireAdmin, (req, res) => {
       includeImage: !!b.notifications.includeImage,
       service: b.notifications.service === "telegram" ? "telegram" : "ntfy",
       ntfyTopic: String(b.notifications.ntfyTopic || "").trim(),
-      telegramChatId: String(b.notifications.telegramChatId || "").trim()
+      telegramChatId: String(b.notifications.telegramChatId || "").trim(),
+      // Same "blank means keep the existing secret" convention as resend.apiKey.
+      telegramBotToken: (typeof b.notifications.telegramBotToken === "string" && b.notifications.telegramBotToken.trim())
+        ? b.notifications.telegramBotToken.trim()
+        : ((CFG.notifications && CFG.notifications.telegramBotToken) || undefined)
     } : (CFG.notifications || undefined),
     port: PORT,
+    // Internal bookkeeping, not part of this endpoint's editable settings —
+    // carried forward untouched so a general settings save can never wipe
+    // maintenance history/component list the way it silently did before
+    // (this `next` object is a full rebuild, not a merge, so anything not
+    // explicitly copied here is lost the moment this file is rewritten).
+    maintenanceHistory: CFG.maintenanceHistory || undefined,
+    maintenanceComponents: CFG.maintenanceComponents || undefined,
     printers: Array.isArray(b.printers)
       ? b.printers.filter(p => p && p.url).map(p => {
           const o = { name: String(p.name || p.url), url: String(p.url) };
@@ -1228,11 +1191,20 @@ app.post("/api/config", requireAdmin, (req, res) => {
           if (p.purchaseDate) o.purchaseDate = String(p.purchaseDate);
           if (p.autoLevel) o.autoLevel = true;
           if (p.pushNotify) o.pushNotify = true;
+          o.connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
           if (p.serial) o.serial = String(p.serial);
-          if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 4);
+          // Was capped at 4 chars (Snapmaker's pairing code length) — widened
+          // for FlashForge's checkCode, documented as 4-5 digits.
+          if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 8);
           if (p.token) o.token = String(p.token);
-          const existing = PRINTERS.find(ep => ep.url === o.url);
-          if (existing && existing.maintenance) o.maintenance = existing.maintenance;
+          // Persistent identity, independent of name/url — matched by id
+          // first (round-tripped from the client) so renaming or re-IP'ing a
+          // printer doesn't detach it from its own maintenance history
+          // (CFG.maintenanceHistory, keyed by id, never nested in here).
+          // Falls back to a url match for pre-upgrade clients that haven't
+          // got an id yet, then mints a fresh one for a genuinely new printer.
+          const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === o.url);
+          o.id = (existing && existing.id) || newPrinterId();
           return o;
         })
       : (CFG.printers || [])
@@ -1501,11 +1473,39 @@ async function sendNtfy({ topic, title, message, iconUrl, image }) {
   const qs = new URLSearchParams({ title, message });
   if (iconUrl) qs.set("icon", iconUrl);
   const url = "https://ntfy.sh/" + encodeURIComponent(topic) + "?" + qs;
+  // image = { contentType, buffer } from a connector's getCameraSnapshot —
+  // not every connector's camera returns a JPEG (FlashForge's is BMP), so
+  // the filename/content-type ride along with the snapshot itself.
+  const ext = image && image.contentType === "image/bmp" ? "snapshot.bmp" : "snapshot.jpg";
   const opts = image
-    ? { method: "PUT", headers: { "Filename": "snapshot.jpg", "Content-Type": "image/jpeg" }, body: image }
+    ? { method: "PUT", headers: { "Filename": ext, "Content-Type": image.contentType || "image/jpeg" }, body: image.buffer }
     : { method: "POST" };
   const r = await fetchTimeout(url, 15000, opts);
   if (!r.ok) throw new Error("ntfy.sh " + r.status + ": " + (await r.text()).slice(0, 160));
+}
+
+// Send via a Telegram bot (api.telegram.org) — sendPhoto (with the message as
+// its caption) when a snapshot is available, sendMessage otherwise. Node's
+// built-in fetch/FormData/Blob handle the multipart photo upload with no new
+// dependency, same "no SDK needed" approach as sendNtfy/sendResendEmail.
+async function sendTelegram({ botToken, chatId, message, image }) {
+  if (!botToken) throw new Error("Telegram bot token is not configured");
+  if (!chatId) throw new Error("Telegram chat ID is not configured");
+  const base = "https://api.telegram.org/bot" + botToken;
+  let r;
+  if (image) {
+    const form = new FormData();
+    form.append("chat_id", chatId);
+    form.append("caption", message);
+    form.append("photo", new Blob([image.buffer], { type: image.contentType || "image/jpeg" }), "snapshot.jpg");
+    r = await fetchTimeout(base + "/sendPhoto", 15000, { method: "POST", body: form });
+  } else {
+    r = await fetchTimeout(base + "/sendMessage", 15000, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: message })
+    });
+  }
+  if (!r.ok) throw new Error("Telegram " + r.status + ": " + (await r.text()).slice(0, 160));
 }
 
 // Send an OTP login code (or a test message) via Resend's HTTP API — a plain
@@ -1525,13 +1525,19 @@ async function sendEventNotification(idx, p, ev, st) {
   let message = eventMessage(ev, st);
   let image = null;
   if (nf.includeImage) {
-    try { image = await getSnapshot(idx, p); }
+    try { image = await getSnapshot(p); }
     catch { /* no camera — send the text anyway */ }
   }
-  await sendNtfy({
-    topic: nf.ntfyTopic, title: p.name, message, image,
-    iconUrl: "http://" + lanAddr() + "/snapcon-icon-512.png"
-  });
+  if (nf.service === "telegram") {
+    // Telegram has no separate "title" field the way ntfy does — fold the
+    // printer name into the message text instead.
+    await sendTelegram({ botToken: nf.telegramBotToken, chatId: nf.telegramChatId, message: p.name + ": " + message, image });
+  } else {
+    await sendNtfy({
+      topic: nf.ntfyTopic, title: p.name, message, image,
+      iconUrl: "http://" + lanAddr() + "/snapcon-icon-512.png"
+    });
+  }
 }
 
 // ---- Notification watcher ----
@@ -1544,7 +1550,8 @@ const NOTIFY_STATE = new Map();   // printer url -> { state, filename, progress,
 
 async function notifyTick() {
   const nf = CFG.notifications || {};
-  if (!nf.enabled || nf.service !== "ntfy" || !nf.ntfyTopic) return;
+  if (!nf.enabled) return;
+  if (nf.service === "telegram" ? (!nf.telegramChatId || !nf.telegramBotToken) : !nf.ntfyTopic) return;
   if (!nf.onEvents && !nf.onIntervals) return;
 
   await Promise.all(PRINTERS.map(async (p, i) => {
@@ -1598,30 +1605,38 @@ notifyTick();   // prime NOTIFY_STATE at startup (first sight never notifies)
 
 app.post("/api/notify-test", requireAdmin, async (req, res) => {
   const b = req.body || {};
-  if (b.service === "telegram") return res.status(400).json({ error: "Telegram is not implemented yet — select ntfy.sh" });
-  const topic = String(b.topic || (CFG.notifications || {}).ntfyTopic || "").trim();
-  if (!/^[-_A-Za-z0-9]{1,64}$/.test(topic)) return res.status(400).json({ error: "Enter a valid ntfy topic first" });
-
-  // TEMPORARY: the test targets U1 Gold until the real event wiring lands.
-  const idx = PRINTERS.findIndex(p => p.name === "U1 Gold" || String(p.url).includes("192.168.4.194"));
-  if (idx < 0) return res.status(400).json({ error: 'Test printer "U1 Gold" not found in config' });
-  const p = PRINTERS[idx];
+  const nf = CFG.notifications || {};
+  const service = b.service === "telegram" ? "telegram" : "ntfy";
+  if (!PRINTERS.length) return res.status(400).json({ error: "Add a printer first" });
+  const p = PRINTERS[0]; // any configured printer works for a connectivity test
 
   try {
-    const st = await probe(p);
+    const st = await getConnector(p.connector).probe(p);
     if (!st.online) return res.status(502).json({ error: p.name + " is offline: " + (st.error || "") });
     const ev = st.state || "idle"; // test uses the live state as the event
     let message = eventMessage(ev, st);
     let image = null;
     if (b.includeImage !== false) {
-      try { image = await getSnapshot(idx, p); }
+      try { image = await getSnapshot(p); }
       catch (e) { message += "\n(camera unavailable: " + e.message + ")"; }
     }
+    if (service === "telegram") {
+      const chatId = String(b.chatId || nf.telegramChatId || "").trim();
+      // Same "test with the form's current value, fall back to what's saved"
+      // convention as the OTP/Resend test buttons — works before Save too.
+      const botToken = (typeof b.botToken === "string" && b.botToken.trim()) ? b.botToken.trim() : (nf.telegramBotToken || "");
+      if (!chatId) return res.status(400).json({ error: "Enter a Telegram chat ID first" });
+      if (!botToken) return res.status(400).json({ error: "Enter a Telegram bot token first" });
+      await sendTelegram({ botToken, chatId, message: p.name + ": " + message, image });
+      return res.json({ ok: true, service, printer: p.name });
+    }
+    const topic = String(b.topic || nf.ntfyTopic || "").trim();
+    if (!/^[-_A-Za-z0-9]{1,64}$/.test(topic)) return res.status(400).json({ error: "Enter a valid ntfy topic first" });
     await sendNtfy({
       topic, title: p.name, message, image,
       iconUrl: "http://" + lanHost(req) + "/snapcon-icon-512.png"
     });
-    res.json({ ok: true, topic, printer: p.name });
+    res.json({ ok: true, service, topic, printer: p.name });
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
@@ -1673,6 +1688,64 @@ app.get("/api/electricity-rate", requireAuth, async (req, res) => {
 });
 
 // ---- Auto-discovery: scan the local subnet(s) for Moonraker printers ----
+// IPv4 <-> integer, via multiplication rather than bit-shifts — shifting an
+// octet into bit 24-31 overflows into JS's signed 32-bit bitwise range and
+// flips negative for anything with a high first octet (>=128).
+function ipToInt(ip) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || "").trim());
+  if (!m) return null;
+  const parts = m.slice(1, 5).map(Number);
+  if (parts.some(o => o < 0 || o > 255)) return null;
+  return parts[0] * 16777216 + parts[1] * 65536 + parts[2] * 256 + parts[3];
+}
+function intToIp(n) {
+  return [Math.floor(n / 16777216) % 256, Math.floor(n / 65536) % 256, Math.floor(n / 256) % 256, n % 256].join(".");
+}
+// A dotted mask (255.255.255.128) is only valid if it's a contiguous run of
+// 1-bits followed by 0-bits — reject anything else (e.g. 255.0.255.0) rather
+// than silently misinterpreting it.
+function maskToPrefixLen(mask) {
+  const n = ipToInt(mask);
+  if (n === null) return null;
+  let ones = 0, seenZero = false;
+  for (let i = 31; i >= 0; i--) {
+    if ((n >>> i) & 1) { if (seenZero) return null; ones++; }
+    else seenZero = true;
+  }
+  return ones;
+}
+const MIN_SCAN_PREFIX = 20; // /20 = 4096 addresses — below this a typo could kick off a scan that takes forever
+// Accepts either the legacy bare "x.x.x.0" (whole /24, unchanged behavior)
+// or CIDR notation with a prefix length ("192.168.22.128/25") or a dotted
+// mask ("192.168.22.128/255.255.255.128") — the IP need not be block-aligned,
+// the network is derived by zeroing the host bits either way. Returns the
+// FULL address block inclusive of what strict subnetting would call the
+// network/broadcast addresses (e.g. .0/25 scans .0-.127, not .1-.126) —
+// deliberate: this is a printer-discovery sweep, not a routing table, and a
+// printer can legitimately sit at either boundary address.
+function parseSubnetSpec(spec) {
+  spec = String(spec || "").trim();
+  const slash = spec.indexOf("/");
+  if (slash === -1) {
+    const parts = spec.split(".");
+    if (parts.length !== 4 || parts.some(p => isNaN(p) || +p < 0 || +p > 255)) {
+      return { error: "Invalid subnet. Expected x.x.x.0, or CIDR like 192.168.1.0/24" };
+    }
+    const base = parts.slice(0, 3).join(".");
+    return { ips: Array.from({ length: 254 }, (_, i) => base + "." + (i + 1)), label: base + ".0/24" };
+  }
+  const ipInt = ipToInt(spec.slice(0, slash));
+  if (ipInt === null) return { error: "Invalid IP address before the /" };
+  const suffix = spec.slice(slash + 1).trim();
+  const prefixLen = /^\d{1,2}$/.test(suffix) ? parseInt(suffix, 10) : maskToPrefixLen(suffix);
+  if (prefixLen === null || prefixLen < 0 || prefixLen > 32) return { error: "Invalid prefix length or subnet mask after the /" };
+  if (prefixLen < MIN_SCAN_PREFIX) return { error: "Subnet too large to scan — use /" + MIN_SCAN_PREFIX + " or smaller (max " + Math.pow(2, 32 - MIN_SCAN_PREFIX) + " addresses)" };
+  const blockSize = Math.pow(2, 32 - prefixLen);
+  const networkInt = Math.floor(ipInt / blockSize) * blockSize;
+  const ips = [];
+  for (let n = networkInt; n <= networkInt + blockSize - 1; n++) ips.push(intToIp(n));
+  return { ips, label: intToIp(networkInt) + "/" + prefixLen };
+}
 function localSubnets() {
   const out = new Set();
   const ifs = os.networkInterfaces();
@@ -1686,20 +1759,26 @@ function localSubnets() {
 // series) run Moonraker directly on its own default port 7125 with nothing
 // on 80 at all. Try both so those aren't invisible to the scan.
 const DISCOVER_PORTS = [80, 7125];
-async function probeMoonrakerAt(base) {
-  const { ok, json } = await fetchJSONTimeout(`${base}/machine/system_info`, 900);
-  if (!ok) return null;
-  const si = (json.result || {}).system_info;
-  if (!si) return null;
-  const pi = si.product_info || {};
-  const { mac } = pickIface(si.network || {});
-  return { url: base, device_name: pi.device_name || null, machine_type: pi.machine_type || null, serial: pi.serial_number || null, mac };
+// Tries every connector that supports discovery (discoverAt is optional —
+// most future brands won't fingerprint this way at all) against one base
+// URL, so adding a connector automatically joins the scan with no changes
+// here.
+async function discoverAt(base) {
+  for (const { type } of listConnectorTypes()) {
+    const c = getConnector(type);
+    if (!c.discoverAt) continue;
+    try {
+      const hit = await c.discoverAt(base);
+      if (hit) return { ...hit, connector: type };
+    } catch { /* try the next connector */ }
+  }
+  return null;
 }
-async function probeMoonraker(ip) {
+async function discoverIp(ip) {
   for (const port of DISCOVER_PORTS) {
     const base = port === 80 ? `http://${ip}` : `http://${ip}:${port}`;
     try {
-      const hit = await probeMoonrakerAt(base);
+      const hit = await discoverAt(base);
       if (hit) return { ip, ...hit };
     } catch { /* try the next port */ }
   }
@@ -1719,29 +1798,26 @@ app.get("/api/probe-printer", requireAdmin, async (req, res) => {
 
 app.get("/api/discover", requireAdmin, async (req, res) => {
   const found = [];
-  let bases;
+  let ips, labels;
   if (req.query.subnet) {
-    const parts = req.query.subnet.split(".");
-    if (parts.length !== 4 || parts.some(p => isNaN(p) || +p < 0 || +p > 255)) {
-      return res.status(400).json({ error: "Invalid subnet. Expected format: x.x.x.0" });
-    }
-    bases = [parts.slice(0, 3).join(".")];
+    const spec = parseSubnetSpec(req.query.subnet);
+    if (spec.error) return res.status(400).json({ error: spec.error });
+    ips = spec.ips;
+    labels = [spec.label];
   } else {
-    bases = localSubnets();
+    const bases = localSubnets();
+    ips = bases.flatMap(base => Array.from({ length: 254 }, (_, i) => base + "." + (i + 1)));
+    labels = bases.map(b => b + ".0/24");
   }
-  for (const base of bases) {
-    const ips = [];
-    for (let i = 1; i <= 254; i++) ips.push(base + "." + i);
-    const B = 40;
-    for (let i = 0; i < ips.length; i += B) {
-      const results = await Promise.all(ips.slice(i, i + B).map(probeMoonraker));
-      results.forEach(r => { if (r) found.push(r); });
-    }
+  const B = 40;
+  for (let i = 0; i < ips.length; i += B) {
+    const results = await Promise.all(ips.slice(i, i + B).map(discoverIp));
+    results.forEach(r => { if (r) found.push(r); });
   }
-  res.json({ subnets: bases, found });
+  res.json({ subnets: labels, found });
 });
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   const url = "http://localhost:" + PORT;
   console.log("\n  SnapCon  v" + VERSION + "  →  " + url);
   console.log("  Folder:   " + FOLDER);
@@ -1753,4 +1829,26 @@ app.listen(PORT, () => {
       : process.platform === "darwin" ? `open "${url}"` : `xdg-open "${url}"`;
     try { require("child_process").exec(cmd); } catch {}
   }
+  // Remote Access reconnects (if it was previously enabled) only AFTER the
+  // server is actually accepting requests — startupInit() may spawn a
+  // process and probe this server's own /api/remote-access/probe endpoint,
+  // neither of which can happen correctly before app.listen's callback fires.
+  remoteAccess.startupInit().catch(e => console.error("[remote-access] startupInit failed:", e.message));
 });
+
+// Graceful shutdown — new to this codebase (previously nothing here handled
+// SIGINT/SIGTERM at all; Ctrl+C or a service manager's stop signal just hard-
+// killed the process). Guarded against repeated signals so a second Ctrl+C
+// during shutdown doesn't re-enter this and double-run the sequence.
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log("\n  Received " + signal + " — shutting down...");
+  httpServer.close(); // stop accepting new connections; lets in-flight ones finish
+  Promise.resolve(remoteAccess.disableForShutdown()) // stop cloudflared only — token/config are retained so the next boot reconnects
+    .catch(e => console.error("[remote-access] shutdown:", e.message))
+    .finally(() => setTimeout(() => process.exit(0), 3000)); // bounded — never hangs on a stuck child or a lingering connection
+}
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
