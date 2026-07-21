@@ -72,17 +72,39 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
       state = "connected";
       everConnectedThisSession = true;
     } else if (everConnectedThisSession) {
-      state = "reconnecting";
+      state = "reconnecting"; // was healthy before, this is a transient blip the backoff-restart is already handling
     } else if (cfmStatus.processRunning) {
       state = "starting";
+    } else if (cfmStatus.lastError) {
+      // Never successfully connected this session AND the process isn't
+      // running AND there's a concrete captured error (e.g. spawn failed,
+      // exited immediately) — this is not "still starting up," it's stuck.
+      // Distinct from the reconnecting case above: a healthy system's own
+      // transient crash-and-auto-restart cycle never reaches this branch
+      // because everConnectedThisSession is already true by then.
+      state = "error";
+      if (!lastError) lastError = cfmStatus.lastError;
     }
     // else: leave whatever phase state (provisioning/downloading/starting)
-    // enable()/startupInit() already set — the process hasn't come up yet.
+    // enable()/startupInit() already set — the process hasn't come up yet
+    // and nothing concrete has failed either.
   }
 
   function scheduleProbe(delayMs) {
     clearTimeout(probeTimer);
     probeTimer = setTimeout(runProbe, delayMs);
+  }
+
+  // CloudflaredManager already redacts the token out of every line before
+  // it reaches here — this is what actually puts a trail in the console
+  // ("Capture stdout and stderr... redact secrets before writing anything
+  // to logs"). Previously this callback discarded the line entirely and
+  // only re-derived state, so a spawn failure or an early crash had no
+  // visible trace anywhere (console or the status API) — see the getStatus()
+  // lastError fix above for the other half of that gap.
+  function onCloudflaredEvent(evt) {
+    if (evt && evt.line) console.log("[remote-access] cloudflared: " + evt.line);
+    recomputeState();
   }
 
   async function runProbe() {
@@ -150,7 +172,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     }
 
     state = "starting";
-    processManager.onStatusChange(() => recomputeState());
+    processManager.onStatusChange(onCloudflaredEvent);
     await processManager.start(tunnelToken);
     Store.save(baseDir, { autoStart: true, cloudflaredVersion: CFM.getVersion(baseDir) });
     everConnectedThisSession = false;
@@ -168,6 +190,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     await processManager.stop();
     Store.save(baseDir, { enabled: false, autoStart: false });
     state = "disabled";
+    lastError = null; // don't leave a stale error visible after an explicit, successful disable
     everConnectedThisSession = false;
     return { ok: true };
   }
@@ -227,7 +250,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     }
 
     state = "starting";
-    processManager.onStatusChange(() => recomputeState());
+    processManager.onStatusChange(onCloudflaredEvent);
     await processManager.start(token);
     everConnectedThisSession = false;
     scheduleProbe(0);
@@ -248,7 +271,15 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
       publicUrl: persisted.publicUrl,
       hostname: persisted.hostname,
       lastConnectedAt: persisted.lastConnectedAt,
-      lastError,
+      // Bug fix: this used to be just the service-level `lastError` (set
+      // only for security/provisioning/checksum/missing-token failures),
+      // which meant a failure INSIDE the process itself (spawn error, exit
+      // code, stderr line — CloudflaredManager's own `lastError`) was never
+      // visible anywhere — "Tunnel process: Stopped" with an empty "Last
+      // error" field and no console output either. Once we're past the
+      // lifecycle stages that set the service-level error, the process's
+      // own error is the relevant one to show.
+      lastError: lastError || cfmStatus.lastError,
       restartCount: cfmStatus.restartCount,
       usingInsecureFallback
       // NEVER includes the token, in any form.

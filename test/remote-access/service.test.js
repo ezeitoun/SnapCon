@@ -37,6 +37,21 @@ function fakeProcessManager() {
   };
 }
 
+// Simulates the real bug this was written to catch: the child process fails
+// to spawn/immediately exits, CloudflaredManager captures its own lastError,
+// but start() itself never throws (matches the real CloudflaredManager,
+// which logs the failure into its status rather than rejecting start()).
+function fakeProcessManagerThatFailsToSpawn(errorMessage) {
+  const startCalls = [];
+  return {
+    startCalls,
+    async start(token) { startCalls.push(token); },
+    async stop() {},
+    getStatus() { return { processRunning: false, sawConnectionEvidence: false, restartCount: 0, lastError: errorMessage }; },
+    onStatusChange() {}
+  };
+}
+
 function fakeApiClientAlwaysProvisions(hub) {
   const calls = [];
   return {
@@ -200,5 +215,26 @@ test("getStatus() never includes the token in any field", async () => {
   const serialized = JSON.stringify(status);
   assert.ok(!serialized.includes("tok_1"));
   assert.equal(status.developmentPreview, true);
+  await svc.disable();
+});
+
+// Regression test for a real bug hit during manual testing: enable()
+// succeeded (provisioning worked, a public URL was assigned), but the
+// underlying cloudflared process failed to actually run — and getStatus()
+// showed "Tunnel process: Stopped" with an EMPTY "Last error" and a state
+// stuck on "starting" forever, because getStatus() only ever surfaced
+// RemoteAccessService's own lastError, never CloudflaredManager's, and
+// recomputeState() had no path to "error" for "process never came up."
+test("getStatus() surfaces the process manager's own lastError, and state moves to error, when the process fails to spawn", async () => {
+  const dir = tempBaseDir();
+  const pm = fakeProcessManagerThatFailsToSpawn("cloudflared binary is not installed — call ensureInstalled() first.");
+  const svc = makeService(dir, { processManager: pm });
+
+  await svc.enable();
+  const status = svc.getStatus();
+  assert.equal(status.processRunning, false);
+  assert.equal(status.lastError, "cloudflared binary is not installed — call ensureInstalled() first.",
+    "the process manager's own error must reach the client, not just RemoteAccessService's higher-level lastError");
+  assert.equal(status.state, "error", "a process that never came up (with a concrete captured error) must not stay stuck on 'starting' forever");
   await svc.disable();
 });
