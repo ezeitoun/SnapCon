@@ -2334,6 +2334,12 @@ async function loadRemoteAccessStatus(){
   RA_INFLIGHT=true;
   try{
     const s=await getJSON("/api/remote-access/status");
+    // getJSON()'s checkAuthFailure() pops the login overlay on a 401 but
+    // doesn't stop the (still-JSON) error body — e.g. {"error":"Login
+    // required"} — from reaching here. Without this check, that object has
+    // no .state field, and renderRemoteAccess() would render the literal
+    // string "undefined" into the status badge underneath the overlay.
+    if(!s || typeof s.state!=="string") throw new Error((s&&s.error)||"Unexpected response");
     renderRemoteAccess(s);
   }catch(e){
     $("raStatus").className="pstatus err"; $("raStatus").textContent=e.message;
