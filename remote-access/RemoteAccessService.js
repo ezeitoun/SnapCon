@@ -36,7 +36,7 @@ const PROBE_STEADY_MS = 20000; // within the specified 15-30s range
 // this module never needs to know about server.js's load/save timing, and
 // so tests can inject fakes. port: the actually-configured listen port
 // (never hardcoded 4545).
-function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClient = ApiClient, processManager = CFM.createProcessManager(baseDir) }) {
+function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClient = ApiClient, processManager = CFM.createProcessManager(baseDir), probeFn = probeUrl, ensureInstalledFn = CFM.ensureInstalled, getSecureCredentialStoreFn = getSecureCredentialStore }) {
   let state = "disabled";
   let lastError = null;
   let publicEndpointHealthy = false;
@@ -45,6 +45,14 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   let everConnectedThisSession = false;
   let probeTimer = null;
   let probeFailureCount = 0;
+  // Incremented by disable()/disableForShutdown(). A probe that's already
+  // mid-flight (awaiting up to two 5s HTTP requests) when that happens would
+  // otherwise still reschedule itself at the end, resurrecting an indefinite
+  // probe loop against a now-dead tunnel after the user thought everything
+  // was stopped. Each scheduled probe captures the generation it was
+  // scheduled under and checks it's unchanged before applying results or
+  // rescheduling.
+  let probeGeneration = 0;
 
   function validateRemoteAccessSecurity() {
     const cfg = getConfig();
@@ -91,8 +99,9 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   }
 
   function scheduleProbe(delayMs) {
+    const myGeneration = probeGeneration;
     clearTimeout(probeTimer);
-    probeTimer = setTimeout(runProbe, delayMs);
+    probeTimer = setTimeout(() => runProbe(myGeneration), delayMs);
   }
 
   // CloudflaredManager already redacts the token out of every line before
@@ -107,14 +116,19 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     recomputeState();
   }
 
-  async function runProbe() {
+  async function runProbe(myGeneration) {
     const persisted = Store.load(baseDir);
-    const localOk = await probeUrl("http://127.0.0.1:" + port + "/api/remote-access/probe", 5000);
-    localServiceReachable = localOk;
+    const localOk = await probeFn("http://127.0.0.1:" + port + "/api/remote-access/probe", 5000);
     let publicOk = false;
-    if (persisted.publicUrl) publicOk = await probeUrl(persisted.publicUrl.replace(/\/+$/, "") + "/api/remote-access/probe", 5000);
-    publicEndpointHealthy = publicOk;
+    if (persisted.publicUrl) publicOk = await probeFn(persisted.publicUrl.replace(/\/+$/, "") + "/api/remote-access/probe", 5000);
 
+    // disable()/disableForShutdown() ran while the two awaits above were in
+    // flight — don't apply stale results and, critically, don't reschedule:
+    // this is what stops the probe loop from surviving past disable().
+    if (myGeneration !== probeGeneration) return;
+
+    localServiceReachable = localOk;
+    publicEndpointHealthy = publicOk;
     if (publicOk) { probeFailureCount = 0; scheduleProbe(PROBE_STEADY_MS); }
     else { probeFailureCount++; scheduleProbe(CFM.backoffDelay(probeFailureCount - 1)); }
     recomputeState();
@@ -122,7 +136,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
 
   async function loadSecureStore() {
     const persisted = Store.load(baseDir);
-    return getSecureCredentialStore(baseDir, { allowInsecureFallback: !!persisted.allowInsecureFallback });
+    return getSecureCredentialStoreFn(baseDir, { allowInsecureFallback: !!persisted.allowInsecureFallback });
   }
 
   async function enable() {
@@ -165,7 +179,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
 
     state = "downloading";
     try {
-      await CFM.ensureInstalled(baseDir);
+      await ensureInstalledFn(baseDir);
     } catch (e) {
       state = "error"; lastError = redact(e.message, [tunnelToken]);
       return { ok: false, error: lastError };
@@ -186,6 +200,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   // is a separate, not-yet-exposed future action (see disableForRemoval note
   // below) pending a real DELETE /v1/hubs/{hubId} on the backend.
   async function disable() {
+    probeGeneration++; // invalidate any in-flight probe — see the note by its declaration above
     clearTimeout(probeTimer);
     await processManager.stop();
     Store.save(baseDir, { enabled: false, autoStart: false });
@@ -199,6 +214,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   // never touches enabled/autoStart/the stored token, so the next boot's
   // startupInit() still reconnects automatically.
   async function disableForShutdown() {
+    probeGeneration++;
     clearTimeout(probeTimer);
     await processManager.stop();
   }
@@ -243,7 +259,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
 
     state = "downloading";
     try {
-      await CFM.ensureInstalled(baseDir);
+      await ensureInstalledFn(baseDir);
     } catch (e) {
       state = "error"; lastError = redact(e.message, [token]);
       return;
@@ -286,9 +302,35 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     };
   }
 
+  // enable()/disable()/startupInit() all mutate the same persisted state and
+  // the same CloudflaredManager instance across multiple `await` points —
+  // without this, two overlapping calls (a double-clicked Enable button, or
+  // Disable clicked mid-provision) could interleave: e.g. two concurrent
+  // enable() calls both seeing no existing hubId and both calling
+  // provisionHub(), creating two Hubs — exactly the duplicate-provisioning
+  // risk the rest of this design exists to avoid. Serializing them means a
+  // second call simply waits for the first to fully settle before it starts,
+  // rather than racing. disableForShutdown() is deliberately NOT included:
+  // process exit is bounded (server.js force-exits 3s after signaling
+  // shutdown) and must not wait behind a slow in-flight enable().
+  let opChain = Promise.resolve();
+  function serialize(fn) {
+    return (...args) => {
+      const run = () => fn(...args);
+      const started = opChain.then(run, run);
+      opChain = started.then(() => {}, () => {}); // keep the chain alive for the next call even if this one rejects
+      return started;
+    };
+  }
+
   return {
-    validateRemoteAccessSecurity, enable, disable, disableForShutdown, removeRemoteAccess,
-    startupInit, getStatus,
+    validateRemoteAccessSecurity,
+    enable: serialize(enable),
+    disable: serialize(disable),
+    disableForShutdown,
+    removeRemoteAccess,
+    startupInit: serialize(startupInit),
+    getStatus,
     // exported for tests only
     _internal: { recomputeState, scheduleProbe, probeUrl }
   };
