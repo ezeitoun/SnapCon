@@ -11,6 +11,24 @@ function tempBaseDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "snapcon-ra-service-"));
 }
 
+function futureIso(msFromNow = 15 * 60000) {
+  return new Date(Date.now() + msFromNow).toISOString();
+}
+
+// Registration + provisioning now complete asynchronously after enable()
+// returns (see RemoteAccessService.js: enable() on a fresh install kicks off
+// a registration-session poll rather than provisioning synchronously) — so
+// tests that need the flow to have actually finished poll for it instead of
+// asserting immediately after `await svc.enable()`.
+async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 10 } = {}) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return;
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  throw new Error("waitFor() timed out waiting for condition to become true");
+}
+
 // Without this, enable()/startupInit() call the REAL getSecureCredentialStore(),
 // which spawns a real powershell.exe (Windows DPAPI probe) on every single
 // call — ~0.5-1s each, on every enable()/startupInit() in every test, and
@@ -18,7 +36,7 @@ function tempBaseDir() {
 // below flaky, since the assertion window needed to outlast an unpredictable
 // real subprocess spawn. Backed by a real Map keyed by baseDir so multiple
 // loadSecureStore() calls against the same directory within one test (e.g.
-// disable() then re-enable()) still see the same persisted token.
+// disable() then re-enable()) still see the same persisted fake token.
 function fakeSecureCredentialStoreFn() {
   const backingStores = new Map();
   return async function fakeGetSecureCredentialStore(dir) {
@@ -73,12 +91,26 @@ function fakeProcessManagerThatFailsToSpawn(errorMessage) {
   };
 }
 
+// Default fake API client covering the full fresh-install flow: an unsigned
+// registration session that's immediately "approved" (no real human/browser
+// involved in tests), followed by provisionHub() returning the given hub.
+// `calls` tracks provisionHub invocations specifically (matches the old
+// tests' naming/shape); `registrationCalls` tracks createRegistrationSession.
 function fakeApiClientAlwaysProvisions(hub) {
   const calls = [];
+  const registrationCalls = [];
   return {
     calls,
-    isDevelopmentPreview: () => true,
-    async provisionHub(args) { calls.push(args); return hub; }
+    registrationCalls,
+    async createRegistrationSession(args) {
+      registrationCalls.push(args);
+      return { sessionId: "regsess_1", installationId: "inst_1", registerUrl: "https://api.snapcon.app/register/regsess_1", expiresAt: futureIso() };
+    },
+    async getRegistrationSessionStatus(sessionId) {
+      return { sessionId, status: "approved", installationId: "inst_1", expiresAt: futureIso() };
+    },
+    async provisionHub(args) { calls.push(args); return hub; },
+    async disableHub() { throw new Error("disableHub not configured on this fake — override it explicitly for removeRemoteAccess() tests"); }
   };
 }
 
@@ -96,7 +128,7 @@ function makeService(dir, overrides = {}) {
     getConfig: () => ({ usersEnabled }),
     getUsers: () => users,
     port: 4545,
-    apiClient: overrides.apiClient || fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned" }),
+    apiClient: overrides.apiClient || fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false }),
     processManager: overrides.processManager || fakeProcessManager(),
     probeFn: overrides.probeFn || (async () => false), // fails fast by default — no real network calls in tests
     getSecureCredentialStoreFn: overrides.getSecureCredentialStoreFn || sharedFakeSecureStore,
@@ -144,14 +176,17 @@ test("enable() refuses and never calls provisionHub when the security preconditi
   assert.equal(apiClient.calls.length, 0, "provisionHub must never be called when the security check fails");
 });
 
-test("enable() on a fresh install provisions once, persists hub info (no token in the plain JSON), and starts the process with the token", async () => {
+test("enable() on a fresh install registers, provisions once, persists hub info (no token in the plain JSON), and starts the process with the token", async () => {
   const dir = tempBaseDir();
   const pm = fakeProcessManager();
-  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned" });
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false });
   const svc = makeService(dir, { apiClient, processManager: pm });
 
   const result = await svc.enable();
   assert.equal(result.ok, true);
+  await waitFor(() => pm.startCalls.length >= 1);
+
+  assert.equal(apiClient.registrationCalls.length, 1);
   assert.equal(apiClient.calls.length, 1);
   assert.deepEqual(pm.startCalls, ["tok_1"]);
 
@@ -166,10 +201,11 @@ test("enable() on a fresh install provisions once, persists hub info (no token i
 test("enable() called again (re-enable) reuses the existing hub/token — provisionHub is not called a second time", async () => {
   const dir = tempBaseDir();
   const pm = fakeProcessManager();
-  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned" });
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false });
   const svc = makeService(dir, { apiClient, processManager: pm });
 
   await svc.enable();
+  await waitFor(() => pm.startCalls.length >= 1);
   await svc.disable();
   await svc.enable(); // re-enable after disable — must reuse, not re-provision
 
@@ -178,18 +214,66 @@ test("enable() called again (re-enable) reuses the existing hub/token — provis
   await svc.disable();
 });
 
-test("enable() surfaces AMBIGUOUS_TIMEOUT distinctly and never lets the manager auto-retry", async () => {
+test("a provisionHub failure during registration completion surfaces as AMBIGUOUS_TIMEOUT in getStatus() and is never auto-retried", async () => {
   const dir = tempBaseDir();
+  let provisionCalls = 0;
   const apiClient = {
-    isDevelopmentPreview: () => true,
-    calls: [],
-    async provisionHub() { this.calls.push(1); throw new ProvisioningError(CODES.AMBIGUOUS_TIMEOUT, "timed out"); }
+    async createRegistrationSession() { return { sessionId: "regsess_1", installationId: "inst_1", registerUrl: "https://api.snapcon.app/register/regsess_1", expiresAt: futureIso() }; },
+    async getRegistrationSessionStatus(sessionId) { return { sessionId, status: "approved", installationId: "inst_1", expiresAt: futureIso() }; },
+    async provisionHub() { provisionCalls++; throw new ProvisioningError(CODES.AMBIGUOUS_TIMEOUT, "timed out"); }
   };
   const svc = makeService(dir, { apiClient });
+
   const result = await svc.enable();
-  assert.equal(result.ok, false);
-  assert.equal(result.code, CODES.AMBIGUOUS_TIMEOUT);
-  assert.equal(apiClient.calls.length, 1, "RemoteAccessService itself must never retry an ambiguous provisioning call");
+  assert.equal(result.ok, true, "enable() itself only kicks off registration on a fresh install — provisioning happens later, asynchronously");
+  await waitFor(() => svc.getStatus().state === "error");
+  assert.match(svc.getStatus().lastError, /outcome unknown/i);
+  assert.equal(provisionCalls, 1, "RemoteAccessService itself must never retry an ambiguous provisioning call");
+  await svc.disable();
+});
+
+test("registration ending in 'expired' or 'rejected' surfaces as an error state and never calls provisionHub", async () => {
+  for (const finalStatus of ["expired", "rejected"]) {
+    const dir = tempBaseDir();
+    let provisionCalls = 0;
+    const apiClient = {
+      async createRegistrationSession() { return { sessionId: "regsess_1", installationId: "inst_1", registerUrl: "https://api.snapcon.app/register/regsess_1", expiresAt: futureIso() }; },
+      async getRegistrationSessionStatus(sessionId) { return { sessionId, status: finalStatus, installationId: "inst_1", expiresAt: futureIso() }; },
+      async provisionHub() { provisionCalls++; throw new Error("must not be called for a " + finalStatus + " session"); }
+    };
+    const svc = makeService(dir, { apiClient });
+    await svc.enable();
+    await waitFor(() => svc.getStatus().state === "error");
+    assert.match(svc.getStatus().lastError, new RegExp(finalStatus, "i"));
+    assert.equal(provisionCalls, 0, finalStatus + " must never call provisionHub");
+    await svc.disable();
+  }
+});
+
+// The single most important regression guard for the new dedicated
+// registrationGeneration counter — exact analog of the existing
+// "disable() during an in-flight probe" test below, for the registration
+// poll loop instead of the connection probe loop.
+test("disable() mid-registration discards the stale poll result instead of provisioning after the fact", async () => {
+  const dir = tempBaseDir();
+  let resolveStatus;
+  let provisionCalls = 0;
+  const apiClient = {
+    async createRegistrationSession() { return { sessionId: "regsess_1", installationId: "inst_1", registerUrl: "https://api.snapcon.app/register/regsess_1", expiresAt: futureIso() }; },
+    getRegistrationSessionStatus() { return new Promise(resolve => { resolveStatus = resolve; }); },
+    async provisionHub() { provisionCalls++; return { hubId: "hub_1", hostname: "hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false }; }
+  };
+  const svc = makeService(dir, { apiClient });
+
+  await svc.enable(); // registers, schedules the first poll (delay 0) — gets stuck awaiting getRegistrationSessionStatus
+  await new Promise(r => setTimeout(r, 20)); // let the poll actually reach its stuck await
+  await svc.disable(); // bumps registrationGeneration while the poll is still mid-flight
+
+  resolveStatus({ sessionId: "regsess_1", status: "approved", installationId: "inst_1", expiresAt: futureIso() });
+  await new Promise(r => setTimeout(r, 50)); // give the stale continuation a chance to (wrongly) run if the guard were missing
+
+  assert.equal(provisionCalls, 0, "a registration approval discovered after disable() must not resurrect provisioning");
+  assert.equal(svc.getStatus().state, "disabled");
 });
 
 test("disable() stops the process but retains hubId/hostname/token for a later re-enable", async () => {
@@ -197,6 +281,7 @@ test("disable() stops the process but retains hubId/hostname/token for a later r
   const pm = fakeProcessManager();
   const svc = makeService(dir, { processManager: pm });
   await svc.enable();
+  await waitFor(() => pm.startCalls.length >= 1);
   await svc.disable();
 
   assert.equal(pm.getStatus().processRunning, false);
@@ -218,9 +303,10 @@ test("startupInit() is a no-op when persisted state is not enabled", async () =>
 test("startupInit() starts the process from the stored token without provisioning again", async () => {
   const dir = tempBaseDir();
   const pm = fakeProcessManager();
-  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned" });
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false });
   const svc = makeService(dir, { apiClient, processManager: pm });
   await svc.enable(); // simulates a prior session having enabled it
+  await waitFor(() => pm.startCalls.length >= 1);
 
   const pm2 = fakeProcessManager(); // simulates a fresh process manager after a SnapCon restart
   const svc2 = makeService(dir, { apiClient, processManager: pm2 });
@@ -230,6 +316,47 @@ test("startupInit() starts the process from the stored token without provisionin
   assert.equal(apiClient.calls.length, 1, "startupInit() must never provision — only the original enable() call should have");
   await svc.disable();
   await svc2.disable();
+});
+
+test("a legacy install (persisted hubId/token, no installationId or identity) reconnects via startupInit() without any registration/provisioning calls", async () => {
+  const dir = tempBaseDir();
+  Store.save(dir, { enabled: true, hubId: "hub_5a23cd576411", hostname: "5a23cd576411.snapcon.app", publicUrl: "https://5a23cd576411.snapcon.app", tunnelId: "c3d018ff-255c-45dd-936e-5abe83f07e4f" });
+  const secureStore = await sharedFakeSecureStore(dir);
+  await secureStore.set("tunnelToken", "legacy-tok");
+  const pm = fakeProcessManager();
+  let registrationCalls = 0, provisionCalls = 0;
+  const apiClient = {
+    async createRegistrationSession() { registrationCalls++; throw new Error("must not be called for a legacy reuse"); },
+    async provisionHub() { provisionCalls++; throw new Error("must not be called for a legacy reuse"); }
+  };
+  const svc = makeService(dir, { apiClient, processManager: pm });
+  await svc.startupInit();
+
+  assert.deepEqual(pm.startCalls, ["legacy-tok"]);
+  assert.equal(registrationCalls, 0);
+  assert.equal(provisionCalls, 0);
+  await svc.disable();
+});
+
+test("enable() on a legacy install (persisted hubId, no installationId) reuses the existing token without any registration/provisioning calls", async () => {
+  const dir = tempBaseDir();
+  Store.save(dir, { hubId: "hub_5a23cd576411", hostname: "5a23cd576411.snapcon.app", publicUrl: "https://5a23cd576411.snapcon.app", tunnelId: "c3d018ff-255c-45dd-936e-5abe83f07e4f" });
+  const secureStore = await sharedFakeSecureStore(dir);
+  await secureStore.set("tunnelToken", "legacy-tok");
+  const pm = fakeProcessManager();
+  let registrationCalls = 0, provisionCalls = 0;
+  const apiClient = {
+    async createRegistrationSession() { registrationCalls++; throw new Error("must not be called"); },
+    async provisionHub() { provisionCalls++; throw new Error("must not be called"); }
+  };
+  const svc = makeService(dir, { apiClient, processManager: pm });
+  const result = await svc.enable();
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(pm.startCalls, ["legacy-tok"]);
+  assert.equal(registrationCalls, 0);
+  assert.equal(provisionCalls, 0);
+  await svc.disable();
 });
 
 test("startupInit() surfaces a clean error state and never starts anything when the token is missing", async () => {
@@ -244,14 +371,14 @@ test("startupInit() surfaces a clean error state and never starts anything when 
   assert.match(svc.getStatus().lastError, /missing|could not be decrypted/i);
 });
 
-test("getStatus() never includes the token in any field", async () => {
+test("getStatus() never includes the token or private key in any field", async () => {
   const dir = tempBaseDir();
   const svc = makeService(dir);
   await svc.enable();
+  await waitFor(() => svc.getStatus().state !== "registering" && svc.getStatus().state !== "provisioning" && svc.getStatus().state !== "downloading");
   const status = svc.getStatus();
   const serialized = JSON.stringify(status);
   assert.ok(!serialized.includes("tok_1"));
-  assert.equal(status.developmentPreview, true);
   await svc.disable();
 });
 
@@ -268,6 +395,7 @@ test("getStatus() surfaces the process manager's own lastError, and state moves 
   const svc = makeService(dir, { processManager: pm });
 
   await svc.enable();
+  await waitFor(() => svc.getStatus().state === "error");
   const status = svc.getStatus();
   assert.equal(status.processRunning, false);
   assert.equal(status.lastError, "cloudflared binary is not installed — call ensureInstalled() first.",
@@ -289,7 +417,8 @@ test("disable() during an in-flight probe discards its stale result instead of a
   const probeFn = () => new Promise(resolve => { pendingResolvers.push(resolve); });
   const svc = makeService(dir, { probeFn });
 
-  await svc.enable(); // schedules a probe with delay 0 — it starts almost immediately and gets stuck awaiting probeFn
+  await svc.enable();
+  await waitFor(() => pendingResolvers.length > 0); // wait for provisioning to finish and the first probe to be scheduled/in-flight
   await svc.disable(); // bumps the probe generation while that probe is still stuck mid-flight
 
   // Let every probeFn call currently pending (local + public, whichever
@@ -306,35 +435,33 @@ test("disable() during an in-flight probe discards its stale result instead of a
   assert.equal(status.state, "disabled");
 });
 
-// Hardening: found by code review, not live testing. Nothing previously
-// stopped two overlapping enable() calls (e.g. a double-clicked Enable
-// button, or a retried request) from both reaching the "no existing hub"
-// branch and both calling provisionHub() — creating two Hubs, exactly the
-// duplicate-provisioning risk this whole design exists to avoid.
-test("concurrent enable() calls are serialized — provisionHub is only ever called once", async () => {
+test("concurrent enable() calls on a fresh install are serialized — only one registration session (and one provisionHub call) is ever created", async () => {
   const dir = tempBaseDir();
+  let registrationCalls = 0;
   let provisionCalls = 0;
-  let resolveProvision;
   const apiClient = {
-    isDevelopmentPreview: () => true,
+    async createRegistrationSession() {
+      registrationCalls++;
+      return { sessionId: "regsess_1", installationId: "inst_1", registerUrl: "https://api.snapcon.app/register/regsess_1", expiresAt: futureIso() };
+    },
+    async getRegistrationSessionStatus(sessionId) {
+      return { sessionId, status: "approved", installationId: "inst_1", expiresAt: futureIso() };
+    },
     async provisionHub() {
       provisionCalls++;
-      return new Promise(resolve => { resolveProvision = resolve; });
+      return { hubId: "hub_1", hostname: "hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false };
     }
   };
   const svc = makeService(dir, { apiClient });
 
-  const p1 = svc.enable(); // starts, gets stuck awaiting provisionHub's unresolved promise
-  const p2 = svc.enable(); // called immediately after, before p1 has resolved anything
+  const [r1, r2] = await Promise.all([svc.enable(), svc.enable()]);
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  assert.equal(registrationCalls, 1, "a second concurrent enable() must reuse the session the first one created, not create a new one");
 
-  await new Promise(r => setTimeout(r, 20)); // let p1 reach its stuck await; p2 must still be waiting its turn
-  assert.equal(provisionCalls, 1, "a second concurrent enable() must not call provisionHub while the first is still in flight");
-
-  resolveProvision({ hubId: "hub_1", hostname: "h.snapcon.app", publicUrl: "https://h.snapcon.app", tunnelId: "t1", tunnelToken: "tok_1", status: "provisioned" });
-  await p1;
-  await p2; // now runs — persisted.hubId/token already exist from p1, so it must reuse them, not provision again
-
-  assert.equal(provisionCalls, 1, "the second call, once it actually runs after the first fully settles, must reuse the existing hub rather than provisioning again");
+  await waitFor(() => provisionCalls >= 1);
+  await new Promise(r => setTimeout(r, 30)); // let any stale/duplicate continuation, if one existed, also have a chance to run
+  assert.equal(provisionCalls, 1, "provisionHub must only ever be called once even with two concurrent enable() calls");
   await svc.disable();
 });
 
@@ -357,7 +484,8 @@ test("enable() surfaces a clean error state if processManager.start() unexpected
   const svc = makeService(dir, { processManager: pm });
 
   const result = await svc.enable();
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true, "enable() itself only kicks off registration on a fresh install — the failure happens later, asynchronously");
+  await waitFor(() => svc.getStatus().state === "error");
   assert.match(svc.getStatus().lastError, /simulated unexpected spawn failure/);
   assert.equal(svc.getStatus().state, "error", "must not remain stuck on 'starting' when start() throws");
 });
@@ -367,6 +495,7 @@ test("startupInit() surfaces a clean error state if processManager.start() unexp
   const workingPm = fakeProcessManager();
   const svc1 = makeService(dir, { processManager: workingPm });
   await svc1.enable(); // establishes a real stored hub/token to restore from
+  await waitFor(() => workingPm.startCalls.length >= 1);
   await svc1.disable();
 
   const throwingPm = {
@@ -406,6 +535,7 @@ test("recomputeState() does not crash when Store.save() throws (e.g. a disk-full
   const pm = controllableProcessManager();
   const svc = makeService(dir, { processManager: pm, probeFn: async () => true });
   await svc.enable();
+  await waitFor(() => pm.getStatus().processRunning === true);
 
   const originalSave = Store.save;
   Store.save = () => { throw new Error("simulated disk-full error"); };
@@ -428,6 +558,7 @@ test("recomputeState() recovers out of 'error' once the process genuinely comes 
   const pm = controllableProcessManager();
   const svc = makeService(dir, { processManager: pm, probeFn: async () => true });
   await svc.enable();
+  await waitFor(() => pm.getStatus().processRunning === true);
 
   // Simulate an early crash with a captured error, before ever connecting.
   pm.simulate({ processRunning: false, lastError: "simulated early crash" });
@@ -447,6 +578,7 @@ test("a successful reconnect clears a stale lastError instead of showing it next
   const pm = controllableProcessManager();
   const svc = makeService(dir, { processManager: pm, probeFn: async () => true });
   await svc.enable();
+  await waitFor(() => pm.getStatus().processRunning === true);
 
   pm.simulate({ processRunning: false, lastError: "simulated early crash" });
   assert.match(svc.getStatus().lastError, /simulated early crash/);
@@ -462,10 +594,11 @@ test("a successful reconnect clears a stale lastError instead of showing it next
 
 test("enable() refuses (does not provision a second Hub) when a Hub is already persisted but its token can't be read back", async () => {
   const dir = tempBaseDir();
-  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned" });
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false });
   const pm = fakeProcessManager();
   const svc = makeService(dir, { apiClient, processManager: pm });
   await svc.enable(); // establishes a real persisted hubId + token
+  await waitFor(() => pm.startCalls.length >= 1);
   await svc.disable();
 
   // Simulate the token becoming unreadable (corrupted/deleted keychain
@@ -485,4 +618,79 @@ test("enable() refuses (does not provision a second Hub) when a Hub is already p
   assert.equal(apiClient.calls.length, 1, "must NOT call provisionHub again — the original enable() call above is the only one that should have");
   const persisted = Store.load(dir);
   assert.equal(persisted.hubId, "hub_1", "the original hubId must be left untouched, not overwritten by a second provisioning attempt");
+});
+
+// ---- removeRemoteAccess() ----
+
+test("removeRemoteAccess() happy path: stops the process, calls disableHub once, clears secrets and persisted fields", async () => {
+  const dir = tempBaseDir();
+  const pm = fakeProcessManager();
+  const disableHubCalls = [];
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false });
+  apiClient.disableHub = async (args) => { disableHubCalls.push(args); return { hubId: "hub_1", status: "revoked", deletionStatus: "complete" }; };
+  const svc = makeService(dir, { apiClient, processManager: pm });
+  await svc.enable();
+  await waitFor(() => pm.startCalls.length >= 1);
+
+  const result = await svc.removeRemoteAccess();
+  assert.equal(result.ok, true);
+  assert.equal(result.warning, null);
+  assert.equal(disableHubCalls.length, 1);
+  assert.equal(disableHubCalls[0].hubId, "hub_1");
+  assert.equal(pm.getStatus().processRunning, false);
+
+  const persisted = Store.load(dir);
+  assert.equal(persisted.hubId, null);
+  assert.equal(persisted.installationId, null);
+  assert.equal(persisted.registrationSessionId, null);
+
+  const secureStore = await sharedFakeSecureStore(dir);
+  assert.equal(await secureStore.get("tunnelToken"), null);
+  assert.equal(await secureStore.get("ed25519PrivateKeyJwk"), null);
+});
+
+test("removeRemoteAccess() on AMBIGUOUS_TIMEOUT does not clear local state — a second call is expected to work", async () => {
+  const dir = tempBaseDir();
+  const pm = fakeProcessManager();
+  const apiClient = fakeApiClientAlwaysProvisions({ hubId: "hub_1", hostname: "hub1.snapcon.app", publicUrl: "https://hub1.snapcon.app", tunnelId: "tun_1", tunnelToken: "tok_1", status: "provisioned", existing: false });
+  let shouldFail = true;
+  apiClient.disableHub = async () => {
+    if (shouldFail) { shouldFail = false; throw new ProvisioningError(CODES.AMBIGUOUS_TIMEOUT, "timed out"); }
+    return { hubId: "hub_1", status: "revoked", deletionStatus: "complete" };
+  };
+  const svc = makeService(dir, { apiClient, processManager: pm });
+  await svc.enable();
+  await waitFor(() => pm.startCalls.length >= 1);
+
+  const first = await svc.removeRemoteAccess();
+  assert.equal(first.ok, false);
+  assert.equal(first.code, CODES.AMBIGUOUS_TIMEOUT);
+  assert.equal(Store.load(dir).hubId, "hub_1", "local state must be retained after an ambiguous outcome — a retry must still be possible");
+
+  const second = await svc.removeRemoteAccess();
+  assert.equal(second.ok, true);
+  assert.equal(Store.load(dir).hubId, null);
+});
+
+test("removeRemoteAccess() against a legacy install with no signable identity skips disableHub, clears local state, and returns a manual-cleanup warning", async () => {
+  const dir = tempBaseDir();
+  // Matches a real pre-Milestone-B install: hubId persisted, but no
+  // installationId and no stored private key were ever set for this dir.
+  Store.save(dir, { enabled: false, hubId: "hub_5a23cd576411", hostname: "5a23cd576411.snapcon.app", publicUrl: "https://5a23cd576411.snapcon.app", tunnelId: "c3d018ff-255c-45dd-936e-5abe83f07e4f" });
+  let disableHubCalled = false;
+  const apiClient = { async disableHub() { disableHubCalled = true; } };
+  const svc = makeService(dir, { apiClient });
+
+  const result = await svc.removeRemoteAccess();
+  assert.equal(result.ok, true);
+  assert.match(result.warning, /manually|Cloudflare dashboard/i);
+  assert.equal(disableHubCalled, false, "there is no way to sign a DELETE for a legacy install — disableHub must never be called");
+  assert.equal(Store.load(dir).hubId, null, "local state must still be cleared even though the backend couldn't be reached");
+});
+
+test("removeRemoteAccess() is a no-op when nothing is provisioned locally", async () => {
+  const dir = tempBaseDir();
+  const svc = makeService(dir);
+  const result = await svc.removeRemoteAccess();
+  assert.equal(result.ok, true);
 });

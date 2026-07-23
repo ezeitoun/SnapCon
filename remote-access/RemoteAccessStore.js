@@ -9,7 +9,6 @@
 // displays openly).
 const fs = require("fs");
 const path = require("path");
-const crypto = require("crypto");
 
 const DEFAULTS = {
   enabled: false,
@@ -22,7 +21,10 @@ const DEFAULTS = {
   createdAt: null,
   lastConnectedAt: null,
   installationId: null,
-  allowInsecureFallback: false
+  allowInsecureFallback: false,
+  registrationSessionId: null,
+  registerUrl: null,
+  registrationExpiresAt: null
 };
 
 function dataDir(baseDir) {
@@ -43,9 +45,9 @@ function load(baseDir) {
 
 // Defense in depth, not just convention: strip any secret-shaped field a
 // caller might accidentally include, so a coding mistake elsewhere can never
-// make the token land in this plain-JSON file. The real token only ever
-// lives in SecureCredentialStore.
-const FORBIDDEN_KEYS = ["tunnelToken", "token", "apiKey", "password"];
+// make the token land in this plain-JSON file. The real secrets only ever
+// live in SecureCredentialStore.
+const FORBIDDEN_KEYS = ["tunnelToken", "token", "apiKey", "password", "privateKey", "ed25519PrivateKeyJwk"];
 function save(baseDir, patch) {
   const current = load(baseDir);
   const cleanPatch = { ...patch };
@@ -56,15 +58,4 @@ function save(baseDir, patch) {
   return next;
 }
 
-// Stable per-install identifier, used as the seed for the provisioning
-// Idempotency-Key. Generated once, persisted, never regenerated — a fresh
-// UUID on every call would defeat the point of an idempotency key.
-function getOrCreateInstallationId(baseDir) {
-  const current = load(baseDir);
-  if (current.installationId) return current.installationId;
-  const id = crypto.randomUUID();
-  save(baseDir, { installationId: id });
-  return id;
-}
-
-module.exports = { DEFAULTS, dataDir, filePath, load, save, getOrCreateInstallationId };
+module.exports = { DEFAULTS, dataDir, filePath, load, save };

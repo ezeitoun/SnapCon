@@ -2144,6 +2144,7 @@ $("gear").addEventListener("click",()=>{
 });
 $("raEnableBtn").addEventListener("click",enableRemoteAccess);
 $("raDisableBtn").addEventListener("click",disableRemoteAccess);
+$("raRemoveBtn").addEventListener("click",removeRemoteAccess);
 $("raCopyBtn").addEventListener("click",async ()=>{
   const url=$("raPublicUrl").textContent;
   if(!url) return;
@@ -2347,17 +2348,21 @@ async function loadRemoteAccessStatus(){
 }
 
 function renderRemoteAccess(s){
-  $("raDevBadge").style.display = s.developmentPreview ? "" : "none";
   $("raInsecureWarning").style.display = s.usingInsecureFallback ? "" : "none";
 
-  const stateLabels = { disabled:"Disabled", provisioning:"Starting", downloading:"Starting", starting:"Starting", connected:"Connected", reconnecting:"Reconnecting", error:"Error" };
-  const stateColors = { disabled:"#6A7180", provisioning:"#fbbf24", downloading:"#fbbf24", starting:"#fbbf24", connected:"#46C18C", reconnecting:"#fbbf24", error:"#E06A5C" };
+  const stateLabels = { disabled:"Disabled", registering:"Waiting for verification", provisioning:"Starting", downloading:"Starting", starting:"Starting", connected:"Connected", reconnecting:"Reconnecting", error:"Error" };
+  const stateColors = { disabled:"#6A7180", registering:"#fbbf24", provisioning:"#fbbf24", downloading:"#fbbf24", starting:"#fbbf24", connected:"#46C18C", reconnecting:"#fbbf24", error:"#E06A5C" };
   $("raStatusBadge").textContent = stateLabels[s.state] || s.state;
   $("raStatusBadge").style.setProperty("--status-color", stateColors[s.state] || "#6A7180");
 
   const running = s.state!=="disabled";
   $("raEnableBtn").style.display = running ? "none" : "";
   $("raDisableBtn").style.display = running ? "" : "none";
+  $("raRemoveBtn").style.display = running ? "" : "none";
+
+  const registering = s.state==="registering" && !!s.registerUrl;
+  $("raRegisterRow").style.display = registering ? "flex" : "none";
+  if(registering) $("raRegisterOpenBtn").href = s.registerUrl;
 
   const hasUrl = !!s.publicUrl;
   $("raUrlRow").style.display = hasUrl ? "flex" : "none";
@@ -2395,6 +2400,18 @@ async function disableRemoteAccess(){
     st.className="pstatus ok"; st.textContent="";
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
   finally{ $("raDisableBtn").disabled=false; loadRemoteAccessStatus(); }
+}
+async function removeRemoteAccess(){
+  if(!confirm("Remove Remote Access? This permanently deletes this device's remote Hub. You will need to complete the verification step again to re-enable it. This cannot be undone.")) return;
+  const st=$("raStatus"); st.className="pstatus work"; st.textContent="Removing…";
+  $("raRemoveBtn").disabled=true;
+  try{
+    const r=await postJSON("/api/remote-access/remove",{});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    st.className="pstatus ok"; st.textContent="";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ $("raRemoveBtn").disabled=false; loadRemoteAccessStatus(); }
 }
 
 async function loadConfigUI(){

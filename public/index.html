@@ -262,9 +262,6 @@
 
       <div class="set-panel" id="tab-remote" style="display:none">
         <div class="setcard">
-          <div id="raDevBadge" style="display:none;background:#3a2f14;border:1px solid #6b5420;color:#e8c37a;border-radius:6px;padding:6px 10px;font-size:12px;margin-bottom:12px">
-            Development Preview — uses a shared development provisioning key, not a customer-ready mechanism. Do not rely on this for production use.
-          </div>
           <div id="raInsecureWarning" style="display:none;background:#3a1414;border:1px solid #6b2020;color:#f0a0a0;border-radius:6px;padding:6px 10px;font-size:12px;margin-bottom:12px">
             ⚠ The tunnel token is stored in an INSECURE local file fallback (no OS credential store was available). This is not real secure storage.
           </div>
@@ -274,6 +271,13 @@
             <span class="status-badge" id="raStatusBadge" style="--status-color:#6A7180">Disabled</span>
             <button class="btn primary" id="raEnableBtn">Enable Remote Access</button>
             <button class="btn ghost" id="raDisableBtn" style="display:none">Disable Remote Access</button>
+            <button class="btn ghost" id="raRemoveBtn" style="display:none">Remove Remote Access</button>
+          </div>
+
+          <div id="raRegisterRow" style="display:none;margin-top:14px;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="pi-lbl">Verification</span>
+            <span>One-time step: open this link and complete the verification challenge in your browser to finish setting up this device.</span>
+            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener">Open Verification Page</a>
           </div>
 
           <div id="raUrlRow" style="display:none;margin-top:14px;align-items:center;gap:8px;flex-wrap:wrap">

@@ -1127,6 +1127,10 @@ app.post("/api/remote-access/disable", requireAdmin, (req, res) => {
   res.json({ ok: true, pending: true });
   remoteAccess.disable().catch(e => console.error("[remote-access] disable failed:", e.message));
 });
+app.post("/api/remote-access/remove", requireAdmin, (req, res) => {
+  res.json({ ok: true, pending: true });
+  remoteAccess.removeRemoteAccess().catch(e => console.error("[remote-access] remove failed:", e.message));
+});
 // No requireAuth: body/headers are fixed and carry zero identifying or
 // operational information — see remote-access plan, "Public endpoint probe."
 app.get("/api/remote-access/probe", (req, res) => {
