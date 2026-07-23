@@ -12,6 +12,7 @@ const Ed25519Identity = require("./Ed25519Identity");
 const { getSecureCredentialStore } = require("./SecureCredentialStore");
 const { redact } = require("./redact");
 const { createSerializer } = require("./serialize");
+const { version: APP_VERSION } = require("../package.json");
 
 // Any completed HTTP response counts as "reachable" — the point is proving
 // the request round-tripped through Cloudflare's edge back to this SnapCon
@@ -390,7 +391,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     state = "registering";
     let session;
     try {
-      session = await apiClient.createRegistrationSession({ publicKey: publicKeyB64, platform: process.platform, architecture: process.arch });
+      session = await apiClient.createRegistrationSession({ publicKey: publicKeyB64, appVersion: APP_VERSION, platform: process.platform, architecture: process.arch });
     } catch (e) {
       state = "error";
       lastError = e.code === ApiClient.CODES.AMBIGUOUS_TIMEOUT
