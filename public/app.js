@@ -6,7 +6,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||'Unknown Error'), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -78,6 +78,158 @@ function applyFileSortUI(){
   $('fileSortBtn').title = 'Sort: ' + (FILE_SORT_LABELS[FILE_SORT] || 'Newest');
 }
 
+// ---- Camera view: status tabs, tag filter, multi-select + bulk actions ----
+// All scoped to VIEW_MODE==='camera' only — switching back to regular/compact
+// always shows the full, unfiltered fleet with no selection UI at all.
+let CAM_TAB = 'all'; // 'all' | 'printing' | 'attention' | 'idle' | 'offline'
+let CAM_TAG_FILTER = '';
+let CAM_SELECTED = new Set();
+// Settings tab's "Stagger camera refresh across printers" — default true,
+// kept in sync with the checkbox at both load and save (same convention as
+// ALLOW_MAPPING/SUGGEST_MATCHING). See mountCamShot()'s staggerOffset for
+// why this matters at real fleet sizes: without it, every camera-capable
+// printer's refresh becomes due at the same instant, since they're all
+// mounted in the same renderFleet() pass.
+let CAM_STAGGER = true;
+function camBucket(p){
+  if(!p.online) return 'offline';
+  if(p.errorCode||p.message) return 'attention';
+  if(p.state==='printing'||p.state==='paused') return 'printing';
+  return 'idle'; // idle, complete, cancelled, maintenance
+}
+// Shared by the card grid and the list-view table — one source of truth for
+// the status-badge color/label mapping so the two render paths can't drift.
+function statusColorText(p){
+  if(!p.online) return { statusColor:"#6A7180", statusTxt:"Offline" };
+  if(p.state==="printing") return { statusColor:"#5B9BF0", statusTxt:"Printing" };
+  if(p.state==="paused") return { statusColor:"#fbbf24", statusTxt:"Paused" };
+  if(p.state==="error") return { statusColor:"#E06A5C", statusTxt:"Error" };
+  if(p.state==="complete") return { statusColor:"#22C5BE", statusTxt:"Complete" };
+  if(p.state==="cancelled") return { statusColor:"#E06A5C", statusTxt:"Cancelled" };
+  if(p.state==="maintenance") return { statusColor:"#A78BFA", statusTxt:"Maintenance" };
+  return { statusColor:"#46C18C", statusTxt:"Idle" };
+}
+
+// ---- Camera view: live snapshot elements persist ACROSS renders ----
+// renderFleet() rebuilds every card's innerHTML on every metadata poll tick
+// (every `refreshInterval` seconds, deliberately fast — see startFleetRefresh)
+// — if the camera <img> were part of that template string, it'd be torn down
+// and recreated on every one of those ticks, which reads as the image
+// blinking/reloading every 1-2s regardless of the camera refresh setting,
+// even though the server already serves a cached frame underneath. Instead
+// the template only emits an empty `.cam-shot-slot` marker; the actual
+// <img> (or, once a feed's been marked dead, a placeholder) lives here,
+// keyed by printer id, and is only swapped in for a NEW element (a real
+// network request) once camRefreshMs has actually elapsed — every render in
+// between just re-inserts the same element into that render's fresh slot.
+const CAM_SHOT_CACHE = new Map(); // printer id -> { el, nextDueAt, dead, refreshing }
+function camShotPlaceholderEl(text, onRetry){
+  const div=document.createElement("div");
+  div.className="cam-shot-placeholder"+(onRetry?" cam-shot-retryable":"");
+  div.innerHTML=`<img class="cam-shot-placeholder-icon" src="/camera-disabled.svg" alt=""><span>${esc(text)}</span>`;
+  if(onRetry){ div.title="Click to try again"; div.addEventListener("click", onRetry); }
+  return div;
+}
+// Some connectors (FlashForge's stream endpoint in particular) return a
+// perfectly valid HTTP 200 JPEG even when no physical camera is attached —
+// it's just a blank/near-black frame. capabilities.camera is a static
+// per-connector-type flag, so this is the only point anything can actually
+// tell "a camera should exist here" from "a live feed is really present."
+// Sampled at a tiny size purely for speed — a rough "basically all black"
+// heuristic, not real image analysis.
+function camShotIsBlack(img){
+  try{
+    const c=document.createElement("canvas");
+    c.width=16; c.height=12;
+    const ctx=c.getContext("2d");
+    ctx.drawImage(img,0,0,16,12);
+    const data=ctx.getImageData(0,0,16,12).data;
+    let sum=0;
+    for(let i=0;i<data.length;i+=4) sum+=(data[i]+data[i+1]+data[i+2])/3;
+    return (sum/(data.length/4)) < 8; // near-zero average luma across the sample
+  }catch{ return false; } // canvas read failure (e.g. tainted) — don't second-guess a real image over this
+}
+// Clears this printer's cache entry and rebuilds now, rather than waiting
+// for the next poll tick — wired as the click handler on a "No Feed"
+// placeholder, the only path back to a live attempt once a feed is dead.
+function retryCamShot(id){
+  CAM_SHOT_CACHE.delete(id);
+  renderFleet();
+}
+// Only called when there is NO previously-good frame to fall back to (the
+// very first attempt for this printer) — installs the placeholder in place
+// of whatever's currently in the cache and marks it dead (see mountCamShot's
+// dead check for why that stops future auto-retries).
+function camShotFailed(id){
+  const cached=CAM_SHOT_CACHE.get(id);
+  const ph=camShotPlaceholderEl("No Feed", ()=>retryCamShot(id));
+  if(cached && cached.el && cached.el.parentNode) cached.el.parentNode.replaceChild(ph, cached.el);
+  CAM_SHOT_CACHE.set(id, { el:ph, nextDueAt:Infinity, dead:true, refreshing:false });
+}
+// Fetches the NEXT frame in the background (an off-DOM Image, not the
+// visible element) and only swaps it in once it has fully loaded and passed
+// the black-frame check — the currently-displayed frame stays on screen
+// the entire time, so a refresh never shows a blank/black gap before the
+// new picture appears. A refresh that errors or comes back black is treated
+// as a transient blip, not a dead feed: the last known-good frame just stays
+// up and the next normal interval tries again — only the very first attempt
+// for a printer (mountCamShot's else-branch) has no fallback to keep
+// showing and flips straight to "No Feed" on failure.
+function startCamShotRefresh(id, refreshMs){
+  const cached=CAM_SHOT_CACHE.get(id);
+  if(!cached || cached.dead || cached.refreshing) return;
+  cached.refreshing=true;
+  const next=new Image();
+  next.onload=()=>{
+    const entry=CAM_SHOT_CACHE.get(id);
+    if(!entry) return; // pruned (printer removed) while this was in flight
+    entry.refreshing=false;
+    entry.nextDueAt=Date.now()+refreshMs;
+    if(camShotIsBlack(next)) return; // blip — keep the old frame, already rescheduled above
+    next.className="cam-shot"; next.alt=""; next.loading="lazy";
+    if(entry.el && entry.el.parentNode) entry.el.parentNode.replaceChild(next, entry.el);
+    entry.el=next;
+  };
+  next.onerror=()=>{
+    const entry=CAM_SHOT_CACHE.get(id);
+    if(entry){ entry.refreshing=false; entry.nextDueAt=Date.now()+refreshMs; } // blip — keep the old frame, retry next interval
+  };
+  next.src="/api/snapshot?printer="+id+"&t="+Date.now();
+}
+// stagger: at real fleet sizes (tens of printers), every camera-capable
+// printer gets mounted in the same renderFleet() pass, so without this
+// they'd all become "due" at the exact same instant, forever — a burst of
+// simultaneous RPC/MJPEG hits every single refresh cycle instead of spread
+// load. A random offset assigned ONCE per printer (on its first successful
+// load, baked into nextDueAt) keeps each printer on its own stable phase of
+// the refresh cycle for as long as its cache entry lives, rather than
+// re-randomizing — and therefore re-clustering by chance — every render.
+function mountCamShot(slot, id, refreshMs, stagger){
+  const cached=CAM_SHOT_CACHE.get(id);
+  if(cached){
+    // Always show whatever's already cached first — a refresh being due
+    // never means the slot goes blank while a new one loads, only that a
+    // background fetch for the NEXT frame kicks off alongside it.
+    slot.replaceWith(cached.el);
+    if(!cached.dead && !cached.refreshing && Date.now()>=cached.nextDueAt) startCamShotRefresh(id, refreshMs);
+    return;
+  }
+  // Nothing shown yet for this printer — this one request is unavoidably
+  // visible while it loads; every refresh after this goes through
+  // startCamShotRefresh() instead, which never blanks an already-visible frame.
+  const now=Date.now();
+  const img=document.createElement("img");
+  img.className="cam-shot"; img.alt=""; img.loading="lazy";
+  const firstDueAt=now+refreshMs+(stagger?Math.random()*refreshMs:0);
+  CAM_SHOT_CACHE.set(id, { el:img, nextDueAt:firstDueAt, dead:false, refreshing:false });
+  img.onload=()=>{
+    if(camShotIsBlack(img)) camShotFailed(id);
+  };
+  img.onerror=()=>camShotFailed(id);
+  img.src="/api/snapshot?printer="+id+"&t="+now;
+  slot.replaceWith(img);
+}
+
 // ---- Fleet sort ----
 let SORT_MODE = localStorage.getItem('snapcon-sort') || 'none';
 const STATUS_RANK = { printing:0, paused:1, error:2, cancelled:2, complete:3, idle:4 };
@@ -132,18 +284,57 @@ function applyFilesOpen(){
   }
 }
 
-// ---- Compact / Full toggle ----
+// ---- Regular / Compact / Camera / List view cycle ----
 // Launch state comes from the "Open in Compact Mode" setting (loadConfigUI);
-// the header button only switches the current session.
-let COMPACT = false;
-function applyCompact(){
-  document.body.classList.toggle('compact', COMPACT);
-  const btn = $('compactBtn');
-  if(btn){ btn.querySelector('img').src = COMPACT ? '/view-regular.svg' : '/view-compact.svg'; btn.title = COMPACT ? 'Switch to full view' : 'Switch to compact view'; }
+// the header button only switches the current session. The button's icon
+// always shows the NEXT mode a click will switch to (existing convention).
+let VIEW_MODE = 'regular'; // 'regular' | 'compact' | 'camera' | 'list'
+// Settings tab (View)'s "Alternate Display" — 'all' cycles through every
+// view (the original behavior); any specific mode instead makes the header
+// button a plain two-way toggle between Regular and that one view only.
+let ALT_DISPLAY = 'all'; // 'all' | 'compact' | 'camera' | 'list'
+const ALL_CYCLE = { regular:'compact', compact:'camera', camera:'list', list:'regular' };
+const VIEW_ICON  = { regular:'/view-regular.svg', compact:'/view-compact.svg', camera:'/view-camera.svg', list:'/view-list.svg' };
+const VIEW_TITLE = { regular:'Switch to full view', compact:'Switch to compact view', camera:'Switch to camera view', list:'Switch to list view' };
+function nextViewMode(){
+  if(ALT_DISPLAY==='all') return ALL_CYCLE[VIEW_MODE] || 'regular';
+  // Two-state toggle regardless of how VIEW_MODE got here (e.g. left over
+  // from a previous "All" setting) — anything that isn't already Regular
+  // goes back to Regular; Regular goes to the one configured alternate.
+  return VIEW_MODE==='regular' ? ALT_DISPLAY : 'regular';
 }
-function toggleCompact(){
-  COMPACT = !COMPACT;
-  applyCompact();
+// Camera view and list view share the same toolbar (status tabs, tag
+// filter, checkbox multi-select, bulk actions, Edit Tags) — Bambu's own
+// farm manager uses one toolbar for both its grid and list modes, and
+// there's no reason for a printer's tag or selection state to reset just
+// because the user switched between two views that both show it.
+function gridToolbarActive(){ return VIEW_MODE==='camera' || VIEW_MODE==='list'; }
+function applyViewMode(){
+  document.body.classList.toggle('compact', VIEW_MODE==='compact');
+  document.body.classList.toggle('camview', VIEW_MODE==='camera');
+  document.body.classList.toggle('listview', VIEW_MODE==='list');
+  // Selection/filters are grid-toolbar-only state — leaving BOTH camera and
+  // list view resets them so the next visit starts clean rather than
+  // silently carrying over a stale selection or filter from a previous
+  // session; switching between camera and list preserves it.
+  if(!gridToolbarActive()){ CAM_SELECTED.clear(); CAM_TAB='all'; CAM_TAG_FILTER=''; }
+  const btn = $('compactBtn');
+  if(btn){
+    const next=nextViewMode();
+    btn.querySelector('img').src = VIEW_ICON[next]; btn.title = VIEW_TITLE[next];
+  }
+  // Camera view polls each printer's snapshot on every fast metadata tick —
+  // the server (not the client poll interval) is what actually throttles
+  // real camera hardware (see getSnapshotThrottled() in server.js), so
+  // there's nothing to re-floor here; this just realigns the fleet poll
+  // timer immediately on a mode switch rather than waiting for it to
+  // naturally fire next.
+  if($("setRefresh")) startFleetRefresh();
+}
+function cycleViewMode(){
+  VIEW_MODE = nextViewMode();
+  applyViewMode();
+  renderFleet();
 }
 const ICONS = {
   pause:  `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`,
@@ -333,6 +524,25 @@ function wireUI(){
   wireModal("thumbmodal", closeThumb, ["thumbx"]);
   wireModal("snapmodal", closeSnapshot, ["snapx"]);
   wireModal("unloadmodal", closeUnload, ["unloadx","unloadNo"]);
+  wireModal("tagsmodal", closeTagsModal, ["tagsx","tagsCancel"]);
+  $("tagsSave").addEventListener("click", saveTagsEditor);
+  $("camEditTags").addEventListener("click", openTagsEditor);
+  document.querySelectorAll("#camTabs button[data-camtab]").forEach(b=>{
+    b.addEventListener("click",()=>{ CAM_TAB=b.dataset.camtab; renderFleet(); });
+  });
+  $("camTagFilter").addEventListener("change",()=>{ CAM_TAG_FILTER=$("camTagFilter").value; renderFleet(); });
+  $("camSelectAll").addEventListener("change",()=>{
+    const checked=$("camSelectAll").checked;
+    $("fleet").querySelectorAll(".cam-chk").forEach(el=>{
+      el.checked=checked;
+      const id=parseInt(el.dataset.camsel,10);
+      if(checked) CAM_SELECTED.add(id); else CAM_SELECTED.delete(id);
+    });
+    updateCamToolbar();
+  });
+  $("camBulkPause").addEventListener("click",()=>bulkCtl("pause"));
+  $("camBulkResume").addEventListener("click",()=>bulkCtl("resume"));
+  $("camBulkCancel").addEventListener("click",()=>bulkCtl("cancel"));
   $("unloadColorSwatch").addEventListener("input",()=>{ $("unloadColorHex").value=$("unloadColorSwatch").value.toUpperCase(); });
   $("unloadColorHex").addEventListener("input",()=>{
     let v=$("unloadColorHex").value.trim();
@@ -345,6 +555,12 @@ function wireUI(){
     if(/^#[0-9a-fA-F]{6}$/.test(v)) $("unloadColorHex").value=v.toUpperCase();
   });
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
+  wireModal("bulkheatmodal", closeBulkHeatModal, ["bulkheatx","bulkheatCancel"]);
+  $("bulkHeatBtn").addEventListener("click", openBulkHeat);
+  $("bulkheatStagger").addEventListener("change", ()=>{
+    $("bulkheatStaggerRow").style.display = $("bulkheatStagger").checked ? "flex" : "none";
+  });
+  $("bulkheatGo").addEventListener("click", doBulkHeat);
   wireModal("subnetModal", closeSubnetModal, ["subnetModalX","subnetModalCancel"]);
   $("subnetModalScan").addEventListener("click", doSubnetScan);
   wireModal("newFolderModal", closeNewFolderModal, ["newFolderModalX","newFolderModalCancel"]);
@@ -411,8 +627,8 @@ function wireUI(){
 
   document.addEventListener("click", ()=>{ $("sortMenu").classList.remove("open"); $("fileSortMenu").classList.remove("open"); });
 
-  applyCompact();
-  $("compactBtn").addEventListener("click", toggleCompact);
+  applyViewMode();
+  $("compactBtn").addEventListener("click", cycleViewMode);
 
   applyFilesOpen();
   $("filesBtn").addEventListener("click", ()=>{ FILES_OPEN=!FILES_OPEN; applyFilesOpen(); });
@@ -1069,27 +1285,36 @@ function renderFleet(){
     const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
     return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
   });
+  // Status tabs + tag filter are shared by camera/list view only — tab
+  // counts/tag options are computed from `fleet` (respects the search box
+  // above) before this stage narrows further, so switching views never
+  // leaves a stale filter silently hiding printers in regular/compact.
+  const camRefreshMs=(parseInt(($("setCameraRefresh")||{value:""}).value,10)||6)*1000;
+  let camFleet=fleet;
+  if(gridToolbarActive()){
+    renderCamToolbar(fleet);
+    camFleet=fleet.filter(p=>{
+      if(CAM_TAB!=='all' && camBucket(p)!==CAM_TAB) return false;
+      if(CAM_TAG_FILTER && !(p.tags||[]).includes(CAM_TAG_FILTER)) return false;
+      return true;
+    });
+  }
+  if(VIEW_MODE==='list'){
+    renderFleetListRows(camFleet, wrap, camRefreshMs);
+  } else {
   // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
   // /api/config, which is admin-only server-side — gate on isAdmin(), not
   // canAct(), or a Regular user's drag would silently 403 and revert with
   // no visible feedback (Settings, where the error would surface, is hidden
   // from them entirely).
-  const dragEnabled=SORT_MODE==='none'&&!q&&isAdmin();
-  fleet.forEach(p=>{
+  const camFiltered=gridToolbarActive()&&(CAM_TAB!=='all'||!!CAM_TAG_FILTER);
+  const dragEnabled=SORT_MODE==='none'&&!q&&!camFiltered&&isAdmin();
+  camFleet.forEach(p=>{
     const card=document.createElement("div");
     card.className="pcard"+(p.online?"":" offline");
     card.dataset.pid=p.id;
     // status pill
-    let statusColor="#6A7180", statusTxt="Offline";
-    if(p.online){
-      if(p.state==="printing"){ statusColor="#5B9BF0"; statusTxt="Printing"; }
-      else if(p.state==="paused"){ statusColor="#fbbf24"; statusTxt="Paused"; }
-      else if(p.state==="error"){ statusColor="#E06A5C"; statusTxt="Error"; }
-      else if(p.state==="complete"){ statusColor="#22C5BE"; statusTxt="Complete"; }
-      else if(p.state==="cancelled"){ statusColor="#E06A5C"; statusTxt="Cancelled"; }
-      else if(p.state==="maintenance"){ statusColor="#A78BFA"; statusTxt="Maintenance"; }
-      else { statusColor="#46C18C"; statusTxt="Idle"; }
-    }
+    const {statusColor, statusTxt}=statusColorText(p);
     // heads
     const heads=(p.heads||[]);
     const headsHtml=heads.map((h,i)=>{
@@ -1138,8 +1363,14 @@ function renderFleet(){
       }
     }
     card.innerHTML=`
-      <div class="top"><span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Web Interface"><img src="/fluidd-pill.svg" alt="Web Interface"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top">${VIEW_MODE==='camera'?`<label class="cam-select"><input type="checkbox" class="cam-chk" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Web Interface"><img src="/fluidd-pill.svg" alt="Web Interface"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
+      ${VIEW_MODE==='camera'?(!p.online
+          ? `<div class="cam-shot-placeholder"><span>Offline</span></div>`
+          : p.capabilities?.camera
+            ? `<div class="cam-shot-slot" data-camslot="${p.id}"></div>`
+            : `<div class="cam-shot-placeholder"><img class="cam-shot-placeholder-icon" src="/camera-disabled.svg" alt=""><span>Camera Disabled</span></div>`
+        ):''}
       ${p.queuedFile?queuedFileBannerHtml(p):''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
         const e=lookupKlipperError(p.errorCode, p.message);
@@ -1178,15 +1409,41 @@ function renderFleet(){
         const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
         const fillCls=pctCls, dotCls=p.state==='paused'?'amber':'';
         const showDot=p.state!=='complete';
+        const camView=VIEW_MODE==='camera';
+        // Camera view has no room for the temps/thumbnail stats-bar (hidden
+        // entirely — see body.camview CSS) and no use for filament meters
+        // when the whole point of this view is watching the print happen —
+        // layer progress is the one stat from that row worth keeping, and
+        // the thumbnail moves up alongside the filename instead.
         const filM=p.filamentUsed!=null?(p.filamentUsed/1000).toFixed(1)+'m':'—';
+        const layerTxt=p.layer?p.layer.current+'/'+p.layer.total:'—';
+        const stem=p.filename||"";
+        // Built once, reused as-is for regular/compact (a sibling of
+        // .prog-file, unchanged from before) and nested inside .cam-prog-file
+        // for camera view, where the thumbnail spans both the filename row
+        // and this row via CSS grid (see .cam-prog-file in style.css).
+        const progRowHtml=`<div class="prog-row"><span class="prog-pct ${pctCls}">${pct}%</span>`+
+          `<div class="prog-track ${trackCls}"><div class="prog-fill ${fillCls}" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div>${showDot?`<div class="prog-dot ${dotCls}" style="left:${pct}%"></div>`:''}</div></div>`;
+        // The progress bar itself always renders, error or not (unchanged
+        // from before this camera-view work) — only the filename/thumbnail
+        // part is hidden on error, in favor of the klipper-err-panel above
+        // it. On error, camera view falls back to the bare bar too (no
+        // filename to pair the thumbnail's grid span against).
+        const fileSection = (p.errorCode||p.message)
+          ? progRowHtml
+          : camView
+            ? `<div class="cam-prog-file">`+
+                `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" title="Click to enlarge"`:''}>${stem?`<img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)">`:''}</div>`+
+                `<span class="prog-file-name">${esc(stem||'—')}</span>`+
+                progRowHtml+
+              `</div>`
+            : `<div class="prog-file">${esc(stem||'—')}</div>`+progRowHtml;
         return `<div class="progress-section">`+
-          (p.errorCode||p.message?'':(`<div class="prog-file">${esc(p.filename||'—')}</div>`))+
-          `<div class="prog-row"><span class="prog-pct ${pctCls}">${pct}%</span>`+
-          `<div class="prog-track ${trackCls}"><div class="prog-fill ${fillCls}" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div>${showDot?`<div class="prog-dot ${dotCls}" style="left:${pct}%"></div>`:''}</div></div>`+
+          fileSection+
           (p.errorCode||p.message?'':`<div class="prog-times">`+
           `<div class="prog-time-cell"><span class="prog-time-label">Elapsed</span><span class="prog-time-val">${fmtClock(p.elapsed)}</span></div>`+
           `<div class="prog-time-sep"></div>`+
-          `<div class="prog-time-cell center"><span class="prog-time-label">Filament</span><span class="prog-time-val">${filM}</span></div>`+
+          `<div class="prog-time-cell center"><span class="prog-time-label">${camView?'Layer':'Filament'}</span><span class="prog-time-val">${camView?layerTxt:filM}</span></div>`+
           `<div class="prog-time-sep"></div>`+
           `<div class="prog-time-cell end"><span class="prog-time-label">Remaining</span><span class="prog-time-val">${fmtRemaining(p.elapsed,p.progress)}</span></div>`+
           `</div>`)+`</div>`;
@@ -1207,8 +1464,13 @@ function renderFleet(){
         }
       </div>
       <div class="pstatus" id="pst-${p.id}"></div>`;
+    if(VIEW_MODE==='camera' && p.online && p.capabilities?.camera){
+      const slot=card.querySelector('.cam-shot-slot[data-camslot="'+p.id+'"]');
+      if(slot) mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
+    }
     wrap.appendChild(card);
   });
+  }
   $("fleetcount").textContent=online+"/"+FLEET.length+" online";
   wrap.querySelectorAll("button[data-id]").forEach(b=>{
     b.addEventListener("click",()=>{
@@ -1255,6 +1517,210 @@ function renderFleet(){
   });
   wrap.querySelectorAll("button[data-queued-print]").forEach(b=>{
     b.addEventListener("click",()=>printQueuedFile(parseInt(b.dataset.queuedPrint,10), b.dataset.queuedFile));
+  });
+  wrap.querySelectorAll(".cam-chk").forEach(el=>{
+    el.addEventListener("change",()=>{
+      const id=parseInt(el.dataset.camsel,10);
+      if(el.checked) CAM_SELECTED.add(id); else CAM_SELECTED.delete(id);
+      updateCamToolbar();
+    });
+  });
+  if(gridToolbarActive()) updateCamToolbar();
+}
+
+// preTabFleet: the post-search, pre-tab/tag-filter array — tab counts and the
+// tag dropdown reflect what's actually available to filter into, not just
+// what's currently showing after CAM_TAB/CAM_TAG_FILTER narrow it further.
+const CAM_TAB_LABELS = { all:"All", printing:"Printing", attention:"Attention Needed", idle:"Idle", offline:"Offline" };
+function renderCamToolbar(preTabFleet){
+  const bar=$("camViewBar");
+  if(!bar) return;
+  const counts={all:preTabFleet.length, printing:0, attention:0, idle:0, offline:0};
+  preTabFleet.forEach(p=>{ counts[camBucket(p)]++; });
+  document.querySelectorAll("#camTabs button[data-camtab]").forEach(b=>{
+    const key=b.dataset.camtab;
+    b.textContent=`${CAM_TAB_LABELS[key]} (${counts[key]})`;
+    b.classList.toggle("active", CAM_TAB===key);
+  });
+  const sel=$("camTagFilter");
+  if(sel){
+    const tags=[...new Set(FLEET.flatMap(p=>p.tags||[]))].sort();
+    sel.innerHTML=`<option value="">All tags</option>`+tags.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
+    sel.value=tags.includes(CAM_TAG_FILTER)?CAM_TAG_FILTER:"";
+    CAM_TAG_FILTER=sel.value;
+  }
+}
+// Selection can outlive a printer being removed, or a printer that no longer
+// matches the current filter scrolling out of the DOM — prune against the
+// live fleet before computing bulk-button eligibility so a stale id never
+// silently counts toward "N selected".
+function updateCamToolbar(){
+  for(const id of CAM_SELECTED){ if(!FLEET.some(f=>f.id===id)) CAM_SELECTED.delete(id); }
+  for(const id of CAM_SHOT_CACHE.keys()){ if(!FLEET.some(f=>f.id===id)) CAM_SHOT_CACHE.delete(id); }
+  const cnt=$("camSelCount"); if(cnt) cnt.textContent=CAM_SELECTED.size+" selected";
+  const selPrinters=[...CAM_SELECTED].map(id=>FLEET.find(f=>f.id===id)).filter(Boolean);
+  const eligibleFor=act=>selPrinters.some(p=>
+    act==='pause' ? p.state==='printing' :
+    act==='resume' ? p.state==='paused' :
+    p.state==='printing'||p.state==='paused' // cancel
+  );
+  if($("camBulkPause")) $("camBulkPause").disabled=!eligibleFor('pause');
+  if($("camBulkResume")) $("camBulkResume").disabled=!eligibleFor('resume');
+  if($("camBulkCancel")) $("camBulkCancel").disabled=!eligibleFor('cancel');
+  const selAll=$("camSelectAll");
+  if(selAll){
+    const chks=[...document.querySelectorAll(".cam-chk")];
+    selAll.checked = chks.length>0 && chks.every(c=>c.checked);
+  }
+}
+const BULK_ACT_LABELS = { pause:"paused", resume:"resumed", cancel:"cancelled" };
+async function bulkCtl(act){
+  const eligible=[...CAM_SELECTED].filter(id=>{
+    const p=FLEET.find(f=>f.id===id);
+    if(!p) return false;
+    return act==='pause' ? p.state==='printing' : act==='resume' ? p.state==='paused' : p.state==='printing'||p.state==='paused';
+  });
+  if(!eligible.length) return;
+  if(act==='cancel' && !confirm(`Cancel ${eligible.length} selected print${eligible.length>1?'s':''}? This can't be undone.`)) return;
+  const msg=$("camBulkMsg");
+  if(msg){ msg.className="pstatus work"; msg.textContent="Working…"; }
+  const results=await Promise.allSettled(eligible.map(async id=>{
+    const r=await postJSON("/api/printctl",{printer:id,action:act});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+  }));
+  const okCount=results.filter(r=>r.status==='fulfilled').length;
+  const skipped=CAM_SELECTED.size-eligible.length;
+  if(msg){
+    msg.className="pstatus "+(okCount===eligible.length?"ok":"err");
+    msg.textContent=`${okCount} ${BULK_ACT_LABELS[act]}`+(eligible.length-okCount?`, ${eligible.length-okCount} failed`:'')+(skipped?`, ${skipped} not eligible`:'');
+  }
+  loadFleet();
+}
+
+// ---- Edit Tags modal: one row per printer, comma-separated tags, only
+// changed rows are POSTed (Promise.allSettled) so an untouched printer's
+// tags are never re-sent/re-validated for no reason. ----
+function openTagsEditor(){
+  const wrap=$("tagsList");
+  wrap.innerHTML=FLEET.map(p=>{
+    const val=(p.tags||[]).join(", ");
+    return `<div class="tags-row" data-tagsrow="${p.id}">`+
+      `<span class="tags-row-name">${esc(p.name)}</span>`+
+      `<input type="text" class="field tags-row-input" data-tagsorig="${esc(val)}" value="${esc(val)}" placeholder="comma-separated tags">`+
+      `</div>`;
+  }).join("");
+  $("tagsmodal").classList.add("show");
+}
+function closeTagsModal(){ $("tagsmodal").classList.remove("show"); }
+async function saveTagsEditor(){
+  const rows=[...document.querySelectorAll("#tagsList .tags-row")];
+  const changed=rows.filter(r=>{
+    const input=r.querySelector(".tags-row-input");
+    return input.value.trim()!==(input.dataset.tagsorig||"").trim();
+  });
+  if(!changed.length){ closeTagsModal(); return; }
+  await Promise.allSettled(changed.map(r=>{
+    const id=parseInt(r.dataset.tagsrow,10);
+    const tags=r.querySelector(".tags-row-input").value.split(",").map(t=>t.trim()).filter(Boolean);
+    return postJSON("/api/printer-tags",{printer:id,tags});
+  }));
+  closeTagsModal();
+  loadFleet();
+}
+
+// ---- List view: one <table> row per printer instead of a card ----
+// Shares the camera view's toolbar (tabs/tag-filter/bulk-select — see
+// gridToolbarActive()) but needs none of the card grid's per-printer DOM
+// (renderFleet() branches to this function instead of its normal
+// camFleet.forEach card-building loop). Action buttons reuse the exact same
+// data-* attributes as the card footer (data-ctl/data-act, data-estop,
+// data-id/data-start, data-preheat, data-plate) so the generic
+// wrap.querySelectorAll(...) wiring at the end of renderFleet() covers them
+// with no changes — same for the .cam-chk checkbox and [data-thumb]/
+// [data-snap]. null = not sorted by name (whatever order camFleet arrived
+// in); toggles asc/desc thereafter, same as any single-column table sort.
+let LIST_SORT_NAME_DIR = null; // null | 'asc' | 'desc'
+function renderFleetListRows(camFleet, wrap, camRefreshMs){
+  const rows = LIST_SORT_NAME_DIR
+    ? [...camFleet].sort((a,b)=>{
+        const c=(a.name||"").localeCompare(b.name||"");
+        return LIST_SORT_NAME_DIR==='asc' ? c : -c;
+      })
+    : camFleet;
+  const sortArrow = LIST_SORT_NAME_DIR==='asc' ? '▲' : LIST_SORT_NAME_DIR==='desc' ? '▼' : '⇅';
+  const table=document.createElement("table");
+  table.className="fleet-list";
+  // Percentage widths (rather than px) so the columns always sum to the
+  // table's own width and can never overflow into — or get squeezed by —
+  // one another regardless of screen size; that's what let Actions visually
+  // crowd into Filament's space before. Progress is 8% here (was ~16%),
+  // halved per feedback; the rest of that share went to Actions/Filament.
+  table.innerHTML=`<colgroup>`+
+      `<col style="width:32px"><col style="width:19%"><col style="width:9%">`+
+      `<col style="width:19%"><col style="width:13%"><col style="width:8%">`+
+      `<col style="width:16%"><col style="width:13%">`+
+    `</colgroup>`+
+    `<thead><tr>`+
+    `<th class="list-th-chk"></th>`+
+    `<th class="list-th-sort" data-listsort="name">Printer <span class="list-sort-arrow">${sortArrow}</span></th>`+
+    `<th>Tags</th><th>File</th><th>Status</th><th>Progress</th><th>Filament</th><th>Actions</th>`+
+    `</tr></thead><tbody></tbody>`;
+  const tbody=table.querySelector("tbody");
+  rows.forEach(p=>{
+    const {statusColor, statusTxt}=statusColorText(p);
+    const busy=p.online&&(p.state==="printing"||p.state==="paused");
+    const maintMode=p.state==="maintenance";
+    const canSend=p.online&&SELECTED&&!busy&&!maintMode;
+    const stem=p.filename||"";
+    const fileCell=stem
+      ? `<div class="list-file-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="list-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"><span class="list-file-name">${esc(stem)}</span></div>`
+      : `<span class="list-file-empty">—</span>`;
+    const pct=p.online&&p.progress!=null?p.progress*100:null;
+    const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
+    const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
+    const progressCell=pct!=null
+      ? `<div class="list-progress">`+
+          `<div class="list-progress-row"><span class="list-progress-pct ${pctCls}">${pct.toFixed(0)}%</span>`+
+          `<div class="prog-track list-progress-track ${trackCls}"><div class="prog-fill list-progress-fill ${pctCls}" style="width:${pct}%"></div></div></div>`+
+          `<div class="list-progress-meta">${fmtRemaining(p.elapsed,p.progress)}${p.layer?` <span class="list-progress-sep">·</span> L${p.layer.current}/${p.layer.total}`:''}</div>`+
+        `</div>`
+      : `<span class="list-file-empty">—</span>`;
+    // Bambu-style [PLA] chip: material name on a background of its own
+    // color, one per LOADED toolhead only (unlike the card view's full
+    // head grid, an empty-slot placeholder here would just be clutter).
+    const filamentCell=p.capabilities?.filamentHeads
+      ? ((p.heads||[]).slice(0,4).filter(h=>h&&h.loaded).map(h=>{
+          const hex=h.hex||'#3a3f49';
+          const dark=needsDarkText(hex);
+          return `<span class="list-filament-chip" style="background:${hex};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,6))}</span>`;
+        }).join("")) || `<span class="list-file-empty">—</span>`
+      : `<span class="list-file-empty">—</span>`;
+    const actionsCell=busy
+      ? (p.state==="paused"
+            ? `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="Resume"><img src="/print-icon.svg" alt=""></button>`
+            : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="Pause"><img src="/pause-icon.svg" alt=""></button>`)
+        + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="Cancel"><img src="/stop-icon.svg" alt=""></button>`
+        + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-estop="${p.id}" title="Emergency Stop"><img src="/estop-icon.svg" alt=""></button>`
+      : `<button class="btn-chip icon-only" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?"Printer is in maintenance mode":"Upload to printer"}"><img src="/upload-file.svg" alt=""></button>`
+        + `<button class="btn-chip icon-only" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?"Printer is in maintenance mode":SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/print-icon.svg" alt=""></button>`
+        + `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/preheat-icon.svg" alt=""></button>`;
+    const tr=document.createElement("tr");
+    tr.className="list-row"+(p.online?"":" offline");
+    tr.innerHTML=`<td class="list-th-chk"><label class="cam-select"><input type="checkbox" class="cam-chk" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label></td>`+
+      `<td class="list-printer-cell"><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></td>`+
+      `<td>${(p.tags||[]).map(t=>`<span class="list-tag">${esc(t)}</span>`).join("")||'<span class="list-file-empty">—</span>'}</td>`+
+      `<td>${fileCell}</td>`+
+      `<td><span class="status-badge" style="--status-color:${statusColor}">${statusTxt}</span>${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm list-status-cam" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}</td>`+
+      `<td>${progressCell}</td>`+
+      `<td><div class="list-filament-cell">${filamentCell}</div></td>`+
+      `<td><div class="list-actions-cell">${actionsCell}</div></td>`;
+    tbody.appendChild(tr);
+  });
+  wrap.appendChild(table);
+  table.querySelector('[data-listsort="name"]').addEventListener("click",()=>{
+    LIST_SORT_NAME_DIR = LIST_SORT_NAME_DIR==='asc' ? 'desc' : 'asc';
+    renderFleet();
   });
 }
 
@@ -1686,7 +2152,11 @@ async function loadSnapshot(){
   wrap.innerHTML='<span style="color:var(--ink-dim)">Loading…</span>';
   $("snapts").textContent='';
   try{
-    const r=await fetch('/api/snapshot?printer='+SNAP_PRINTER+'&t='+Date.now());
+    // fresh=1: this is an explicit user action (opening the modal, clicking
+    // Refresh) — always bypass the server's short-lived snapshot cache
+    // (used to throttle the camera-view grid's automatic polling) so a
+    // manual refresh never shows the same frame it just showed.
+    const r=await fetch('/api/snapshot?printer='+SNAP_PRINTER+'&fresh=1&t='+Date.now());
     if(!r.ok){
       let msg='Server error '+r.status;
       try{ const j=await r.json(); msg=j.error||msg; }catch{}
@@ -1819,6 +2289,81 @@ function openBedModal(printerId){
   setTimeout(()=>$("bedmodalinput").focus(),100);
 }
 function closeBedModal(){ $("bedmodal").classList.remove("show"); }
+
+// ---- Heat multiple printers (bed temp only — see openPreheat/doBedSet;
+// there is no hotend-temperature capability anywhere in this codebase) ----
+// BULKHEAT_CANCEL is checked between each printer in a staggered run, and
+// set whenever the modal closes (✕, Cancel, or backdrop click via
+// wireModal) — closing the modal stops any in-flight sequence rather than
+// letting it keep silently heating printers in the background.
+let BULKHEAT_CANCEL = false;
+function openBulkHeat(){
+  const online = FLEET.filter(p=>p.online);
+  $("bulkheatList").innerHTML = online.length
+    ? online.map(p=>`<label class="bulkheat-row"><input type="checkbox" class="bulkheat-chk" data-bulkheatid="${p.id}"><span>${esc(p.name)}</span></label>`).join("")
+    : `<div class="hint">No online printers.</div>`;
+  $("bulkheatTemp").value = 60;
+  $("bulkheatStagger").checked = true;
+  $("bulkheatStaggerRow").style.display = "flex";
+  $("bulkheatStaggerSecs").value = 60;
+  $("bulkheatStatus").innerHTML = "";
+  $("bulkheatGo").disabled = false;
+  BULKHEAT_CANCEL = false;
+  $("bulkheatmodal").classList.add("show");
+}
+function closeBulkHeatModal(){
+  BULKHEAT_CANCEL = true;
+  $("bulkheatmodal").classList.remove("show");
+}
+function bulkheatSetRowStatus(id, cls, text){
+  const row = document.getElementById("bulkheat-st-"+id);
+  if(!row) return;
+  const v = row.querySelector(".bulkheat-status-val");
+  v.className = "bulkheat-status-val "+cls;
+  v.textContent = text;
+}
+async function bulkheatOne(id, temp){
+  bulkheatSetRowStatus(id, "work", "Heating…");
+  try{
+    const r=await postJSON("/api/bedtemp",{printer:id,temp});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    bulkheatSetRowStatus(id, "ok", "Set to "+temp+"°");
+  }catch(e){ bulkheatSetRowStatus(id, "err", e.message); }
+}
+async function doBulkHeat(){
+  const ids=[...document.querySelectorAll(".bulkheat-chk:checked")].map(c=>parseInt(c.dataset.bulkheatid,10));
+  const temp=parseInt($("bulkheatTemp").value,10);
+  const status=$("bulkheatStatus");
+  if(!ids.length){ status.innerHTML='<div class="pstatus err">Select at least one printer.</div>'; return; }
+  if(!Number.isFinite(temp)||temp<0||temp>100){ status.innerHTML='<div class="pstatus err">Temperature must be 0–100°C.</div>'; return; }
+  const staggered=$("bulkheatStagger").checked;
+  const delayMs=staggered ? Math.max(5,parseInt($("bulkheatStaggerSecs").value,10)||60)*1000 : 0;
+  BULKHEAT_CANCEL=false;
+  $("bulkheatGo").disabled=true;
+  status.innerHTML = ids.map(id=>{
+    const p=FLEET.find(f=>f.id===id);
+    return `<div class="bulkheat-status-row" id="bulkheat-st-${id}"><span>${esc(p?p.name:"#"+id)}</span><span class="bulkheat-status-val">Queued…</span></div>`;
+  }).join("");
+  if(staggered){
+    for(let i=0;i<ids.length;i++){
+      if(BULKHEAT_CANCEL) break;
+      await bulkheatOne(ids[i], temp);
+      if(BULKHEAT_CANCEL) break;
+      if(i<ids.length-1) await new Promise(r=>setTimeout(r, delayMs));
+    }
+    // Anything never reached (cancelled mid-sequence) is still showing its
+    // initial "Queued…" placeholder — make that explicit rather than
+    // leaving a misleading "about to happen" label behind.
+    ids.forEach(id=>{
+      const row=document.getElementById("bulkheat-st-"+id);
+      if(row && row.querySelector(".bulkheat-status-val").textContent==="Queued…") bulkheatSetRowStatus(id,"err","Cancelled");
+    });
+  } else {
+    await Promise.allSettled(ids.map(id=>bulkheatOne(id, temp)));
+  }
+  $("bulkheatGo").disabled=false;
+  loadFleet();
+}
 
 // ---- Folder browser ----
 function openBrowse(){ $("browsemodal").classList.add("show"); navigateBrowse(null); }
@@ -2428,6 +2973,10 @@ async function loadConfigUI(){
     FILAMENT_COST=c.filamentCost||0; ELECTRICITY_RATE=c.electricityRate||0;
     $("setTNotation").checked=!!c.tNotation; USE_T_NOTATION=!!c.tNotation;
     $("setOpenCompact").checked=!!c.openCompact;
+    $("setCameraRefresh").value=c.cameraViewRefreshInterval||6;
+    CAM_STAGGER=c.cameraViewStagger!==false; $("setCameraStagger").checked=CAM_STAGGER;
+    ALT_DISPLAY=["all","compact","camera","list"].includes(c.alternateDisplay)?c.alternateDisplay:"all";
+    $("setAltDisplay").value=ALT_DISPLAY;
     ALLOW_MAPPING=c.allowMapping!==false; $("setAllowMapping").checked=ALLOW_MAPPING;
     SUGGEST_MATCHING=c.suggestMatching!==false; $("setSuggestMatching").checked=SUGGEST_MATCHING;
     $("setUsersEnabled").checked=!!c.usersEnabled;
@@ -2441,7 +2990,7 @@ async function loadConfigUI(){
     if(otp.service==="ntfy") $("otpSvcNtfy").checked=true; else $("otpSvcResend").checked=true;
     $("otpNtfyTopic").value=otp.ntfyTopic||"";
     applyOtpServiceUI();
-    COMPACT=!!c.openCompact; applyCompact();
+    VIEW_MODE=c.openCompact?'compact':'regular'; applyViewMode();
     const nf=c.notifications||{};
     $("ntfEnabled").checked=!!nf.enabled;
     $("ntfEvents").checked=!!nf.onEvents;
@@ -2686,6 +3235,14 @@ async function runDiscover(subnet){
   }
 }
 let FLEET_TIMER=null;
+// Metadata (temps/progress/status) always refreshes at the normal, fast
+// fleet refresh interval — including in camera view, so switching views
+// never slows down anything but the camera image itself. The camera <img>
+// src is still recomputed on every one of these ticks (see camBust in
+// renderFleet()), but that no longer means hammering real camera hardware:
+// the server throttles the actual per-printer fetch to
+// CFG.cameraViewRefreshInterval and serves a short-lived cached frame for
+// any request inside that window (see getSnapshotThrottled() in server.js).
 function startFleetRefresh(){
   if(FLEET_TIMER) clearInterval(FLEET_TIMER);
   const ms=(parseInt($("setRefresh").value,10)||2)*1000;
@@ -2721,12 +3278,15 @@ async function saveConfig(){
     s.textContent="Saving…";
   }
   const ri=parseInt($("setRefresh").value,10);
+  const cr=parseInt($("setCameraRefresh").value,10);
   const fc=parseFloat($("setFilamentCost").value)||0;
   const er=parseFloat($("setElectricityRate").value)||0;
   const tn=$("setTNotation").checked; USE_T_NOTATION=tn;
   ALLOW_MAPPING=$("setAllowMapping").checked; SUGGEST_MATCHING=$("setSuggestMatching").checked;
+  CAM_STAGGER=$("setCameraStagger").checked;
+  ALT_DISPLAY=$("setAltDisplay").value;
   CURRENCY=$("setCurrency").value.trim()||"$";
-  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
+  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     otp:{ service:$("otpSvcNtfy").checked?"ntfy":"resend", ntfyTopic:$("otpNtfyTopic").value.trim() },
@@ -2755,6 +3315,7 @@ async function saveConfig(){
     USERS_ENABLED=!!c.usersEnabled;
     if(USERS_ENABLED && !CURRENT_USER){ applyRoleUI(); showLoginOverlay(); }
     else applyRoleUI();
+    applyViewMode(); // refresh the header button's icon/title if Alternate Display just changed
     loadFiles(); loadFleet(); startFleetRefresh();
   }catch(e){ s.className="pstatus err"; s.textContent=e.message; }
 }

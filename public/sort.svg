@@ -1,28 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Sort">
-  <defs>
-    <linearGradient id="bg" x1="20" y1="14" x2="108" y2="116" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2D3548"/>
-      <stop offset="1" stop-color="#121722"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="30" y1="20" x2="98" y2="104" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#51A7FF"/>
-      <stop offset="1" stop-color="#7C4DFF"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#000" flood-opacity="0.42"/>
-    </filter>
-    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000" flood-opacity="0.30"/>
-    </filter>
-  </defs>
-  <rect x="10" y="10" width="108" height="108" rx="28" fill="url(#bg)" filter="url(#shadow)"/>
-  <path d="M24 29 C35 17 93 17 104 30" fill="none" stroke="#fff" stroke-opacity="0.10" stroke-width="5" stroke-linecap="round"/>
-  <g filter="url(#soft)">
-
-<rect x="26" y="39" width="60" height="9" rx="4.5" fill="url(#accent)"/>
-<rect x="26" y="59" width="44" height="9" rx="4.5" fill="url(#accent)" opacity="0.85"/>
-<rect x="26" y="79" width="28" height="9" rx="4.5" fill="url(#accent)" opacity="0.70"/>
-<path d="M96 38 L104 48 H88 Z" fill="#FFFFFF" opacity="0.88"/>
-<path d="M96 90 L104 80 H88 Z" fill="#FFFFFF" opacity="0.88"/>
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14" id="Ascending-Number-Order--Streamline-Core" height="14" width="14">
+  <desc>
+    Ascending Number Order Streamline Icon: https://streamlinehq.com
+  </desc>
+  <g id="ascending-number-order">
+    <path id="Union" fill="#8fbffa" fill-rule="evenodd" d="M11.167 0a0.75 0.75 0 0 1 0.75 0.75l0 4.25h0.917a0.75 0.75 0 0 1 0 1.5H9.5a0.75 0.75 0 0 1 0 -1.5h0.917l0 -2.313c-0.16 0.041 -0.328 0.063 -0.5 0.063H9.5a0.75 0.75 0 0 1 0 -1.5h0.417a0.5 0.5 0 0 0 0.5 -0.5 0.75 0.75 0 0 1 0.75 -0.75Zm-0.745 10.094 0.656 0c0.37 0 0.67 -0.298 0.672 -0.667v-0.01a0.672 0.672 0 0 0 -0.672 -0.667l-0.656 0a0.672 0.672 0 1 0 0 1.344Zm2.813 -0.935a2.172 2.172 0 0 0 -2.157 -1.909l-0.656 0a2.172 2.172 0 0 0 0 4.344l0.656 0c0.235 0 0.46 -0.037 0.672 -0.106v0.45c0 0.31 -0.252 0.562 -0.562 0.562h-0.875a0.563 0.563 0 0 1 -0.531 -0.375 0.75 0.75 0 1 0 -1.414 0.5A2.063 2.063 0 0 0 10.313 14h0.875a2.062 2.062 0 0 0 2.062 -2.063V9.431l0 -0.01 0 -0.008v-0.1a0.754 0.754 0 0 0 -0.015 -0.154Z" clip-rule="evenodd" stroke-width="1"></path>
+    <path id="Union_2" fill="#2859c5" fill-rule="evenodd" d="M4.75 1a1 1 0 0 0 -2 0v9h-1.5a0.75 0.75 0 0 0 -0.53 1.28l2.5 2.5a0.75 0.75 0 0 0 1.06 0l2.5 -2.5A0.75 0.75 0 0 0 6.25 10h-1.5V1Z" clip-rule="evenodd" stroke-width="1"></path>
   </g>
 </svg>

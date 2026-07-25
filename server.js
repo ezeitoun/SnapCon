@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.1.0
+// server.js — SnapCon  ·  v0.2.0
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const express = require("express");
 const fs = require("fs");
@@ -709,11 +709,11 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     const p = PRINTERS[i];
     if (!p) return res.status(400).json({ error: "Unknown printer" });
     const conn = getConnector(p.connector);
-    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) });
+    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) });
   }
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
     const conn = getConnector(p.connector);
-    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) };
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) };
     const qf = queuedFile.get(i);
     const pl = pendingLoad.get(i);
     // queuedFile (uploading/ready/error) reflects the retry sweep actually
@@ -800,12 +800,51 @@ async function getSnapshot(p) {
   return c.getCameraSnapshot(p);
 }
 
+// Server-side throttle for the fleet Camera View's automatic polling: that
+// grid re-requests every printer's snapshot on every metadata poll tick
+// (the fast, user-configured fleet refresh interval — deliberately NOT
+// slowed down for this, so temps/progress/status keep updating promptly),
+// independent of how often the actual camera frame should change. Without
+// this, that would hit real camera hardware (RPC + wait on Snapmaker, a
+// fresh MJPEG connection on FlashForge) far more often than intended.
+// Cache TTL follows CFG.cameraViewRefreshInterval (Settings tab) — the knob
+// the user actually sees controls real request frequency, regardless of how
+// often the client happens to ask. ?fresh=1 (the single-printer snapshot
+// modal's open/Refresh — an explicit user action) always bypasses this and
+// re-primes the cache with the new frame.
+const snapshotCache = new Map(); // printer index -> { ts, contentType, buffer }
+const snapshotInflight = new Map(); // printer index -> in-flight Promise, so concurrent requests within one TTL window share one real fetch
+async function getSnapshotThrottled(p, idx) {
+  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;
+  const cached = snapshotCache.get(idx);
+  if (cached && Date.now() - cached.ts < ttlMs) return cached;
+  if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);
+  const pending = (async () => {
+    try {
+      const { contentType, buffer } = await getSnapshot(p);
+      const entry = { ts: Date.now(), contentType, buffer };
+      snapshotCache.set(idx, entry);
+      return entry;
+    } finally {
+      snapshotInflight.delete(idx);
+    }
+  })();
+  snapshotInflight.set(idx, pending);
+  return pending;
+}
+
 app.get("/api/snapshot", requireAuth, async (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p   = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   try {
-    const { contentType, buffer } = await getSnapshot(p);
+    let contentType, buffer;
+    if (req.query.fresh) {
+      ({ contentType, buffer } = await getSnapshot(p));
+      snapshotCache.set(idx, { ts: Date.now(), contentType, buffer });
+    } else {
+      ({ contentType, buffer } = await getSnapshotThrottled(p, idx));
+    }
     res.set("Content-Type", contentType);
     res.set("Cache-Control", "no-store");
     res.send(buffer);
@@ -1050,6 +1089,25 @@ app.post("/api/maintenance-mode", requireRegular, (req, res) => {
   }
 });
 
+// Separate, dedicated endpoint rather than routing through /api/config's
+// full printer-list rebuild below — that endpoint's whitelist has no tags
+// field, and this way editing tags never risks touching any other printer
+// field the Settings form itself doesn't know about.
+app.post("/api/printer-tags", requireAdmin, (req, res) => {
+  const { printer, tags } = req.body || {};
+  const p = PRINTERS[parseInt(printer, 10)];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  p.tags = Array.isArray(tags)
+    ? [...new Set(tags.map(t => String(t).trim()).filter(Boolean))].slice(0, 20).map(t => t.slice(0, 24))
+    : [];
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
+    res.json({ ok: true, tags: p.tags });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---- Settings: read/write config from the UI (no file editing) ----
 // Role-aware: non-Admin roles never see printers[] (and therefore never see
 // Moonraker tokens), notifications, or the Resend API key. This is the actual
@@ -1060,6 +1118,9 @@ function publicCfg(role) {
     gcodeFolder: CFG.gcodeFolder || "./gcode",
     folderResolved: FOLDER,
     refreshInterval: CFG.refreshInterval || 2,
+    cameraViewRefreshInterval: CFG.cameraViewRefreshInterval || 6,
+    cameraViewStagger: CFG.cameraViewStagger !== false,
+    alternateDisplay: CFG.alternateDisplay || "all",
     filamentCost: CFG.filamentCost || null,
     electricityRate: CFG.electricityRate || null,
     currency: CFG.currency || "$",
@@ -1146,6 +1207,11 @@ app.post("/api/config", requireAdmin, (req, res) => {
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
     refreshInterval: (typeof b.refreshInterval === "number" && b.refreshInterval >= 1 && b.refreshInterval <= 60) ? b.refreshInterval : (CFG.refreshInterval || 2),
+    cameraViewRefreshInterval: (typeof b.cameraViewRefreshInterval === "number" && b.cameraViewRefreshInterval >= 3 && b.cameraViewRefreshInterval <= 60) ? b.cameraViewRefreshInterval : (CFG.cameraViewRefreshInterval || 6),
+    // Defaults ON like allowMapping/suggestMatching below — absence must
+    // fall back to the previous stored value, not to false.
+    cameraViewStagger: (typeof b.cameraViewStagger === "boolean") ? b.cameraViewStagger : (CFG.cameraViewStagger !== false),
+    alternateDisplay: ["all","compact","camera","list"].includes(b.alternateDisplay) ? b.alternateDisplay : (CFG.alternateDisplay || "all"),
     filamentCost: (typeof b.filamentCost === "number" && b.filamentCost > 0) ? b.filamentCost : undefined,
     electricityRate: (typeof b.electricityRate === "number" && b.electricityRate > 0) ? b.electricityRate : undefined,
     currency: (typeof b.currency === "string" && b.currency.trim()) ? b.currency.trim().slice(0, 6) : "$",
@@ -1209,6 +1275,12 @@ app.post("/api/config", requireAdmin, (req, res) => {
           // got an id yet, then mints a fresh one for a genuinely new printer.
           const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === o.url);
           o.id = (existing && existing.id) || newPrinterId();
+          // Tags are only ever written via POST /api/printer-tags, never
+          // through this form-driven rebuild (the Settings printer-editing
+          // table has no tags field at all) — carry them forward from the
+          // matched existing printer the same way o.id is, or saving any
+          // general setting would silently wipe every printer's tags.
+          if (existing && Array.isArray(existing.tags) && existing.tags.length) o.tags = existing.tags;
           return o;
         })
       : (CFG.printers || [])

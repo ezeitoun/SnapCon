@@ -1,27 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Gear Settings">
-  <defs>
-    <linearGradient id="bg" x1="20" y1="14" x2="108" y2="116" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#2D3548"/>
-      <stop offset="1" stop-color="#121722"/>
-    </linearGradient>
-    <linearGradient id="accent" x1="30" y1="20" x2="98" y2="104" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#51A7FF"/>
-      <stop offset="1" stop-color="#7C4DFF"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#000" flood-opacity="0.42"/>
-    </filter>
-    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000" flood-opacity="0.30"/>
-    </filter>
-  </defs>
-  <rect x="10" y="10" width="108" height="108" rx="28" fill="url(#bg)" filter="url(#shadow)"/>
-  <path d="M24 29 C35 17 93 17 104 30" fill="none" stroke="#fff" stroke-opacity="0.10" stroke-width="5" stroke-linecap="round"/>
-  <g filter="url(#soft)">
-    
-<path fill="url(#accent)" d="M69 25l4 11c3 1 6 2 9 4l11-5 10 17-9 7c0 2 1 4 1 6s0 4-1 6l9 7-10 17-11-5c-3 2-6 3-9 4l-4 11H49l-4-11c-3-1-6-2-9-4l-11 5-10-17 9-7c0-2-1-4-1-6s0-4 1-6l-9-7 10-17 11 5c3-2 6-3 9-4l4-11h20z"/>
-<circle cx="59" cy="65" r="19" fill="#151B28" opacity="0.82"/>
-<circle cx="59" cy="65" r="10" fill="#FFFFFF" opacity="0.86"/>
-
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14" id="Cog--Streamline-Core" height="14" width="14">
+  <desc>
+    Cog Streamline Icon: https://streamlinehq.com
+  </desc>
+  <g id="cog--work-loading-cog-gear-settings-machine">
+    <path id="Subtract" fill="#8fbffa" fill-rule="evenodd" d="m5.557 0.69 -0.463 1.195 -1.594 0.904 -1.27 -0.194a1.077 1.077 0 0 0 -1.078 0.528l-0.43 0.754a1.077 1.077 0 0 0 0.086 1.217l0.807 1.001v1.81L0.83 8.906a1.077 1.077 0 0 0 -0.086 1.217l0.43 0.754a1.077 1.077 0 0 0 1.078 0.528l1.27 -0.194 1.573 0.904 0.463 1.196a1.076 1.076 0 0 0 1 0.689h0.905a1.076 1.076 0 0 0 1.002 -0.69l0.463 -1.195 1.572 -0.904 1.27 0.194a1.077 1.077 0 0 0 1.078 -0.528l0.43 -0.754a1.077 1.077 0 0 0 -0.086 -1.217l-0.807 -1.001v-1.81l0.786 -1.001a1.077 1.077 0 0 0 0.086 -1.217l-0.43 -0.754a1.076 1.076 0 0 0 -1.078 -0.528l-1.27 0.194 -1.573 -0.904L8.443 0.689A1.077 1.077 0 0 0 7.442 0h-0.884a1.077 1.077 0 0 0 -1.001 0.69ZM7 9.25a2.25 2.25 0 1 0 0 -4.5 2.25 2.25 0 0 0 0 4.5Z" clip-rule="evenodd" stroke-width="1"></path>
   </g>
 </svg>

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- SnapCon — index v0.1.0 -->
+<!-- SnapCon — index v0.2.0 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -87,6 +87,7 @@
         </div>
       </div>
       <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
+      <button class="gear" id="bulkHeatBtn" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" alt="Heat"></button>
       <button class="gear" id="maintBtn" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" alt="Maintenance"></button>
       <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
       <div class="user-badge" id="userBadge" style="display:none">
@@ -98,6 +99,7 @@
 
       <div class="set-tabs">
         <button class="set-tab active" data-tab="general">General</button>
+        <button class="set-tab" data-tab="prefs">View</button>
         <button class="set-tab" data-tab="notif">Notifications</button>
         <button class="set-tab" data-tab="printers">Printers</button>
         <button class="set-tab" data-tab="firmware">Firmware</button>
@@ -133,10 +135,6 @@
           </button>
         </div>
 
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setTNotation"> Use T0/T1/T2/T3 notation <span class="hint">default: 1–4</span></label>
-
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setOpenCompact"> Open in Compact Mode <span class="hint">start the page in compact view</span></label>
-
         <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setAllowMapping"> Enable Head Mapping <span class="hint">show color-to-head assignment UI when sending prints</span></label>
         <label style="margin-top:6px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setSuggestMatching"> Auto-Match Colors <span class="hint">suggest the closest head color; uncheck for T1→T1 order</span></label>
 
@@ -162,6 +160,27 @@
         </div>
       </div>
 
+      </div>
+
+      <div class="set-panel" id="tab-prefs" style="display:none">
+      <div class="setcard">
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="setTNotation"> Use T0/T1/T2/T3 notation <span class="hint">default: 1–4</span></label>
+
+        <label class="fl" style="margin-top:14px">Alternate Display <span class="hint">what the header's view button switches to and from Regular view</span></label>
+        <select class="field" id="setAltDisplay" style="max-width:220px">
+          <option value="all">All (cycle through every view)</option>
+          <option value="compact">Compact View</option>
+          <option value="camera">Camera View</option>
+          <option value="list">List View</option>
+        </select>
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setOpenCompact"> Open in Compact Mode <span class="hint">start the page in compact view</span></label>
+
+        <label class="fl" style="margin-top:14px">Camera View refresh interval <span class="hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
+        <input class="field" id="setCameraRefresh" type="number" min="3" max="60" placeholder="6" style="max-width:100px" />
+
+        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setCameraStagger" checked> Stagger camera refresh across printers <span class="hint">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></label>
+      </div>
       </div>
 
       <div class="set-panel" id="tab-notif" style="display:none">
@@ -328,6 +347,25 @@
     </div>
     <div class="sechead"><h2>Fleet</h2><span class="count" id="fleetcount"></span></div>
     <div id="fleet-wrap">
+      <div class="camtoolbar" id="camViewBar">
+        <div class="camtabs" id="camTabs">
+          <button data-camtab="all">All</button>
+          <button data-camtab="printing">Printing</button>
+          <button data-camtab="attention">Attention Needed</button>
+          <button data-camtab="idle">Idle</button>
+          <button data-camtab="offline">Offline</button>
+        </div>
+        <div class="cambar">
+          <select id="camTagFilter"><option value="">All tags</option></select>
+          <label class="camselall"><input type="checkbox" id="camSelectAll"> Select All</label>
+          <span id="camSelCount">0 selected</span>
+          <button id="camBulkPause" class="btn ghost" disabled>Pause</button>
+          <button id="camBulkResume" class="btn ghost" disabled>Resume</button>
+          <button id="camBulkCancel" class="btn ghost" disabled>Cancel</button>
+          <button id="camEditTags" class="btn ghost">Edit Tags</button>
+          <span id="camBulkMsg" class="pstatus"></span>
+        </div>
+      </div>
       <div class="fleet" id="fleet"></div>
     </div>
   </main>
@@ -383,6 +421,17 @@
     </div>
   </div>
 
+  <div class="modal" id="tagsmodal">
+    <div class="modalbox" style="max-width:480px">
+      <div class="modalhdr"><span>Edit Tags</span><button class="modalx" id="tagsx">✕</button></div>
+      <div class="tags-list" id="tagsList"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <button class="btn ghost" id="tagsCancel">Cancel</button>
+        <button class="btn primary" id="tagsSave">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="bedmodal">
     <div class="modalbox" style="text-align:center;max-width:340px">
       <div class="modalhdr"><span id="bedmodaltitle">Set Bed Temperature</span><button class="modalx" id="bedmodalx">✕</button></div>
@@ -394,6 +443,26 @@
         <button class="btn ghost" id="bedmodalcancel">Cancel</button>
       </div>
       <div class="pstatus" id="bedmodalstatus" style="margin-top:10px"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="bulkheatmodal">
+    <div class="modalbox" style="max-width:420px">
+      <div class="modalhdr"><span>Heat Multiple Printers</span><button class="modalx" id="bulkheatx">✕</button></div>
+      <label class="fl">Printers</label>
+      <div class="bulkheat-list" id="bulkheatList"></div>
+      <label class="fl" style="margin-top:14px">Bed temperature <span class="hint">0–100°C</span></label>
+      <input class="field" id="bulkheatTemp" type="number" min="0" max="100" placeholder="60" style="max-width:120px">
+      <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="bulkheatStagger" checked> Staggered heating <span class="hint">start each printer a few seconds after the last, instead of all at once</span></label>
+      <div id="bulkheatStaggerRow" style="margin-top:8px;display:flex;align-items:center;gap:8px">
+        <input class="field" id="bulkheatStaggerSecs" type="number" min="5" max="600" value="60" style="max-width:90px">
+        <span class="hint">seconds between each printer</span>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost" id="bulkheatCancel">Cancel</button>
+        <button class="btn primary" id="bulkheatGo">Heat</button>
+      </div>
+      <div class="bulkheat-status" id="bulkheatStatus"></div>
     </div>
   </div>
 

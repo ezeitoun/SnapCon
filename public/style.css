@@ -23,10 +23,16 @@
   body:not(.showfiles) .side{display:none;}
   body:not(.showfiles) .shell{grid-template-columns:1fr;}
   .side{border-right:1px solid var(--line); display:flex; flex-direction:column; height:100vh; overflow:hidden;}
-  .side .head{display:flex; align-items:center; justify-content:space-between; padding:18px 18px 14px; border-bottom:1px solid var(--line);}
+  .side .head{display:flex; align-items:center; justify-content:space-between; padding:18px 18px 14px; border-bottom:1px solid var(--line); flex-wrap:wrap; row-gap:8px;}
   .refresh{font:inherit; font-size:11px; letter-spacing:.06em; color:var(--ink-dim); background:transparent; border:1px solid var(--line); border-radius:6px; padding:6px 10px; cursor:pointer;}
   .refresh:hover{color:var(--ink); border-color:var(--ink-faint);}
+  .refresh.icon-btn{display:flex; align-items:center; justify-content:center; padding:6px;}
+  .side-icon{width:15px; height:15px; display:block;}
+  .head-btns{display:flex; gap:6px; flex:none; flex-wrap:wrap; justify-content:flex-end;}
   .folderline{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); padding:9px 18px; border-bottom:1px solid var(--line-soft); letter-spacing:.02em; word-break:break-all;}
+  .multiselect-bar{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line-soft); background:var(--panel-2); font-size:12px; color:var(--ink-dim);}
+  .multiselect-bar .btn{padding:4px 10px; font-size:11.5px;}
+  #fileOpStatus:empty{padding:0; margin:0;}
   .filter{padding:11px 14px; border-bottom:1px solid var(--line-soft);}
   .filter input{width:100%; font:inherit; font-size:13px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:7px; padding:8px 11px;}
   .filter input::placeholder{color:var(--ink-faint);}
@@ -35,11 +41,16 @@
   .folder-back:hover{background:var(--panel);color:var(--ink);}
   .folder-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;cursor:pointer;background:transparent;border:1px solid transparent;border-radius:8px;padding:10px 12px;margin-bottom:4px;color:var(--signal);font:inherit;font-size:13px;font-weight:600;}
   .folder-item:hover{background:var(--panel);border-color:var(--line-soft);}
-  .job{display:block;width:100%;text-align:left;cursor:pointer;background:transparent;border:1px solid transparent;border-radius:8px;padding:11px 12px;margin-bottom:4px;color:var(--ink);font:inherit;}
+  .folder-item.drag-over{background:var(--panel);border-color:var(--signal);box-shadow:0 0 0 1px var(--signal) inset;}
+  .job{display:block;width:100%;text-align:left;cursor:pointer;background:transparent;border:1px solid transparent;border-radius:8px;padding:11px 12px;margin-bottom:4px;color:var(--ink);font:inherit;user-select:none;}
   .job:hover{background:var(--panel); border-color:var(--line-soft);}
   .job.active{background:var(--panel); border-color:var(--signal);}
-  .job .jn{font-size:13.5px; font-weight:600; word-break:break-all; line-height:1.3;}
-  .job .jm{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); margin-top:4px; letter-spacing:.02em;}
+  .job.multi-selected{background:rgba(91,155,240,0.14); border-color:var(--busy);}
+  .job[draggable]{cursor:grab;}
+  .job.dragging{opacity:.45;}
+  .job .jn{font-size:11.5px; font-weight:600; word-break:break-all; line-height:1.3;}
+  .job .jm{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); letter-spacing:.02em; margin-top:4px;}
+  .job .jm-path{color:var(--ink-faint); font-weight:500;}
   .empty-list{padding:26px 18px; color:var(--ink-dim); font-size:13px; line-height:1.55;}
   .empty-list code{font-family:var(--mono); font-size:12px; color:var(--ink);}
   .main{padding:24px 26px 0; height:100vh; overflow:hidden; display:flex; flex-direction:column;}
@@ -72,6 +83,7 @@
   .jcard-actions{display:flex; gap:2px; flex:none; margin-top:1px;}
   .jcard-btn{background:transparent; border:none; color:var(--ink-faint); font-size:16px; cursor:pointer; padding:2px 5px; border-radius:5px; line-height:1; display:flex; align-items:center;}
   .jcard-btn:hover{color:var(--ink); background:var(--panel-2);}
+  .jcard-icon{width:14px; height:14px; display:block;}
   .send-list{display:flex; flex-direction:column; gap:4px; margin:12px 0; max-height:320px; overflow:auto;}
   .send-row{position:relative; overflow:hidden; display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line-soft); border-radius:8px; cursor:pointer; user-select:none;}
   .send-row:hover{background:var(--panel-2);}
@@ -109,6 +121,7 @@
   .card-pills{display:flex; gap:5px; align-items:center;}
   .pill-btn{background:none; border:none; padding:0; cursor:pointer; display:block; text-decoration:none; transition:opacity .15s,transform .12s;}
   .pill-btn img{width:28px; height:28px; display:block;}
+  .pill-btn-sm img{width:15px; height:15px;}
   .pill-btn:hover{opacity:0.8; transform:translateY(-1px);}
   .status-badge{display:flex;align-items:center;background:color-mix(in srgb,var(--status-color) 13%,rgba(12,14,22,0.8));border:1px solid color-mix(in srgb,var(--status-color) 45%,transparent);border-radius:20px;padding:5px 12px;font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:0.14em;color:var(--status-color);box-shadow:0 0 14px color-mix(in srgb,var(--status-color) 28%,transparent);white-space:nowrap;text-transform:uppercase;}
   .status-badge.drag-handle{cursor:grab;}
@@ -136,7 +149,12 @@
   .stats-inline-target{font-size:10px;opacity:0.5;}
   .stats-thumb-cell{padding:3px 6px;}
   .stats-thumb{width:48px;height:48px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;}
-  .stats-thumb-empty{font-family:var(--mono);font-size:15px;font-weight:700;opacity:0.3;}
+  /* Same footprint as .stats-thumb, always — the no-file state and the
+     onerror fallback both land here, and neither used to reserve the image's
+     48x48 box, so swapping between "image" and "placeholder" shrank the
+     whole card by that difference on every occurrence (a genuinely failed
+     thumbnail load, not just a missing file, produces this exact swap). */
+  .stats-thumb-empty{width:48px;height:48px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:15px;font-weight:700;opacity:0.3;}
   .stats-mini-bar{position:absolute;bottom:0;left:6px;right:6px;height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;}
   .stats-mini-fill{height:100%;border-radius:2px;transition:width 0.4s ease;}
   .hot-fill{background:linear-gradient(0deg,#ff6b6b,#ff8c6b);box-shadow:0 0 6px rgba(255,107,107,0.5);}
@@ -178,6 +196,13 @@
   .btn-svg img{width:100%; height:auto; display:block;}
   .btn-svg:hover:not(:disabled){opacity:0.85; transform:translateY(-1px);}
   .btn-svg:disabled{opacity:0.35; cursor:not-allowed;}
+  .btn-chip{flex:0 0 calc((100% - 27px) / 4); display:flex; align-items:center; justify-content:center; gap:5px; background:var(--panel-2); border:1px solid var(--line); border-radius:999px; padding:8px 6px; cursor:pointer; color:var(--ink); font:inherit; font-size:12px; font-weight:600; transition:opacity .15s,transform .12s,border-color .15s;}
+  .btn-chip img{width:15px; height:15px; flex:none; display:block;}
+  .btn-chip span{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .btn-chip:hover:not(:disabled){border-color:var(--ink-faint); transform:translateY(-1px);}
+  .btn-chip:disabled{opacity:0.35; cursor:not-allowed;}
+  .btn-chip.danger{border-color:rgba(224,106,92,0.45); color:var(--bad);}
+  .btn-chip.danger:hover:not(:disabled){border-color:var(--bad);}
   .btn-pause  {background:rgba(123,97,255,0.12); border-color:rgba(123,97,255,0.35); color:#a78bfa;}
   .btn-pause:hover{background:rgba(123,97,255,0.22); box-shadow:0 0 16px rgba(123,97,255,0.3);}
   .btn-cancel {background:rgba(255,60,60,0.09); border-color:rgba(255,80,80,0.32); color:#ff6b6b;}
@@ -203,6 +228,10 @@
   .modalhdr{display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:14px; margin-bottom:12px;}
   .modalx{background:transparent; border:none; color:var(--ink-dim); font-size:17px; cursor:pointer; line-height:1;}
   .modalx:hover{color:var(--ink);}
+  .color-grid{display:grid; grid-template-columns:repeat(6, 1fr); gap:8px; max-width:280px; margin:0 auto;}
+  .color-swatch{width:36px; height:36px; border-radius:8px; border:2px solid var(--line); cursor:pointer; padding:0; transition:transform .1s, border-color .15s;}
+  .color-swatch:hover{transform:scale(1.08); border-color:var(--ink-faint);}
+  .color-swatch.active{border-color:var(--signal); box-shadow:0 0 0 1px var(--signal);}
   .maint-table{width:100%; border-collapse:collapse; font-size:12px; margin-top:10px;}
   .maint-table th{text-align:left; color:var(--ink-dim); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--line);}
   .maint-table td{padding:5px 8px; border-bottom:1px solid var(--line); color:var(--ink-faint);}
@@ -259,6 +288,7 @@
   .btn{font:inherit; font-size:12.5px; font-weight:700; letter-spacing:.02em; cursor:pointer; border-radius:7px; padding:9px 14px; border:1px solid transparent;}
   .btn.primary{background:var(--signal); color:#1a1400;} .btn.primary:hover{filter:brightness(1.06);}
   .btn.ghost{background:transparent; color:var(--ink); border-color:var(--line);} .btn.ghost:hover{border-color:var(--ink-faint);}
+  .btn.purple{background:#7B61FF; color:#fff;} .btn.purple:hover{background:#8f78ff;}
   .btn:disabled{opacity:.4; cursor:default;}
   .set-tabs{display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--line);}
   .set-tab{font:inherit; font-size:13px; color:var(--ink-dim); background:transparent; border:none; border-bottom:2px solid transparent; padding:8px 14px; cursor:pointer;}
@@ -280,6 +310,17 @@
   .pstatus.ok{color:var(--ok);} .pstatus.err{color:var(--bad);} .pstatus.work{color:var(--signal);}
   .progress-section{padding:12px 16px 10px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(255,255,255,0.01);}
   .prog-file{font-family:var(--mono);font-size:10px;color:rgba(255,255,255,0.90);letter-spacing:0.05em;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  /* Thumbnail spans both rows (filename above, progress bar below) via
+     CSS grid — .prog-row is a normal sibling everywhere else, but gets
+     nested inside this grid for camera view specifically (see renderFleet's
+     fileSection), so it needs to be placed into column 2 / row 2 here and
+     have its own margin-bottom zeroed (it's no longer the last element in
+     .progress-section once nested — .prog-times still follows it). */
+  .cam-prog-file{display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto; column-gap:10px; row-gap:4px; align-items:center; white-space:normal;}
+  .prog-file-thumb{grid-row:1 / 3; grid-column:1; align-self:center; min-width:52px; min-height:52px;}
+  .prog-file-thumb .stats-thumb{width:52px; height:52px;}
+  .prog-file-name{grid-row:1; grid-column:2; font-family:var(--mono); font-size:10px; color:rgba(255,255,255,0.90); letter-spacing:0.05em; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .cam-prog-file .prog-row{grid-row:2; grid-column:2; margin-bottom:0;}
   .prog-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
   .prog-pct{font-family:var(--mono);font-size:24px;font-weight:700;line-height:1;flex-shrink:0;}
   .prog-pct.cyan{color:#ffffff;filter:drop-shadow(0 0 6px rgba(0,229,255,0.35));}
@@ -336,7 +377,7 @@
   .fleet-search{font:inherit; font-size:12px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:7px; padding:5px 10px; width:200px; outline:none; transition:border-color .15s;}
   .fleet-search::placeholder{color:var(--ink-faint);}
   .fleet-search:focus{border-color:var(--ink-faint);}
-  .topbar-icon{width:26px; height:26px; display:block;}
+  .topbar-icon{width:22.1px; height:22.1px; display:block;}
   .gear{font:inherit; font-size:15px; font-weight:700; color:#fff; background:transparent; border:none; border-radius:7px; padding:4px; cursor:pointer; line-height:1;}
   .gear:hover{filter:brightness(1.3);}
   .sort-wrap{position:relative;}
@@ -430,8 +471,11 @@
   }
 
   /* ---- Compact mode ---- */
-  body.compact .side{display:none;}
-  body.compact .shell{grid-template-columns:1fr;}
+  /* :not(.showfiles) so the folder button still opens the file list in
+     compact mode — these used to hide .side unconditionally, overriding the
+     showfiles toggle entirely regardless of what the user clicked. */
+  body.compact:not(.showfiles) .side{display:none;}
+  body.compact:not(.showfiles) .shell{grid-template-columns:1fr;}
   body.compact .fleet{grid-template-columns:repeat(auto-fill,minmax(260px,1fr));}
   /* hide sections irrelevant in compact */
   body.compact .sechead:has(#needcount),
@@ -460,3 +504,126 @@
   body.compact .pcard{padding:10px; gap:8px;}
   body.compact .stats-bar{display:none;}
   body.compact .klipper-err-body,body.compact .klipper-err-link{display:none;}
+
+  /* ---- Camera view ---- */
+  /* Same minimal-density hides as compact mode, minus the footer-button
+     trimming (camera view keeps the full action row) — the sidebar stays
+     visible too, unlike compact: this is a fleet-grid density mode, not a
+     distinct page. */
+  body.camview .stats-bar,
+  body.camview .cmap,body.camview .needstrip,body.camview .jcompat,body.camview .nohint,
+  body.camview .afc-lanes,
+  body.camview .klipper-err-body,body.camview .klipper-err-link{display:none;}
+  body.camview .fleet{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));}
+  body.camview .pcard{padding:12px; gap:10px;}
+  /* The camera image is already the visual focus of this view — the
+     progress bar only needs to be legible, not prominent. Trimmed a bit
+     further than the initial pass to help offset the larger thumbnail
+     (.prog-file-thumb) sitting right above it. */
+  body.camview .prog-row{gap:8px;}
+  /* Only the direct-child case (regular error-state fallback — .prog-row as
+     a sibling of .prog-file, not nested in .cam-prog-file's grid) needs its
+     own bottom margin; the nested case's spacing is handled by
+     .cam-prog-file's own margin-bottom below instead (higher specificity
+     here would otherwise fight .cam-prog-file .prog-row{margin-bottom:0}). */
+  body.camview .progress-section>.prog-row{margin-bottom:6px;}
+  body.camview .prog-pct{font-size:15px;}
+  body.camview .prog-track{height:3px;}
+  body.camview .prog-dot{width:8px; height:8px;}
+  body.camview .cam-prog-file{margin-bottom:6px;}
+  /* .pcard's own flexbox `gap` (10px in camview) adds equally between EVERY
+     child pair, including progress-section→foot and foot→pstatus — on top
+     of progress-section's own bottom padding, that reads as a much bigger
+     gap above the buttons than anywhere else in the card, and since it's a
+     fixed amount independent of how many button rows .foot wraps to (3
+     buttons = 1 row, busy state's 4 = 2 rows), the trailing gap below the
+     buttons looks inconsistent between states. Pull both back in with
+     negative margins rather than lowering the card's overall gap (which
+     would cramp every other section too).*/
+  body.camview .progress-section{padding-bottom:0;}
+  body.camview .foot{margin-top:-6px;}
+  body.camview .pstatus{margin-top:-8px;}
+
+  .cam-shot,.cam-shot-placeholder,.cam-shot-slot{width:100%; aspect-ratio:4/3; border-radius:8px;}
+  .cam-shot{object-fit:cover; background:#1b1e24;}
+  .cam-shot-slot,.cam-shot-placeholder{background:#1b1e24;}
+  .cam-shot-placeholder{display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; color:var(--ink-dim); font-size:12px;}
+  .cam-shot-placeholder-icon{width:28px; height:28px; opacity:.65;}
+  .cam-shot-retryable{cursor:pointer;}
+  .cam-shot-retryable:hover{background:#22262e;}
+  .cam-shot-retryable:hover .cam-shot-placeholder-icon{opacity:.9;}
+  .cam-select{display:inline-flex; align-items:center; margin-right:8px;}
+  .cam-select input{width:16px; height:16px; cursor:pointer;}
+
+  #camViewBar{display:none;}
+  body.camview #camViewBar,body.listview #camViewBar{display:flex; flex-direction:column; gap:10px; margin-top:14px;}
+  .camtabs{display:flex; gap:6px; flex-wrap:wrap;}
+  .camtabs button{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 12px; font-size:12px; color:var(--ink-dim); cursor:pointer;}
+  .camtabs button.active{color:var(--ink); font-weight:600; border-color:var(--signal);}
+  .cambar{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .cambar select{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:12px; color:var(--ink);}
+  .camselall{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim); cursor:pointer;}
+  #camSelCount{font-size:12px; color:var(--ink-dim);}
+
+  .tags-list{display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow:auto; margin-top:10px;}
+  .tags-row{display:flex; align-items:center; gap:10px;}
+  .tags-row-name{flex:0 0 140px; font-size:13px; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .tags-row-input{flex:1;}
+
+  .bulkheat-list{display:flex; flex-direction:column; gap:2px; max-height:220px; overflow:auto; margin-top:8px; border:1px solid var(--line-soft); border-radius:8px; padding:6px 4px;}
+  .bulkheat-row{display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:6px; font-size:13px; cursor:pointer;}
+  .bulkheat-row:hover{background:var(--panel-2);}
+  .bulkheat-row input{cursor:pointer;}
+  .bulkheat-status{display:flex; flex-direction:column; gap:4px; margin-top:12px;}
+  .bulkheat-status-row{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12.5px; padding:2px 0;}
+  .bulkheat-status-val{color:var(--ink-dim); font-family:var(--mono); font-size:11.5px;}
+  .bulkheat-status-val.ok{color:var(--ok);}
+  .bulkheat-status-val.err{color:var(--bad);}
+  .bulkheat-status-val.work{color:var(--signal);}
+
+  /* ---- List view ---- */
+  /* .fleet's display:grid is card-layout-specific — the table lays itself
+     out. */
+  body.listview .fleet{display:block;}
+  /* Fixed layout + an explicit <colgroup> (see renderFleetListRows) is what
+     actually keeps each column where it belongs — table-layout:auto lets
+     the browser redistribute width based on content, which is what made the
+     Actions column visually crowd into Filament's space before. */
+  .fleet-list{width:100%; border-collapse:collapse; table-layout:fixed; font-size:13px;}
+  .fleet-list thead th{text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-dim); font-weight:700; padding:8px 10px; border-bottom:1px solid var(--line);}
+  .list-th-chk{width:32px;}
+  .list-th-sort{cursor:pointer; user-select:none;}
+  .list-th-sort:hover{color:var(--ink);}
+  .list-sort-arrow{opacity:0.6;}
+  .list-row{border-bottom:1px solid var(--line-soft);}
+  .list-row:hover{background:var(--panel-2);}
+  .list-row.offline{opacity:0.55;}
+  .fleet-list td{padding:8px 10px; vertical-align:middle; overflow:hidden;}
+  .list-printer-cell{overflow:hidden;}
+  .list-printer-cell .hdr-brand{margin-bottom:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  /* ~40 characters — the printer name column was taking up far more room
+     than any real printer name needs. */
+  .list-printer-cell .hdr-name{font-size:13px; max-width:15ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .list-tag{display:inline-block; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:999px; padding:2px 8px; margin:0 4px 4px 0; font-size:10.5px; color:var(--ink-dim); white-space:nowrap;}
+  .list-file-cell{display:flex; align-items:center; gap:8px; cursor:pointer; min-width:0;}
+  .list-thumb{width:32px; height:32px; object-fit:cover; border-radius:6px; flex:none;}
+  .list-file-name{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .list-file-empty{color:var(--ink-faint);}
+  /* Progress column: a real bar (not just text) since the row is tall
+     enough for it, plus remaining time + layer on the line underneath. */
+  .list-progress{display:flex; flex-direction:column; gap:3px;}
+  .list-progress-row{display:flex; align-items:center; gap:8px;}
+  .list-progress-pct{font-family:var(--mono); font-size:11px; font-weight:700; flex:none; width:26px;}
+  .list-progress-pct.cyan{color:#fff;} .list-progress-pct.amber{color:#fcd34d;} .list-progress-pct.red{color:#ff8c6b;} .list-progress-pct.green{color:#46C18C;}
+  .list-progress-track{flex:1; height:5px;}
+  .list-progress-fill{animation:none !important;}
+  .list-progress-meta{font-size:10.5px; color:var(--ink-dim); font-family:var(--mono);}
+  .list-progress-sep{color:var(--ink-faint); margin:0 2px;}
+  .list-filament-cell{display:flex; align-items:center; flex-wrap:wrap; gap:4px;}
+  .list-filament-chip{display:inline-block; padding:2px 7px; border-radius:5px; font-size:10px; font-weight:700; letter-spacing:0.03em; line-height:1.5;}
+  .fleet-list .status-badge{display:inline-flex;}
+  .list-status-cam{display:inline-block; margin-left:8px; vertical-align:middle;}
+  .list-status-cam img{width:14px; height:14px;}
+  .list-actions-cell{display:flex; gap:6px; white-space:nowrap;}
+  .btn-chip.icon-only{flex:none; width:30px; height:30px; padding:0; border-radius:8px;}
+  .list-th-chk,.fleet-list td:first-child{text-align:center;}
