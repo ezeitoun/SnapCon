@@ -266,6 +266,38 @@ The Discover Button Scans the local network for supported printers and lets you 
 
 Each result shows the available printer details and an Add button. Printers already configured in SnapCon are marked as Added. During first-time setup, Add All & Save can be used to add all discovered printers at once.
 
+
+## Users
+The Users tab controls authentication, account permissions, and one-time-code login.
+Enable User Access Management, Turns login protection on or off. When disabled, SnapCon remains accessible without authentication. Enabling it requires creating at least one Admin account first, preventing accidental lockout.
+
+<p>
+  <img
+    src="./docs/users.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+Roles: Permissions are enforced in both the interface and the API:
+* Admin: Full access, including all Settings pages.
+* Regular: Can operate printers and manage jobs, but cannot access Settings.
+* View Only: Can monitor the fleet but cannot perform printer actions or access Settings.
+
+User Accounts, Each account can include a display name, username, email address, phone number,  
+role, and login method.   
+Users can sign in with either a password or a one-time code.
+
+OTP Configuration: Controls how one-time login codes are delivered. Supported methods include:
+* Email through Resend
+* Push via ntfy.sh
+* Telegram, using the bot configured under Notifications
+</p>
+<br clear="all">
+User Access Management is required for Remote Access. SnapCon will not enable Remote Access unless at least one Admin account exists, and it prevents User Access Management or the final Admin account from being removed while Remote Access is active.
+
+
 ## Remote Access
 <p>
   <img
