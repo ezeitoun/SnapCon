@@ -23,6 +23,19 @@ For those who prefer working with Orca Slicer instead of Snapmaker Orca (Snorca)
 - **Upload from your PC**, an "Upload" button opens a native file picker (multi-file)
 - **Multi-select → drag-to-move**, select files Explorer/Finder-style (Shift+click (range-select from the last-clicked anchor) and Ctrl+click (toggle individual files))
 
+### Connectors Architecture Introduced
+Although SnapCon was developed primarly for SnapMaker (and will be kept like that), I have added connectors architecture to support other printers.
+- First fully developed/connectors is for AD5X (Native, No need for any special firmware deployment)
+- - Scanning a subnet will find the AD5X, But you wont be able to use the printer until the Serial Number (SNXXXX) will be configured alone with the Printer ID
+- - you can switch filemanets colors on the interface, due to a limitation on the AD5X GUI, It will always be displayed as black in the GUI (but the configured colors will be used for the poop calculations)
+- - If a print was canceled, you will need to "Eject" the file via the printer card (otherwise it will stay busy due to the GUI popup window)
+
+### Remote Access
+Check on your prints from anywhere — no port forwarding, no VPN, no messing with your router.
+One click in Settings, a quick one-time verification in your browser, and SnapCon gives your
+print farm its own secure private link you can open from your phone, at work, wherever.
+Fully opt-in, and reversible any time you want to turn it off.
+
 ### Fixes
 - Compact-mode bug: the folder icon didn't open the file list at all while in compact view
 - "Folder button appears out of the blue" in Settings 
