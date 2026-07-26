@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.2.0
+// server.js — SnapCon  ·  v0.4.1
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.2.0";
+const VERSION = "0.4.1";
 
 const express = require("express");
 const fs = require("fs");
@@ -72,6 +72,30 @@ function ensurePrinterIds() {
   if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensurePrinterIds();
+
+// One-time migration for a config.json predating per-event, per-milestone,
+// and per-provider notification settings: derives the new fields from the
+// old bundled ones (onEvents → all four event flags, service → exactly one
+// provider enabled) so an existing setup keeps behaving identically until
+// the user actually opens Settings > Notifications and changes something.
+function ensureNotificationSchema() {
+  const nf = CFG.notifications;
+  if (!nf || typeof nf !== "object") return;
+  let changed = false;
+  if (nf.onStart === undefined && nf.onPause === undefined && nf.onError === undefined && nf.onComplete === undefined) {
+    const on = !!nf.onEvents;
+    nf.onStart = on; nf.onPause = on; nf.onError = on; nf.onComplete = on;
+    changed = true;
+  }
+  if (!Array.isArray(nf.milestonePercents)) { nf.milestonePercents = [25, 50, 75]; changed = true; }
+  if (nf.ntfyEnabled === undefined && nf.telegramEnabled === undefined) {
+    nf.ntfyEnabled = nf.service !== "telegram";
+    nf.telegramEnabled = nf.service === "telegram";
+    changed = true;
+  }
+  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+}
+ensureNotificationSchema();
 
 // Users for the optional User Access Management feature. No file exists until
 // the first user is actually created — CFG.usersEnabled being true with zero
@@ -237,6 +261,26 @@ app.get("/api/files", requireAuth, (req, res) => {
     res.json({ folder: dir, sub, folders, files });
   } catch (e) {
     res.status(500).json({ error: "Cannot read folder — " + e.message });
+  }
+});
+
+// Settings > General's live "does this path resolve" check — for the folder
+// currently TYPED in the field, which may not be saved (or valid) yet, so it
+// can't reuse FOLDER/safePath (those are jailed to the already-saved
+// gcodeFolder). Resolves the same way loadConfig() resolves gcodeFolder
+// (relative to BASE_DIR, same as a relative "./gcode" in config.json would
+// be) and counts the same sliced-file extensions /api/files does.
+app.get("/api/check-folder", requireAdmin, (req, res) => {
+  const raw = String(req.query.path || "").trim();
+  if (!raw) return res.json({ ok: false, error: "Enter a path" });
+  const resolved = path.resolve(BASE_DIR, raw);
+  try {
+    if (!fs.statSync(resolved).isDirectory()) return res.json({ ok: false, error: "Not a folder" });
+    const count = fs.readdirSync(resolved, { withFileTypes: true })
+      .filter(e => e.isFile() && /\.(gcode|gco|g|gx|3mf)$/i.test(e.name)).length;
+    res.json({ ok: true, resolved, count });
+  } catch {
+    res.json({ ok: false, error: "Path not found" });
   }
 });
 
@@ -995,22 +1039,58 @@ app.get("/api/printer-hours", requireAuth, async (req, res) => {
 });
 
 // ---- Maintenance log per printer ----
-const DEFAULT_MAINT_COMPONENTS = ["Linear Shaft / Linear Bearing", "X Carbon Rod Assembly", "Lead Screw / Nut", "Steel Pin / Steel Ball", "Timing Belt", "Pogo pin"];
-const MAINT_FREQ_MONTHS = { monthly: 1, quarterly: 3, "6months": 6 };
+const DEFAULT_MAINT_COMPONENTS = ["Nozzle", "Timing Belt", "Bed Sheet", "Hotend", "PTFE Tube", "Extruder Gears", "Lead Screw", "Fans", "Lubrication", "Firmware", "Wiper"];
+// "date" entries compute nextScheduled the normal calendar way. hours250/500
+// are intentionally NOT date-computable (computeNextScheduled returns null
+// for them) — there's no stored per-printer hours history to compare a
+// threshold against yet, and nothing background-watches maintenance due
+// dates at all (unlike the print-event notifier). The client keeps these two
+// disabled in the picker until that's built; this table just reserves their
+// keys so a future implementation has one place to add the real logic.
+const MAINT_FREQ_SPEC = {
+  none: null,
+  weekly: { unit: "days", amount: 7 },
+  monthly: { unit: "months", amount: 1 },
+  quarterly: { unit: "months", amount: 3 },
+  hours250: { unit: "hours", amount: 250 },
+  hours500: { unit: "hours", amount: 500 }
+};
 // CFG.maintenanceComponents starts out undefined on any pre-existing config —
 // this is the same "compute the default at read time, only persist once
 // something actually changes" convention used elsewhere (e.g. refreshInterval).
 const maintComponents = () => Array.isArray(CFG.maintenanceComponents) ? CFG.maintenanceComponents : DEFAULT_MAINT_COMPONENTS.slice();
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 function addMonths(dateStr, months) {
   const d = new Date(dateStr + "T00:00:00");
   d.setMonth(d.getMonth() + months);
   return d.toISOString().slice(0, 10);
 }
+// null for "none" (no reminder wanted) and for the not-yet-computable
+// hours-based options — computeNextMaintenance already skips entries with no
+// nextScheduled, so both cases simply don't produce a due date.
+function computeNextScheduled(dateStr, freqKey) {
+  const spec = MAINT_FREQ_SPEC[freqKey];
+  if (!spec) return null;
+  if (spec.unit === "days") return addDays(dateStr, spec.amount);
+  if (spec.unit === "months") return addMonths(dateStr, spec.amount);
+  return null;
+}
+// Returns a status ("unknown"/"active"/"expiring"/"expired") + the expiry
+// date itself, rather than a bare boolean — the client needs both to decide
+// which of "Unknown" / "Expires <date>" / "Expired" to show, and whether
+// that deserves the warning color (expired, or expiring within 30 days).
 function computeWarranty(purchaseDate) {
-  if (!purchaseDate) return false;
+  if (!purchaseDate) return { status: "unknown", expiry: null };
   const expiry = new Date(purchaseDate + "T00:00:00");
   expiry.setMonth(expiry.getMonth() + 12);
-  return Date.now() <= expiry.getTime();
+  const expiryStr = expiry.toISOString().slice(0, 10);
+  const daysLeft = Math.floor((expiry.getTime() - Date.now()) / 86400000);
+  const status = daysLeft < 0 ? "expired" : daysLeft <= 30 ? "expiring" : "active";
+  return { status, expiry: expiryStr };
 }
 // "Next" due = soonest nextScheduled among each component's MOST RECENT entry
 // — an older service record for the same part shouldn't out-rank a newer one.
@@ -1053,16 +1133,17 @@ app.post("/api/maintenance", requireRegular, (req, res) => {
   if (!CFG.maintenanceHistory || typeof CFG.maintenanceHistory !== "object") CFG.maintenanceHistory = {};
   if (!Array.isArray(CFG.maintenanceHistory[p.id])) CFG.maintenanceHistory[p.id] = [];
   const entries = CFG.maintenanceHistory[p.id];
-  const frequency = MAINT_FREQ_MONTHS[entry.frequency] ? entry.frequency : "monthly";
+  const frequency = Object.prototype.hasOwnProperty.call(MAINT_FREQ_SPEC, entry.frequency) ? entry.frequency : "monthly";
   const component = String(entry.component || "").trim();
   entries.push({
     date: String(entry.date),
     comment: String(entry.comment || ""),
+    part: String(entry.part || ""),
     hours: String(entry.hours || "—"),
     totalSeconds: entry.totalSeconds != null ? Number(entry.totalSeconds) : null,
     component,
     frequency,
-    nextScheduled: addMonths(entry.date, MAINT_FREQ_MONTHS[frequency]),
+    nextScheduled: computeNextScheduled(entry.date, frequency),
     cost: Number(entry.cost) || 0
   });
   if (component && !maintComponents().includes(component)) CFG.maintenanceComponents = [...maintComponents(), component];
@@ -1141,13 +1222,27 @@ function publicCfg(role) {
     notifications: CFG.notifications
       ? { ...CFG.notifications, telegramBotToken: undefined, hasTelegramBotToken: !!CFG.notifications.telegramBotToken }
       : null,
-    printers: PRINTERS,
+    // The Moonraker API token is a real secret too — same treatment as
+    // telegramBotToken above, replacing the old "send it in plaintext, mask
+    // it visually client-side" behavior. hasToken tells the UI whether to
+    // show the "Configured" state; the value itself never leaves the server
+    // unless it's actively being replaced (see POST /api/config below).
+    printers: PRINTERS.map(p => ({ ...p, token: undefined, hasToken: !!p.token })),
     // The Resend API key never round-trips to the browser, even for Admin —
     // unlike printer tokens (which do, into a masked <input>), this secret
     // gets the stricter treatment since leaking it is exactly what this
     // feature is partly meant to close off.
     resend: { fromAddress: (CFG.resend && CFG.resend.fromAddress) || "", hasApiKey: !!(CFG.resend && CFG.resend.apiKey) },
-    otp: { service: (CFG.otp && CFG.otp.service) || "resend", ntfyTopic: (CFG.otp && CFG.otp.ntfyTopic) || "" }
+    otp: {
+      service: (CFG.otp && CFG.otp.service) || "resend",
+      ntfyTopic: (CFG.otp && CFG.otp.ntfyTopic) || "",
+      telegramChatId: (CFG.otp && CFG.otp.telegramChatId) || "",
+      // OTP-via-Telegram reuses the bot configured under Notifications —
+      // a bot token is a service credential (like the Resend API key),
+      // not a per-purpose secret, so there's no reason to make an admin
+      // stand up a second bot just for login codes.
+      telegramBotConfigured: !!(CFG.notifications && CFG.notifications.telegramBotToken)
+    }
   };
 }
 app.get("/api/config", requireAuth, (req, res) => res.json(publicCfg(req.user.role)));
@@ -1192,6 +1287,15 @@ app.post("/api/remote-access/remove", requireAdmin, (req, res) => {
   res.json({ ok: true, pending: true });
   remoteAccess.removeRemoteAccess().catch(e => console.error("[remote-access] remove failed:", e.message));
 });
+// Diagnostics: re-runs the connection chain from the top. requireAdmin, same
+// as every other action on this feature — errors surface via the normal
+// status poll, same "fire and let the client poll" shape as enable/disable.
+app.post("/api/remote-access/restart", requireAdmin, async (req, res) => {
+  const r = await remoteAccess.restart();
+  if (!r.ok) return res.status(400).json(r);
+  res.json(r);
+});
+app.get("/api/remote-access/log", requireAdmin, (req, res) => res.json({ lines: remoteAccess.getLog() }));
 // No requireAuth: body/headers are fixed and carry zero identifying or
 // operational information — see remote-access plan, "Public endpoint probe."
 app.get("/api/remote-access/probe", (req, res) => {
@@ -1203,6 +1307,13 @@ app.post("/api/config", requireAdmin, (req, res) => {
   const b = req.body || {};
   if (b.usersEnabled && !USERS.some(u => u.role === "admin")) {
     return res.status(400).json({ error: "Create an Admin user before enabling User Access Management" });
+  }
+  // A live tunnel with no login requirement is a public address anyone can
+  // send prints and heat beds through — block turning User Access Management
+  // off from under it rather than silently stopping the tunnel as a side
+  // effect of an edit made in a completely different tab (see Remote Access).
+  if (!b.usersEnabled && CFG.usersEnabled && remoteAccess.getStatus().enabled) {
+    return res.status(400).json({ error: "Remote Access is on and needs a login requirement. Turn off Remote Access first (Settings → Remote Access), then disable User Access Management." });
   }
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
@@ -1228,21 +1339,36 @@ app.post("/api/config", requireAdmin, (req, res) => {
       fromAddress: String(b.resend.fromAddress || "").trim()
     } : (CFG.resend || undefined),
     otp: (b.otp && typeof b.otp === "object") ? {
-      service: b.otp.service === "ntfy" ? "ntfy" : "resend",
-      ntfyTopic: String(b.otp.ntfyTopic || "").trim()
+      service: ["ntfy", "telegram"].includes(b.otp.service) ? b.otp.service : "resend",
+      ntfyTopic: String(b.otp.ntfyTopic || "").trim(),
+      telegramChatId: String(b.otp.telegramChatId || "").trim()
     } : (CFG.otp || undefined),
     notifications: (b.notifications && typeof b.notifications === "object") ? {
       enabled: !!b.notifications.enabled,
-      onEvents: !!b.notifications.onEvents,
+      onStart: !!b.notifications.onStart,
+      onPause: !!b.notifications.onPause,
+      onError: !!b.notifications.onError,
+      onComplete: !!b.notifications.onComplete,
       onIntervals: !!b.notifications.onIntervals,
+      // Whatever percentages the client sent, deduped/sorted/clamped to a
+      // sane 1-99 range — never trust it to already be clean.
+      milestonePercents: Array.isArray(b.notifications.milestonePercents)
+        ? [...new Set(b.notifications.milestonePercents.map(Number).filter(n => Number.isFinite(n) && n > 0 && n < 100))].sort((a, b2) => a - b2)
+        : DEFAULT_MILESTONES,
       includeImage: !!b.notifications.includeImage,
-      service: b.notifications.service === "telegram" ? "telegram" : "ntfy",
+      // Both providers are independent now — either, neither, or both can
+      // be enabled at once (see sendEventNotification).
+      ntfyEnabled: !!b.notifications.ntfyEnabled,
+      telegramEnabled: !!b.notifications.telegramEnabled,
       ntfyTopic: String(b.notifications.ntfyTopic || "").trim(),
       telegramChatId: String(b.notifications.telegramChatId || "").trim(),
-      // Same "blank means keep the existing secret" convention as resend.apiKey.
+      // Same 3-state convention as the printer token above: a non-blank
+      // string replaces it, an explicit "" (Clear) wipes it, anything else
+      // (omitted/undefined — the normal "didn't touch it" case) keeps
+      // whatever's already on file.
       telegramBotToken: (typeof b.notifications.telegramBotToken === "string" && b.notifications.telegramBotToken.trim())
         ? b.notifications.telegramBotToken.trim()
-        : ((CFG.notifications && CFG.notifications.telegramBotToken) || undefined)
+        : (b.notifications.telegramBotToken === "" ? undefined : ((CFG.notifications && CFG.notifications.telegramBotToken) || undefined))
     } : (CFG.notifications || undefined),
     port: PORT,
     // Internal bookkeeping, not part of this endpoint's editable settings —
@@ -1266,7 +1392,6 @@ app.post("/api/config", requireAdmin, (req, res) => {
           // Was capped at 4 chars (Snapmaker's pairing code length) — widened
           // for FlashForge's checkCode, documented as 4-5 digits.
           if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 8);
-          if (p.token) o.token = String(p.token);
           // Persistent identity, independent of name/url — matched by id
           // first (round-tripped from the client) so renaming or re-IP'ing a
           // printer doesn't detach it from its own maintenance history
@@ -1275,6 +1400,16 @@ app.post("/api/config", requireAdmin, (req, res) => {
           // got an id yet, then mints a fresh one for a genuinely new printer.
           const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === o.url);
           o.id = (existing && existing.id) || newPrinterId();
+          // Same "blank means keep the existing secret" convention as
+          // notifications.telegramBotToken — except the token never round-
+          // trips to the client at all now, so blank/omitted is the NORMAL
+          // case on every save, not just when the user didn't touch it.
+          // An explicit "" (the masked-secret control's Clear action) is
+          // what actually wipes it; anything else falls back to whatever's
+          // already on file.
+          o.token = (typeof p.token === "string" && p.token.trim())
+            ? p.token.trim()
+            : (p.token === "" ? undefined : ((existing && existing.token) || undefined));
           // Tags are only ever written via POST /api/printer-tags, never
           // through this form-driven rebuild (the Settings printer-editing
           // table has no tags field at all) — carry them forward from the
@@ -1325,7 +1460,7 @@ app.post("/api/login", async (req, res) => {
   const { loginName, password } = req.body || {};
   const u = findUserByLoginName(loginName);
   if (!u) return res.status(401).json({ error: "Invalid login name or password" });
-  if (u.otpEnabled) return res.status(400).json({ error: 'This account signs in with an emailed code — use "Email me a code instead"' });
+  if (u.otpEnabled) return res.status(400).json({ error: 'This account signs in with a one-time code — use "Send me a code instead"' });
   if (!(await auth.verifyPassword(String(password || ""), u.passwordHash))) return res.status(401).json({ error: "Invalid login name or password" });
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
@@ -1340,18 +1475,22 @@ app.post("/api/login/otp/request", async (req, res) => {
   const otpService = (CFG.otp && CFG.otp.service) || "resend";
   if (otpService === "ntfy") {
     if (!CFG.otp || !CFG.otp.ntfyTopic) return res.status(500).json({ error: "OTP is not configured" });
+  } else if (otpService === "telegram") {
+    if (!CFG.otp || !CFG.otp.telegramChatId || !CFG.notifications || !CFG.notifications.telegramBotToken) return res.status(500).json({ error: "OTP is not configured" });
   } else if (!CFG.resend || !CFG.resend.apiKey || !CFG.resend.fromAddress) {
     return res.status(500).json({ error: "OTP is not configured" });
   }
   const u = findUserByLoginName((req.body || {}).loginName);
-  // ntfy delivers to a shared topic, not a per-user address, so email isn't
-  // required for that path — it still is for Resend, which needs somewhere
-  // to send the message.
-  if (!u || !u.otpEnabled || (otpService !== "ntfy" && !u.email)) return res.status(400).json({ error: "Could not send a code for that login name" });
+  // ntfy/Telegram both deliver to a shared recipient, not a per-user
+  // address, so email isn't required for those paths — it still is for
+  // Resend, which needs somewhere to send the message.
+  if (!u || !u.otpEnabled || (otpService === "resend" && !u.email)) return res.status(400).json({ error: "Could not send a code for that login name" });
   const code = auth.setOtpCode(u.loginNameLower);
   try {
     if (otpService === "ntfy") {
       await sendNtfy({ topic: CFG.otp.ntfyTopic, title: "SnapCon login code", message: "Code for " + u.loginName + ": " + code + " (expires in 10 min)" });
+    } else if (otpService === "telegram") {
+      await sendTelegram({ botToken: CFG.notifications.telegramBotToken, chatId: CFG.otp.telegramChatId, message: "SnapCon login code for " + u.loginName + ": " + code + " (expires in 10 min)" });
     } else {
       await sendResendEmail({
         apiKey: CFG.resend.apiKey, fromAddress: CFG.resend.fromAddress, to: u.email,
@@ -1465,6 +1604,12 @@ app.delete("/api/users/:id", requireAdmin, (req, res) => {
   const idx = USERS.findIndex(x => x.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: "User not found" });
   if (USERS[idx].role === "admin" && adminCountExcluding(USERS[idx].id) === 0) return res.status(400).json({ error: "Cannot delete the last Admin" });
+  // Same reasoning as the usersEnabled guard above: deleting the only
+  // account left would leave a live public tunnel with no one who can log
+  // in — block it here rather than silently stopping the tunnel.
+  if (USERS.length === 1 && remoteAccess.getStatus().enabled) {
+    return res.status(400).json({ error: "Remote Access is on and needs at least one account. Turn off Remote Access first (Settings → Remote Access), then delete this account." });
+  }
   const [removed] = USERS.splice(idx, 1);
   try { saveUsers(); } catch (e) { USERS.splice(idx, 0, removed); return res.status(500).json({ error: e.message }); }
   if (removed.id === (req.user && req.user.id)) { auth.destroySession(req.sessionToken); res.clearCookie(auth.SESSION_COOKIE); }
@@ -1482,6 +1627,22 @@ app.post("/api/otp-test", requireAdmin, async (req, res) => {
     if (!topic) return res.status(400).json({ error: "Enter a topic first" });
     try {
       await sendNtfy({ topic, title: "SnapCon OTP test", message: "This is a test OTP notification from SnapCon." });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(502).json({ error: e.message });
+    }
+    return;
+  }
+  if (b.service === "telegram") {
+    // Bot token always comes from Notifications — see the comment on
+    // publicCfg()'s otp.telegramBotConfigured for why OTP doesn't have its
+    // own.
+    const botToken = (CFG.notifications && CFG.notifications.telegramBotToken) || "";
+    const chatId = (typeof b.chatId === "string" && b.chatId.trim()) ? b.chatId.trim() : ((CFG.otp && CFG.otp.telegramChatId) || "");
+    if (!botToken) return res.status(400).json({ error: "Configure a Telegram bot on the Notifications tab first" });
+    if (!chatId) return res.status(400).json({ error: "Enter a chat ID first" });
+    try {
+      await sendTelegram({ botToken, chatId, message: "This is a test OTP message from SnapCon." });
       res.json({ ok: true });
     } catch (e) {
       res.status(502).json({ error: e.message });
@@ -1596,39 +1757,56 @@ async function sendResendEmail({ apiKey, fromAddress, to, subject, text }) {
   if (!r.ok) throw new Error("Resend " + r.status + ": " + (await r.text()).slice(0, 160));
 }
 
+// Fires the same event to every ENABLED provider independently — one
+// provider being misconfigured (bad bot token, dead topic) must never
+// silently block the other from delivering. Only surfaces an error up to
+// the caller (notifyTick's catch, which just logs) if every attempted
+// provider failed; a partial failure is logged per-provider here instead.
 async function sendEventNotification(idx, p, ev, st) {
   const nf = CFG.notifications || {};
-  let message = eventMessage(ev, st);
+  const message = eventMessage(ev, st);
   let image = null;
   if (nf.includeImage) {
     try { image = await getSnapshot(p); }
     catch { /* no camera — send the text anyway */ }
   }
-  if (nf.service === "telegram") {
-    // Telegram has no separate "title" field the way ntfy does — fold the
-    // printer name into the message text instead.
-    await sendTelegram({ botToken: nf.telegramBotToken, chatId: nf.telegramChatId, message: p.name + ": " + message, image });
-  } else {
-    await sendNtfy({
+  const jobs = [];
+  if (nf.ntfyEnabled) {
+    jobs.push(sendNtfy({
       topic: nf.ntfyTopic, title: p.name, message, image,
       iconUrl: "http://" + lanAddr() + "/snapcon-icon-512.png"
-    });
+    }).catch(e => { throw new Error("ntfy.sh: " + e.message); }));
   }
+  if (nf.telegramEnabled) {
+    // Telegram has no separate "title" field the way ntfy does — fold the
+    // printer name into the message text instead.
+    jobs.push(sendTelegram({ botToken: nf.telegramBotToken, chatId: nf.telegramChatId, message: p.name + ": " + message, image })
+      .catch(e => { throw new Error("Telegram: " + e.message); }));
+  }
+  const results = await Promise.allSettled(jobs);
+  const failed = results.filter(r => r.status === "rejected");
+  if (failed.length) console.log("notify: " + p.name + ": " + failed.map(r => r.reason.message).join("; "));
+  if (failed.length && failed.length === results.length) throw new Error(failed[0].reason.message);
 }
 
 // ---- Notification watcher ----
 // Polls printer state on its own schedule (independent of any open browser),
-// fires event notifications on state transitions and interval notifications
-// when a print crosses 25/50/75%. Reads CFG live, so settings changes apply
-// without a restart.
+// fires event notifications on state transitions and milestone notifications
+// when a print crosses one of the configured percentages. Reads CFG live, so
+// settings changes apply without a restart.
 const NOTIFY_POLL_MS = 30 * 1000;
 const NOTIFY_STATE = new Map();   // printer url -> { state, filename, progress, milestones:Set }
+const DEFAULT_MILESTONES = [25, 50, 75];
 
 async function notifyTick() {
   const nf = CFG.notifications || {};
   if (!nf.enabled) return;
-  if (nf.service === "telegram" ? (!nf.telegramChatId || !nf.telegramBotToken) : !nf.ntfyTopic) return;
-  if (!nf.onEvents && !nf.onIntervals) return;
+  const ntfyReady = !!nf.ntfyEnabled && !!nf.ntfyTopic;
+  const telegramReady = !!nf.telegramEnabled && !!nf.telegramChatId && !!nf.telegramBotToken;
+  if (!ntfyReady && !telegramReady) return;
+  const anyEvent = nf.onStart || nf.onPause || nf.onError || nf.onComplete;
+  if (!anyEvent && !nf.onIntervals) return;
+  const milestones = (Array.isArray(nf.milestonePercents) && nf.milestonePercents.length) ? nf.milestonePercents : DEFAULT_MILESTONES;
 
   await Promise.all(PRINTERS.map(async (p, i) => {
     const st = await probeCached(p);
@@ -1650,21 +1828,25 @@ async function notifyTick() {
       // First sight of this printer (server just started): record where it is
       // and seed already-passed milestones so we don't fire a burst of stale
       // notifications for a print that's been running for hours.
-      [25, 50, 75].forEach(m => { if (cur.progress * 100 >= m) cur.milestones.add(m); });
+      milestones.forEach(m => { if (cur.progress * 100 >= m) cur.milestones.add(m); });
       NOTIFY_STATE.set(p.url, cur);
       return;
     }
     NOTIFY_STATE.set(p.url, cur);
 
     try {
-      if (nf.onEvents) {
-        if (newJob) await sendEventNotification(i, p, "start", st);
-        else if (st.state !== prev.state && ["complete", "paused", "error", "cancelled"].includes(st.state)) {
-          await sendEventNotification(i, p, st.state === "paused" ? "paused" : st.state, st);
-        }
+      if (newJob) {
+        if (nf.onStart) await sendEventNotification(i, p, "start", st);
+      } else if (st.state !== prev.state) {
+        if (st.state === "complete" && nf.onComplete) await sendEventNotification(i, p, "complete", st);
+        else if (st.state === "paused" && nf.onPause) await sendEventNotification(i, p, "paused", st);
+        // "cancelled" is folded into the same "error or failure" toggle as
+        // "error" — from a notification's point of view both mean the same
+        // thing: this print did not reach complete on its own.
+        else if ((st.state === "error" || st.state === "cancelled") && nf.onError) await sendEventNotification(i, p, st.state, st);
       }
       if (nf.onIntervals && st.state === "printing") {
-        for (const m of [25, 50, 75]) {
+        for (const m of milestones) {
           if (cur.progress * 100 >= m && !cur.milestones.has(m)) {
             cur.milestones.add(m);
             await sendEventNotification(i, p, m + "%", st);
@@ -1870,6 +2052,32 @@ app.get("/api/probe-printer", requireAdmin, async (req, res) => {
     const pi = si.product_info || {};
     res.json({ name: pi.device_name || null, serial: pi.serial_number || null, brand: pi.machine_type || null });
   } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// Settings > Printers "Test connection" — unlike /api/probe-printer above
+// (which hits a Klipper-only endpoint directly), this goes through the
+// connector abstraction so it works for every brand, and doesn't require
+// the printer to already be saved in PRINTERS (url/connector come straight
+// from the form, so this also works while adding a new printer).
+app.get("/api/test-connection", requireAdmin, async (req, res) => {
+  const url = (req.query.url || "").trim().replace(/\/+$/, "");
+  if (!url) return res.status(400).json({ error: "url required" });
+  const conn = getConnector(req.query.connector);
+  const p = { url };
+  try {
+    const st = await conn.probe(p);
+    if (!st.online) return res.status(502).json({ error: st.error || "Could not reach printer" });
+    let firmware = null;
+    if (conn.capabilities.firmwareInfo && conn.getFirmwareInfo) {
+      try {
+        const fw = await conn.getFirmwareInfo(p, st);
+        if (!fw.skipped) firmware = fw;
+      } catch { /* firmware is a bonus, not required for a successful test */ }
+    }
+    res.json({ ok: true, state: st.state, bed: st.bed, firmware });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
 });
 
 app.get("/api/discover", requireAdmin, async (req, res) => {

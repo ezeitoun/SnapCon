@@ -16,6 +16,8 @@ exports.capabilities = {
   camera: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,
   webUi: false, setColor: true,
+  // AD5X's heated bed is spec'd to 110°C.
+  maxBedTemp: 110,
   // "filamentHeads" only means "this printer has a per-color slot picker" —
   // it doesn't say whether those slots are genuinely independent physical
   // extruders (Snapmaker U1: each head can only ever hold one color at a

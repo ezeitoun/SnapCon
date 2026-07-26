@@ -18,7 +18,9 @@ exports.capabilities = {
   // The 8898 JSON API has no browsable dashboard at all (confirmed live —
   // its root path 404s), unlike Klipper/Moonraker printers which commonly
   // proxy Fluidd/Mainsail or a vendor UI on the same host.
-  webUi: false, setColor: false, singleToolhead: true
+  webUi: false, setColor: false, singleToolhead: true,
+  // Same bed platform family as AD5X, spec'd to 110°C.
+  maxBedTemp: 110
 };
 
 async function probe(p) {

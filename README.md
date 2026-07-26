@@ -1,121 +1,304 @@
 # SnapCon
-SnapCon started as a personal project to better manage and monitor my small Snapmaker U1 print farm through Home Assistant.
-My original goal was to build a Home Assistant integration that would provide everything I needed to control and monitor my printers from a single dashboard.
+SnapCon is a local-first fleet management platform built primarily for Snapmaker U1 print farms.
 
-While working on that integration, I discovered Danny Gimbell's excellent [U1Hub](https://github.com/dlgambill/u1hub) project.
-It already solved several challenges and introduced capabilities that simply couldn't be achieved cleanly
-within Home Assistant alone. Rather than reinventing the wheel, I decided to fork U1Hub and build on top of it.
+The project was created to manage my own small farm of 25 Snapmaker U1 printers. Its architecture, interface, and ongoing development are centered around the capabilities, workflows, and operational needs of the U1.
 
-What began as a few small modifications quickly grew into something much larger.
+SnapCon provides a single interface for monitoring, controlling, and managing multiple printers without requiring printer activity or operational data to be sent to a third-party cloud service.
 
-As development continued, SnapCon gradually evolved beyond the original concept. New features, a different
-architecture, and a broader vision pushed the project in a direction that was no longer just an extension of U1Hub, but a project of its own. While it still owes its origins to Danny's work, the codebase, goals, and feature set have diverged significantly.
+For Snapmaker U1 farms, SnapCon provides capabilities such as:
 
-Today, SnapCon is a local-first fleet management platform for 3D printer farms — built around Klipper/Moonraker
-(Snapmaker U1, generic Klipper) and now also FlashForge (AD5X, Adventurer 5M/5M Pro) and Creality (K1/K2/Hi) —
-with an emphasis on usability, automation, monitoring, and features that extend well beyond what Home Assistant alone can provide.
+* Centralized printer and fleet monitoring
+* Active print-job tracking
+* Job controls and printer-management actions
+* Camera snapshots and printer previews
+* Four-toolhead status and material monitoring
+* Toolhead and filament mapping
+* Compact and detailed dashboard views
+* Printer sorting, grouping, and organization
+* Farm-level visibility across multiple U1 printers
+* Home Assistant integration
+* Optional secure remote access
+* Local operation without a mandatory cloud dependency
 
-This project would not have existed without the inspiration and foundation provided by Danny Gimbell's U1Hub, and I would like to thank him for creating and sharing it with the community.
+SnapCon communicates directly with each U1 through its local Klipper and Moonraker interfaces. Nothing needs to leave the local network unless Remote Access is explicitly enabled.
 
-I hope SnapCon will be as useful to other makers and print farm operators as it has been for me.
+Support for additional printer platforms was added in response to requests from users with mixed printer farms. Experimental connectors currently include selected FlashForge, Creality, and generic Klipper/Moonraker printers.
 
-(SnapCon talks straight to each printer's own local API — Moonraker for Klipper-based machines, each brand's
-native API for the rest. Nothing leaves your network unless you explicitly turn on Remote Access.)
+These additional connectors are not the main focus of the project and may not provide the same depth of functionality, testing, or integration available for the Snapmaker U1. SnapCon’s development priorities remain focused on the U1 and its specific capabilities.
 
+SnapCon began as a personal project for managing my own printers. An early version used Danny Gimbell’s U1Hub project as a starting point. Since then, the codebase, architecture, functionality, and direction have changed substantially, and SnapCon has developed into a separate project.
 
+SnapCon is intended primarily for Snapmaker U1 owners and farm operators who need a practical, centralized, and locally controlled way to manage multiple printers from one interface.
+
+---
 Enjoying SnapCon? Consider buying me a coffee (or two).
 Every bit helps fund new printers so I can expand support to more models.
 [![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/default-orange.png)](https://buymeacoffee.com/ebzed)
 
-
-## Supported printers
-
-SnapCon talks to each printer through a small per-brand "connector" — adding a new brand is one file, nothing
-else in the app needs to change. Currently supported:
-
-| Brand | Connector | Notes |
-|---|---|---|
-| Snapmaker U1 | `snapmaker-u1-klipper` | Klipper-based, plus Snapmaker-specific extras (camera, AFC filament lanes, plate/exclude-object) |
-| Generic Klipper / Moonraker | `klipper-moonraker` | Any printer running stock Moonraker |
-| Creality | `creality-klipper` | K1 / K2 / Hi series |
-| FlashForge | `flashforge-adventurer` | Adventurer 5M / 5M Pro |
-| FlashForge AD5X | `flashforge-ad5x` | Multi-material AD5X |
-
-Not every connector supports every feature (camera, multi-toolhead filament, exclude-object, etc.) — the UI
-adapts automatically per printer based on what its connector reports it can do.
-
 ---
-
 ## SnapCon Core Features
 
-### Fleet Dashboard — four view modes
-SnapCon has one fleet view that reshapes itself into four different layouts, cycled with the view button in
-the top bar (⊞ icon). Which views that button cycles through — or whether it just toggles one specific view
-on and off — is configurable in **Settings → View → Alternate Display**.
+### Fleet Dashboard, four view modes
+SnapCon has one fleet view that reshapes itself into four different layouts, cycled with the view  
+button in the top bar (⊞ icon). Which views that button cycles through or whether it just toggles one specific view on and off is configurable in **Settings → View → Alternate Display**.
 
-![Fleet Dashboard](./docs/fleet-dashboard.png)
+#### Regular View
+The default view, every printer as a full card: stats bar, filament lanes, progress, and every control  
+on screen at once. Best for smaller fleets, or whenever you want the complete picture for each printer without drilling in.
+![regular](./docs/regular.png)
 
-- **Regular** — the full printer card: stats, filament lanes, progress, every control.
-- **Compact** — the same cards, shrunk down (smaller stats, fewer buttons) to fit more printers on screen.
-- **Camera View** — a grid focused on each printer's live camera feed, with a shared toolbar (status tabs, tag
-  filter, multi-select + bulk actions, tag editor — see below).
-- **List View** — a dense, sortable table (one row per printer) for scanning a large fleet at a glance; shares
-  the same toolbar as Camera View.
+#### Compact View
+The same cards, shrunk down, smaller stats, fewer buttons, no filament-lane detail. Built for fitting a larger fleet on one screen.
+![compact](./docs/compact.png)
 
-Regardless of view, when "No Sort" (the default) is selected you can reorder printers manually via
-drag-and-drop, dragging from the printer's status badge to the desired position. Sort by Status, by Time
-Remaining, or by Name are also available.
+#### Camera View  
+A grid focused on each printer's live camera feed, refreshed on an interval you control (with optional staggered refresh so a large fleet's cameras don't all fire at once). Printers without a camera, or with a broken feed, show a retryable placeholder instead. Shares a toolbar with List View: status tabs, tag filter, multi-select with bulk Pause/Resume/Cancel, and tag editing.
+![camera](./docs/camera.png)
 
-![Settings — View tab](./docs/settings-view-tab.png)
+#### List View
+The same fleet as a dense, sortable table, one row per printer, with file thumbnail, a real progress bar, remaining time and layer count, and a filament column showing each loaded toolhead as a colored chip. Uses the same toolbar, multi-select, and bulk actions as Camera View.
+![List](./docs/List.png)
 
-### Camera View
-![Camera View](./docs/camera-view.png)
-A grid of live camera feeds, refreshed on an interval you control (**Settings → View → Camera View refresh
-interval**, floored to protect printer camera hardware from being polled too often, with an optional
-**staggered refresh** so a large fleet's cameras don't all fire at the exact same instant). A printer whose
-connector doesn't support a camera — or whose feed comes back blank/broken (some connectors will happily
-return a black frame if nothing's actually connected) — shows a "No Feed" / "Camera Disabled" placeholder
-instead, click it to retry manually.
+Regardless of view, when "No Sort" (the default) is selected you can reorder printers manually via  
+drag-and-drop, dragging from the printer's status badge to the desired position. Sort by Status,  
+by Time Remaining, or by Name are also available.
 
-The toolbar above the grid is shared with List View:
-- **Status tabs** — All / Printing / Attention Needed / Idle / Offline, with live counts.
-- **Tag filter** — narrow the grid to printers carrying a specific tag.
-- **Multi-select + bulk actions** — check any number of printers and Pause / Resume / Cancel them all at
-  once, with a single confirmation for a batch cancel rather than one popup per printer.
-- **Edit Tags** — assign free-form tags to any printer (e.g. by location, farm, or owner) for later filtering.
+For a detailed explanation of the printer card, see the [Printer Card documentation](docs/printer-card.md).
 
-### List View
-![List View](./docs/list-view.png)
-The same fleet, as a compact table: Printer (click the header to sort by name), Tags, current File (with
-thumbnail), Status, a real progress bar with remaining time and layer count, a Filament column showing each
-loaded toolhead as a colored chip (e.g. `PLA` on a purple background — one chip per loaded toolhead, up to 4),
-and icon-only Actions. Uses the exact same toolbar, multi-select, and bulk actions as Camera View.
 
-### Compact View
-![Compact View](./docs/compact-view.png)
-Smaller cards, fewer buttons, no filament-lane detail — built for fitting a larger fleet on one screen.
+### Plate View and Object Exclusion
+The Plate button Shows up on a printer card's footer only while it's actively printing or paused, and only when the current print actually has more than one object on the plate.  
+
+Clicking it opens a modal with two synced views of the same plate:
+
+![exclude](./docs/exclude.png)
+
+1. A visual map rendered from the actual gcode object outlines, overlaid on a photo of the real U1 bed so objects appear exactly where they physically sit.  
+2. A list below/beside it, one row per object.
+
+Both are clickable, Clicking an object's shape on the map or its row in the list does the same thing: toggles that object into your selection.  
+Nothing is sent to the printer yet at this point, it's just building up your selection.
+
+Each object is visually in one of four states:
+- Normal, still printing, not selected
+- Selected, your current picks (highlighted)
+- Currently printing, tagged "printing" (the object the nozzle is on right now)
+- Already skipped, grayed out, tagged "skipped", no longer clickable
+
+Once you've selected one or more objects, a Skip (N) button becomes active. Clicking it sends an exclude command for each selected object, one at a time, showing "Skipping N…" then  
+"Skipped N" when done.  
+
+There's no "undo", once an object is skipped, it's permanently marked skipped for that print, same as if you'd excluded it from the printer's own screen.
 
 ### Heat Multiple Printers
-![Heat Multiple Printers](./docs/bulk-heat.png)
-A thermometer icon in the top bar opens a bulk bed-temperature control: pick any number of online printers,
-set a target bed temperature, and optionally enable **Staggered heating** to start each printer a
-configurable number of seconds after the last (rather than all at once) — useful on a shared circuit where
-heating an entire farm's beds simultaneously would trip a breaker. Per-printer progress is shown live as each
-one is set, and closing the dialog stops any staggered run still in progress.
 
-### Printer Tags
-![Edit Tags](./docs/edit-tags.png)
-Free-form tags per printer (e.g. `Room1`, `Farm-A`, `Loaner`), managed from a single Edit Tags dialog and used
-to filter both Camera View and List View.
+<p>
+  <img
+    src="./docs/bulk-heat.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+ A thermometer icon in the top bar opens a bulk bed temp. control:
+ pick any number of online printers, set a target bed temperature,  
+ and optionally enable <strong>Staggered heating</strong> to start each printer
+ a configurable number of seconds after the last, rather than all at once.
+ <br>
+
+This is useful on a shared circuit where heating an entire farm's beds
+simultaneously could trip a breaker.
+<br>
+
+Per-printer progress is shown live as each one is set, and closing the
+dialog stops any staggered run still in progress.
+</p>
+<br clear="all">
+
+### Printer Maintenance
+
+<p>
+  <img
+    src="./docs/Maintenance.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+Printer Maintenance lets you specify which component or operation  
+is under maintenance, Each operation comes with a preconfigured  
+frequency (based on the manufacturer's recommendations), and the  
+next maintenance date is scheduled automatically.  
+
+A cost parameter was also added to maintenance entries, laying the  
+groundwork for future TCO (total cost of ownership) tracking.
+Additionally, an Offline button lets you take a printer offline  
+while offline, no actions can be performed on it.  
+Once set to offline, the button switches to "Online" and clicking  
+it brings the printer back.
+
+The same panel also shows each printer's **total print hours**   
+(pulled from its own history) and an automatic **warranty status**  
+active for 12 months from the purchase date you set, then flagged  
+as expired without you needing to track either by hand.
+
+</p>
+<br clear="all">
+
+# SnapCon Configuration
+SnapCon settings can be accessed by selecting the gear icon in the top navigation bar. This opens the Settings screen, where configuration options are organized into separate tabs.
+
+The sections below describe the available options in each settings tab
+
+### Settings
+The General tab contains the core settings that control where SnapCon finds print files, how often it checks printer status, and how print costs are calculated.
+
+<p>
+  <img
+    src="./docs/settings.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+
+- Files: Select the folder SnapCon monitors for sliced .gcode files. A live status message confirms whether the path exists, is accessible, and contains compatible files as you type or use Browse.
+- Fleet Polling: Set how often SnapCon checks each printer’s status, from 1 to 60 seconds. A helper message shows the estimated requests per minute and warns when the selected interval may be too aggressive, especially for larger farms.
+- Costs: Configure the currency, filament spool cost, and electricity rate per kWh used to estimate print costs on job cards. The ZIP Lookup button can retrieve a suggested local electricity rate from the OpenEI utility-rate database.
+- Sending Prints: Choose whether SnapCon displays the color-to-toolhead mapping screen before sending a file. You can also enable automatic matching to the closest available toolhead color or use direct T1 → T1 assignment.
+- Application (Docker only): Use Restart App to restart the SnapCon container. This is useful after editing config.json outside SnapCon or pulling a newer container image.
+
+</p>
+<br clear="all">
+
+
+### View 
+The View tab controls how the printer fleet is displayed and how the view-switch button in the header behaves.
+
+<p>
+  <img
+    src="./docs/view.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+
+- Use T0/T1/T2/T3 Notation:Changes toolhead numbering from the default 1–4 format to the zero-based T0–T3 format.
+- Alternate Display: Selects which view the header’s view-switch button opens or cycles through. 
+- Open in Compact Mode: Opens the fleet dashboard in the Alternate view instead of Regular view.
+- Camera View Refresh Interval: Sets how often camera snapshots refresh while using Camera view.
+- Stagger Camera Refresh Across Printers: Distributes camera snapshot requests across the selected refresh interval instead of requesting all printer images at once. 
+
+</p>
+<br clear="all">
 
 ### Notifications (Telegram / ntfy.sh)
-Push notifications for what's happening across your fleet, sent by a background watcher that runs
-independently of whether the dashboard is even open. Configured in **Settings → Notifications**:
-- **On events** — start, pause, error, and complete.
-- **On interval** — 25% / 50% / 75% progress milestones.
-- **Include image** — attaches a live camera snapshot to the notification, if that printer has one.
-- Delivered via **ntfy.sh** (just a topic — a "Generate" button makes you a random one) or **Telegram**
-  (bot token + chat ID), plus a **Test Notification** button to confirm delivery before relying on it.
+
+<p>
+  <img
+    src="./docs/notification.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+Push notifications for what's happening across your fleet, sent by a   
+background watcher that runs independently of whether the dashboard is even open.  
+Configured in Settings → Notifications:
+
+- Enable Notifications, the master switch. Turn it off and everything below stops sending, without losing any of your settings.
+- Include camera image, attaches a live snapshot to the notification, if that printer has one.
+
+Events, choose exactly which print events you want to hear about, independently:
+- Print started
+- Print paused
+- Error or failure
+- Print finished
+
+Want alerts only when something goes wrong? Turn on just "Error or failure" and leave the rest off.
+
+Milestone updates — a separate switch for progress-percentage alerts, e.g. "50% done." Pick any combination of 10%, 25%, 50%, 75%, and 90% — you're not locked into fixed checkpoints, and a live counter shows how many messages per print your selection adds up to.
+
+- ntfy.sh needs just a topic (think of it as a channel name). Regenerate makes you a fresh random one, and Copy puts it on your clipboard for pasting into the ntfy app. Since anyone who knows your topic can read your notifications, treat it like a shared secret, regenerating immediately cuts off anyone still subscribed to the old one.
+- Telegram needs a bot token and a chat ID. 
+
+</p>
+<br clear="all">
+
+### Printers
+he Printers tab is used to add, configure, organize, and maintain the printers connected to SnapCon.
+SnapCon is built primarily around the Snapmaker U1. Its Klipper/Moonraker-based connector enables features such as automatic printer detection, identity lookup, and network discovery.
+
+
+<p>
+  <img
+    src="./docs/printers.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+
+
+Each printer entry can be expanded to configure the following sections:
+
+- Identity: Printer name, location, and brand label.
+- Connection: Printer URL, connector type, optional Moonraker API token, and a Test Connection action that verifies connectivity before saving.
+- Hardware: Serial number, Snapmaker U1 pairing access code, purchase date, and estimated power draw in watts. Power usage is combined with the electricity rate configured under General to estimate energy cost per print.
+- Behavior:Options such as automatic bed leveling before each print and whether the printer should participate in push notifications. 
+
+</p>
+<br clear="all">
+
+Printer entries can be searched, collapsed, and reordered by dragging. Additional actions are available from the ⋮ menu (Including: Maintenance history, Move up, Move down & Remove printer)
+
+#### Printers Discovery
+The Discover Button Scans the local network for supported printers and lets you add them without entering IP addresses manually.
+
+- Scan Scope: Scan all subnets connected to the SnapCon host, or enter a specific subnet or CIDR   range. Custom scans are limited to /20 to prevent excessively large searches.
+- Discovery Process: SnapCon probes ports 80 and 7125 in parallel, covering Moonraker installations running directly or behind a proxy. A typical /24 scan usually completes in about 10 seconds.
+
+Each result shows the available printer details and an Add button. Printers already configured in SnapCon are marked as Added. During first-time setup, Add All & Save can be used to add all discovered printers at once.
+
+## Remote Access
+<p>
+  <img
+    src="./docs/remoteaccess.png"
+    alt="Bulk heat control"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+SnapCon can securely expose your printer farm dashboard over the internet, allowing you to monitor prints, manage jobs, and access your printers from a phone or another device while away from home while No router configuration, port forwarding, VPN client, reverse proxy, or manual certificate management is required.
+
+SnapCon uses a managed Cloudflare Tunnel, Instead of opening an inbound port on your router, SnapCon creates an outbound connection to Cloudflare. Cloudflare provides a public HTTPS address and securely relays traffic through the tunnel to your local SnapCon instance.
+
+This means:
+* No open inbound firewall ports
+* No manual router configuration
+* No VPN software required on client devices
+* A valid HTTPS address and certificate
+* No manual `cloudflared` configuration
+* Remote Access can be enabled directly from SnapCon settings
+
+Remote Access cannot be enabled unless User Access Management is active and at least one user account exists.
+
+</p>
+<br clear="all">
+
+
+
+
+
+
+
+
 
 ### Cost Tracking
 Set an average filament cost (per spool) and an electricity rate ($/kWh), and SnapCon estimates filament +
@@ -123,48 +306,16 @@ energy cost per print (shown on the Selected Model card and in the print-from-pr
 electricity rate off-hand? Enter a US ZIP code and SnapCon looks it up for you (via the OpenEI utility-rate
 database), pre-filling the field with your local utility's residential rate.
 
-### Network Discovery
-Adding printers doesn't require typing in IPs one at a time. **Discover local** scans every subnet your
-SnapCon host is actually connected to; **Discover subnet** lets you target one deliberately, accepting a bare
-subnet (`192.168.2.0`), CIDR notation (`192.168.22.0/25`), or a dotted subnet mask (`192.168.22.128/255.255.255.128`)
-— an unaligned address anywhere in the block normalizes automatically to its containing block, and scans are
-floored at `/20` (4096 addresses) so a typo'd `/8` can't kick off a scan that never ends. Manually adding a
-printer by IP also probes it automatically to pre-fill its name and serial number.
-
 ### Firmware
 **Settings → Firmware → Get Firmware** reads the current firmware version from every idle printer in the
 fleet at once, so you can spot who's behind without opening each printer's own web UI. (One-click Deploy is
 planned but not implemented yet.)
-
-### Remote Access (Cloudflare Tunnel) — Development Preview
-![Remote Access](./docs/remoteaccess.png)
-Access your SnapCon dashboard from outside your LAN without opening a port or running your own reverse proxy —
-SnapCon manages a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-for you end-to-end: registration, a per-installation signed identity, downloading and verifying `cloudflared`
-itself (checksum-pinned, never trust-on-first-use), and supervising the tunnel process with automatic
-reconnection. Requires **Enable User Access Management** to be on first — SnapCon refuses to expose a login-less
-instance to the internet. Configured entirely from **Settings → Remote Access**.
 
 ### Fleet Search
 - Text search across brand, printer name, and state
 - Status filter — Idle, Printing, Error, etc.
 - Color-family search — type "Yellow," "Red," "Blue," etc. to find printers by filament color
 - Progress filter — e.g. `>75%` or `<30%` to filter by print completion
-
-### Printer Card
-![printer cards](./docs/printer-cards.png)
-- Brand, printer name, and status badge
-- Stats bar with hotend temp, bed temp, current layer, and print thumbnail
-- Progress bar showing filename, completion percentage, and elapsed / remaining / filament times
-- Filament Spool Lanes (T1, T2, ...) showing material type and color
-- Error panel with error lookup, description, and a "Learn more" link
-- Quick-action buttons to Eject (when idle or complete, with a file loaded), Camera snapshot, Open Fluidd
-- Visual exclude-object map for multi-part prints — skip individual objects mid-print
-- Set target hotend and bed temperatures per printer (or heat several printers at once — see above)
-
-### Print Controls (footer buttons)
-- Idle state: Upload file, Print, Preheat
-- Busy state: Pause / Resume, Cancel, E-Stop, Plate map (for multi-object prints)
 
 ### File Management
 - Collapsible folder/file browser sidebar, with search that recurses into every subfolder (not just the
@@ -186,25 +337,6 @@ The search field lets you search by printer name, spool color, or job progress (
 ② **Files/Folder Pane** — Opens when you click the folder icon, showing the contents of your configured gcode folder. Clicking a file lets you upload it either directly from a printer card's Upload button, or to all printers at once via "Upload All" on the Selected Model card.
 ③ **Selected Model Card** — Shows details about the selected file: slicer print time, weight, cost (if configured in settings), and the spool colors/materials required. If the file is a Full Spectrum file, an "FS" indicator appears next to the filename. The Selected Model card has two icons — one to eject the file (deselect it), and one to upload it to all printers.
 
-### Printer Card:
-  The printer card appears in four variations, Printing, Idle, Completed Job, and Error with cards displayed in that order.
-![printer cards](./docs/printer-cards.png)
-
-① **Printer Status** - current job state (Printing, Idle, Paused, etc.)
-② **Control Icons** - quick actions: view the camera snapshot, open the web interface (Fluidd), and eject filament (if a file is loaded)
-③ **Printer Name** - the custom nickname assigned to this printer
-④ **Printer Job Stats** - active hotend temp, bed temp, and layer number, plus the gcode thumbnail (click it to view the full-size image)
-⑤ **Printing Job Status** - file name, progress percentage, and elapsed / remaining time
-⑥ **Filament Spool Status** - shows all spools on the printer, with the active one highlighted (click a spool to unload it, or unload all spools at once)
-⑦ **Control Buttons** - job actions: Print (if no job is loaded, lets you choose a file from the printer), Pause, Resume, Cancel, Plate (click to exclude objects from the current plate), Upload, and E-Stop (emergency stop, restarts Klipper)
-⑧ **Error Handling** - if an error occurs, the printer pauses and displays the error message. In many cases the issue can be resolved directly, for example, a "Toolhead Swapping Anomaly" may be caused by a loose object on the plate: remove the item, exclude it from the print, and resume
-
-### Color-to-Spool Mapping
-When you load or select a file on a printer card, it lets you perform Filament Mapping — assigning each color in the file to a physical spool. Depending on your configuration, this happens either by direct index (T1→T1, T2→T2, ...) or automatically, matching file colors to the closest available spools using a Hungarian-style matching algorithm.
-You can always override this and assign colors to spools manually.
-Note: if the file requires different materials than what's currently loaded, an ✕ will appear on the affected mapping(s). Printing is still possible in this case — but proceed at your own risk.
-
-![Spools](./docs/Spools.png)
 
 ### User Management
 A new option under General Settings lets you enable "Enable User Access Management."
@@ -227,16 +359,6 @@ You can also set an email address (required for OTP) and a phone number
 To use OTP login for a user, check the OTP Login checkbox.
 Otherwise, set a password for that user directly.
 
-### Improved Printer Maintenance
-![Maintenance](./docs/Maintenance.png)
-Printer Maintenance lets you specify which component or operation is under maintenance.
-Each operation comes with a preconfigured frequency (based on the manufacturer's recommendations), and the next maintenance date is scheduled automatically.
-A cost parameter was also added to maintenance entries, laying the groundwork for future TCO (total cost of ownership) tracking.
-Additionally, an Offline button lets you take a printer offline — while offline, no actions can be performed on it. Once set to offline, the button switches to "Online" and clicking it brings the printer back.
-
-The same panel also shows each printer's **total print hours** (pulled from its own history) and an
-automatic **warranty status** — active for 12 months from the purchase date you set, then flagged as expired
-— without you needing to track either by hand.
 
 ### CLI / slicer integration hook
 SnapCon ships a small command-line hook any slicer's post-processing step can call to hand a sliced file

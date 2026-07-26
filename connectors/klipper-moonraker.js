@@ -11,7 +11,10 @@ exports.capabilities = {
   // Generic Klipper/Moonraker installs commonly proxy Fluidd or Mainsail on
   // the same host — a reasonable default, though a bare Moonraker-only setup
   // with no frontend installed would have nothing to actually show here.
-  webUi: true, setColor: false, singleToolhead: false
+  webUi: true, setColor: false, singleToolhead: false,
+  // Real hardware is unknown for a generic Klipper box — matches the
+  // server's own hard ceiling on POST /api/bedtemp rather than guessing low.
+  maxBedTemp: 120
 };
 
 // ---- Fleet status ----

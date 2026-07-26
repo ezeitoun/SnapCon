@@ -434,6 +434,29 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     return { ok: true };
   }
 
+  // Diagnostics action: re-runs the connection chain from the top without
+  // touching enabled/autoStart/the stored token or provisioning anything —
+  // processManager.restart() reuses whatever token it already has from the
+  // last start(). Mirrors enable()'s post-start bookkeeping (state,
+  // everConnectedThisSession, a fresh probe cycle) so the UI's chain
+  // visibly resolves top to bottom again instead of appearing stuck.
+  async function restart() {
+    if (!Store.load(baseDir).enabled) return { ok: false, error: "Remote Access is not enabled." };
+    state = "starting";
+    processManager.onStatusChange(onCloudflaredEvent);
+    try {
+      await processManager.restart();
+    } catch (e) {
+      state = "error"; lastError = e.message;
+      return { ok: false, error: lastError };
+    }
+    everConnectedThisSession = false;
+    scheduleProbe(0);
+    recomputeState();
+    return { ok: true, pending: true };
+  }
+  function getLog() { return processManager.getRecentLog(); }
+
   // Process exit (SIGINT/SIGTERM), not a user action: stops the child only,
   // never touches enabled/autoStart/the stored token, so the next boot's
   // startupInit() still reconnects automatically.
@@ -553,6 +576,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
       enabled: persisted.enabled,
       state,
       processRunning: cfmStatus.processRunning,
+      pid: cfmStatus.pid,
       logConnectionSeen: cfmStatus.sawConnectionEvidence,
       publicEndpointHealthy,
       localServiceReachable,
@@ -601,8 +625,10 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     disable: serialize(disable),
     disableForShutdown,
     removeRemoteAccess: serialize(removeRemoteAccess),
+    restart: serialize(restart),
     startupInit: serialize(startupInit),
     getStatus,
+    getLog,
     // exported for tests only
     _internal: { recomputeState, scheduleProbe, probeUrl, scheduleRegistrationPoll }
   };

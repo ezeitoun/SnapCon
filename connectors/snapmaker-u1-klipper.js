@@ -12,7 +12,9 @@ exports.capabilities = {
   // No documented macro for writing filament_color_rgba back to the
   // printer (it's touchscreen/RFID-set) — unlike AD5X's msConfig_cmd, there's
   // nothing to call here yet.
-  webUi: true, setColor: false, singleToolhead: false
+  webUi: true, setColor: false, singleToolhead: false,
+  // Stock U1 firmware rejects a bed target above 100°C.
+  maxBedTemp: 100
 };
 
 // ---- Fleet status ----

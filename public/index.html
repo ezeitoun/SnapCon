@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- SnapCon — index v0.2.0 -->
+<!-- SnapCon — index v0.4.1 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -22,12 +22,12 @@
       <input class="field" id="loginPassword" type="password" autocomplete="current-password">
       <div class="login-actions">
         <button class="btn primary" id="loginSubmit">Log in</button>
-        <button class="btn ghost" id="loginOtpBtn">Email me a code instead</button>
+        <button class="btn ghost" id="loginOtpBtn">Send me a code instead</button>
       </div>
       <div class="pstatus" id="loginStatus"></div>
     </div>
     <div id="loginStep2" style="display:none">
-      <div class="hint" style="margin-bottom:10px">Enter the code emailed to you.</div>
+      <div class="hint" style="margin-bottom:10px">Enter the code sent to you.</div>
       <label class="fl">Code</label>
       <input class="field" id="otpCode" autocomplete="one-time-code" maxlength="8" style="text-transform:uppercase">
       <div class="login-actions">
@@ -108,63 +108,108 @@
       </div>
 
       <div class="set-panel" id="tab-general">
-      <div class="setcard">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="pi-lbl">G-code folder</span>
-          <input class="field" id="setFolder" placeholder="e.g. C:/Users/you/gcode" style="flex:1" />
-          <button class="btn ghost" id="browseBtn" style="flex:none;white-space:nowrap">Browse…</button>
-        </div>
+      <div class="settings-container">
 
-        <label class="fl" style="margin-top:14px">Refresh interval <span class="hint">seconds between fleet updates</span></label>
-        <input class="field" id="setRefresh" type="number" min="1" max="60" placeholder="2" style="max-width:100px" />
-
-        <label class="fl" style="margin-top:14px">Currency <span class="hint">used for maintenance cost entries</span></label>
-        <input class="field" id="setCurrency" list="currencyList" placeholder="$" style="max-width:100px" />
-        <datalist id="currencyList">
-          <option value="$"><option value="₪"><option value="€"><option value="£"><option value="¥"><option value="₹"><option value="₩">
-        </datalist>
-
-        <label class="fl" style="margin-top:14px">Avg. filament cost <span class="hint">$ per spool</span></label>
-        <input class="field" id="setFilamentCost" type="number" min="0" placeholder="20" style="max-width:100px" />
-
-        <label class="fl" style="margin-top:14px">Electricity rate <span class="hint">$/kWh – for energy cost estimates</span></label>
-        <div style="display:flex;align-items:center;gap:8px">
-          <input class="field" id="setElectricityRate" type="number" min="0" step="0.001" placeholder="0.13" style="max-width:100px" />
-          <button class="btn ghost" id="elecSearch" title="Look up average rate by ZIP code" style="padding:5px 10px;display:flex;align-items:center;gap:4px">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> ZIP
-          </button>
-        </div>
-
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setAllowMapping"> Enable Head Mapping <span class="hint">show color-to-head assignment UI when sending prints</span></label>
-        <label style="margin-top:6px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setSuggestMatching"> Auto-Match Colors <span class="hint">suggest the closest head color; uncheck for T1→T1 order</span></label>
-
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setUsersEnabled"> Enable user access management</label>
-        <div class="bootstrap-admin" id="bootstrapAdmin" style="display:none">
-          <div class="hint" style="margin-bottom:8px">Create the first Admin account — it must use a password, not an emailed code.</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <input class="field" id="bootFirst" placeholder="First name (optional)" style="max-width:150px">
-            <input class="field" id="bootLast" placeholder="Last name (optional)" style="max-width:150px">
-            <input class="field" id="bootLogin" placeholder="Login name" style="max-width:150px" autocomplete="off">
-            <input class="field" id="bootPassword" type="password" placeholder="Password" style="max-width:150px" autocomplete="new-password">
-          </div>
-          <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
-            <button class="btn primary" id="bootSubmit">Create Admin</button>
-            <span class="pstatus" id="bootStatus"></span>
+        <div class="settings-section">
+          <div class="settings-section-title">Files</div>
+          <div class="settings-section-desc">Where SnapCon reads sliced files from.</div>
+          <div class="settings-section-body">
+            <div class="settings-field">
+              <label class="settings-label" for="setFolder">G-code folder</label>
+              <div style="display:flex;gap:8px">
+                <input class="field" id="setFolder" placeholder="e.g. C:/Users/you/gcode" style="flex:1" />
+                <button class="btn ghost" id="browseBtn" style="flex:none;white-space:nowrap">Browse…</button>
+              </div>
+              <div class="settings-help" id="folderCheckStatus"></div>
+            </div>
           </div>
         </div>
 
-        <div class="row" id="dockerRestartRow" style="margin-top:16px;align-items:center;gap:10px;display:none">
-          <button class="btn ghost" id="dockerRestartBtn">Restart App</button>
-          <span class="hint">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
-          <span class="pstatus" id="dockerRestartStatus"></span>
+        <div class="settings-section">
+          <div class="settings-section-title">Fleet polling</div>
+          <div class="settings-section-desc">How often SnapCon checks every printer's status.</div>
+          <div class="settings-section-body">
+            <div class="settings-field">
+              <label class="settings-label" for="setRefresh">Refresh interval, seconds</label>
+              <input class="field" id="setRefresh" type="number" min="1" max="60" placeholder="2" style="max-width:140px" />
+              <div class="settings-help" id="refreshHelper"></div>
+            </div>
+          </div>
         </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Costs</div>
+          <div class="settings-section-desc">Used to estimate filament and energy cost per print.</div>
+          <div class="settings-section-body">
+            <div class="settings-grid">
+              <div class="settings-field">
+                <label class="settings-label" for="setCurrency">Currency</label>
+                <select class="field" id="setCurrency">
+                  <option value="$">USD — $</option>
+                  <option value="€">EUR — €</option>
+                  <option value="£">GBP — £</option>
+                  <option value="₪">ILS — ₪</option>
+                  <option value="¥">JPY — ¥</option>
+                  <option value="₹">INR — ₹</option>
+                  <option value="₩">KRW — ₩</option>
+                </select>
+              </div>
+              <div class="settings-field">
+                <label class="settings-label" for="setFilamentCost">Filament, per spool</label>
+                <input class="field" id="setFilamentCost" type="number" min="0" placeholder="20" />
+                <div class="settings-help"><span id="filamentCostCurrency">$</span> per spool</div>
+              </div>
+              <div class="settings-field">
+                <label class="settings-label" for="setElectricityRate">Electricity rate</label>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <input class="field" id="setElectricityRate" type="number" min="0" step="0.001" placeholder="0.13" />
+                  <button class="btn ghost" id="elecSearch" title="Looks up your area's average residential electricity rate via the OpenEI utility-rate database and fills it in for you." style="padding:5px 10px;flex:none;display:flex;align-items:center;gap:4px">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> ZIP
+                  </button>
+                </div>
+                <div class="settings-help"><span id="elecRateCurrency">$</span> per kWh. ZIP fills this from OpenEI.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title">Sending prints</div>
+          <div class="settings-section-desc">Color-to-toolhead assignment when you send a file to a printer.</div>
+          <div class="settings-section-body">
+            <label class="switch-row" for="setAllowMapping"><input type="checkbox" role="switch" id="setAllowMapping" class="switch-input"><span class="switch-text"><span class="switch-label">Head mapping</span><span class="switch-desc">Show color-to-head assignment UI when sending prints</span></span></label>
+            <div class="settings-nested" id="autoMatchNest">
+              <label class="switch-row" for="setSuggestMatching"><input type="checkbox" role="switch" id="setSuggestMatching" class="switch-input"><span class="switch-text"><span class="switch-label">Auto-match colors</span><span class="switch-desc">Suggest the closest head color; off uses T1→T1 order</span></span></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" id="dockerRestartRow" style="display:none">
+          <div class="settings-section-title">Application</div>
+          <div class="settings-section-body">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <button class="btn ghost" id="dockerRestartBtn">Restart App</button>
+              <span class="settings-help">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
+              <span class="pstatus" id="dockerRestartStatus"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-dirty-bar" id="generalDirtyBar" style="display:none">
+          <span class="dirty-text"></span>
+          <span class="pstatus" id="generalSaveStatus"></span>
+          <div class="settings-dirty-actions">
+            <button class="btn ghost" id="generalDiscard">Discard</button>
+            <button class="btn primary" id="generalSaveBtn">Save</button>
+          </div>
+        </div>
+
       </div>
-
       </div>
 
       <div class="set-panel" id="tab-prefs" style="display:none">
       <div class="setcard">
-        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="setTNotation"> Use T0/T1/T2/T3 notation <span class="hint">default: 1–4</span></label>
+        <label class="switch-row" for="setTNotation"><input type="checkbox" role="switch" id="setTNotation" class="switch-input"><span class="switch-text"><span class="switch-label">Use T0/T1/T2/T3 notation</span><span class="switch-desc">default: 1–4</span></span></label>
 
         <label class="fl" style="margin-top:14px">Alternate Display <span class="hint">what the header's view button switches to and from Regular view</span></label>
         <select class="field" id="setAltDisplay" style="max-width:220px">
@@ -174,58 +219,139 @@
           <option value="list">List View</option>
         </select>
 
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setOpenCompact"> Open in Compact Mode <span class="hint">start the page in compact view</span></label>
+        <label class="switch-row" for="setOpenCompact" style="margin-top:14px"><input type="checkbox" role="switch" id="setOpenCompact" class="switch-input"><span class="switch-text"><span class="switch-label">Open in Compact Mode</span><span class="switch-desc">start the page in compact view</span></span></label>
 
         <label class="fl" style="margin-top:14px">Camera View refresh interval <span class="hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
         <input class="field" id="setCameraRefresh" type="number" min="3" max="60" placeholder="6" style="max-width:100px" />
 
-        <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="setCameraStagger" checked> Stagger camera refresh across printers <span class="hint">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></label>
+        <label class="switch-row" for="setCameraStagger" style="margin-top:14px"><input type="checkbox" role="switch" id="setCameraStagger" class="switch-input" checked><span class="switch-text"><span class="switch-label">Stagger camera refresh across printers</span><span class="switch-desc">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></span></label>
       </div>
       </div>
 
       <div class="set-panel" id="tab-notif" style="display:none">
-      <div class="setcard">
-        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfEnabled"> Enable Notifications</label>
+      <div class="settings-container">
+
+        <div class="settings-section">
+          <label class="switch-row" for="ntfEnabled"><input type="checkbox" role="switch" id="ntfEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" style="font-size:16px;font-weight:500">Enable Notifications</span></span></label>
+          <div class="settings-section-desc">Push alerts about your fleet, sent by a background watcher independent of whether the dashboard is open.</div>
+        </div>
+
         <div class="ntf-body" id="ntfBody">
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfEvents"> Notify on events <span class="hint">start / pause / error / complete</span></label>
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfIntervals"> Interval notifications <span class="hint">25% / 50% / 75%</span></label>
-          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ntfImage"> Include image</label>
-          <div class="ntf-services">
-            <label style="display:flex;align-items:center;gap:6px">
-              <input type="radio" name="ntfService" id="ntfSvcNtfy" value="ntfy" checked> ntfy.sh
-              <span class="pi-lbl" style="margin-left:10px">Topic</span>
-              <input class="field" id="ntfTopic" placeholder="my-printfarm" style="max-width:220px">
-              <button class="btn ghost" type="button" id="ntfGenTopic" style="flex:none;white-space:nowrap">Generate</button>
-            </label>
-            <label style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-              <input type="radio" name="ntfService" id="ntfSvcTelegram" value="telegram"> Telegram
-              <span class="pi-lbl" style="margin-left:10px">Bot Token</span>
-              <input class="field" id="ntfBotToken" type="password" placeholder="123456:ABC-token-from-BotFather" style="max-width:240px" autocomplete="off">
-              <span class="pi-lbl">Chat ID</span>
-              <input class="field" id="ntfChatId" placeholder="123456789" style="max-width:160px">
-            </label>
+
+          <div class="settings-section">
+            <label class="switch-row" for="ntfImage"><input type="checkbox" role="switch" id="ntfImage" class="switch-input"><span class="switch-text"><span class="switch-label">Include camera image</span><span class="switch-desc">Attach a live snapshot when the printer has one</span></span></label>
           </div>
-          <div style="display:flex;align-items:center;gap:10px;margin-top:8px">
-            <button class="btn ghost" type="button" id="ntfTest">Test Notification</button>
-            <span class="pstatus" id="ntfTestStatus"></span>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Events</div>
+            <div class="settings-section-desc">Which print state changes send a notification.</div>
+            <div class="settings-section-body">
+              <div class="settings-grid">
+                <label class="switch-row" for="ntfEvStart"><input type="checkbox" role="switch" id="ntfEvStart" class="switch-input"><span class="switch-text"><span class="switch-label">Print started</span></span></label>
+                <label class="switch-row" for="ntfEvPause"><input type="checkbox" role="switch" id="ntfEvPause" class="switch-input"><span class="switch-text"><span class="switch-label">Print paused</span></span></label>
+                <label class="switch-row" for="ntfEvError"><input type="checkbox" role="switch" id="ntfEvError" class="switch-input"><span class="switch-text"><span class="switch-label">Error or failure</span></span></label>
+                <label class="switch-row" for="ntfEvComplete"><input type="checkbox" role="switch" id="ntfEvComplete" class="switch-input"><span class="switch-text"><span class="switch-label">Print finished</span></span></label>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <label class="switch-row" for="ntfMilestones"><input type="checkbox" role="switch" id="ntfMilestones" class="switch-input"><span class="switch-text"><span class="switch-label">Milestone updates</span><span class="switch-desc">Notify when a print crosses chosen progress percentages</span></span></label>
+            <div class="settings-nested" id="ntfMilestoneNest">
+              <div class="ntf-chip-row" id="ntfMilestoneChips">
+                <button type="button" class="btn-chip" data-pct="10">10%</button>
+                <button type="button" class="btn-chip" data-pct="25">25%</button>
+                <button type="button" class="btn-chip" data-pct="50">50%</button>
+                <button type="button" class="btn-chip" data-pct="75">75%</button>
+                <button type="button" class="btn-chip" data-pct="90">90%</button>
+              </div>
+              <div class="settings-help" id="ntfMilestoneHint"></div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Providers</div>
+            <div class="settings-section-desc">Either, both, or neither can be on at once.</div>
+            <div class="settings-section-body">
+
+              <div class="ntf-provider-card">
+                <label class="switch-row" for="ntfyEnabled"><input type="checkbox" role="switch" id="ntfyEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">ntfy.sh</span></span></label>
+                <div class="ntf-provider-body" id="ntfyBody">
+                  <div class="settings-field">
+                    <label class="settings-label" for="ntfTopic">Topic</label>
+                    <div style="display:flex;gap:8px">
+                      <input class="field" id="ntfTopic" placeholder="my-printfarm" style="flex:1">
+                      <button class="btn ghost" type="button" id="ntfTopicCopy" style="flex:none;white-space:nowrap">Copy</button>
+                      <button class="btn ghost" type="button" id="ntfGenTopic" style="flex:none;white-space:nowrap">Regenerate</button>
+                    </div>
+                    <div class="settings-help warn">The topic acts as a shared secret — anyone who knows it receives your notifications. Regenerating stops delivery to anyone already subscribed to the old one.</div>
+                  </div>
+                  <div class="ntf-provider-footer">
+                    <button class="btn ghost" type="button" id="ntfTestNtfy">Send test to ntfy.sh</button>
+                    <span class="pstatus" id="ntfTestNtfyStatus"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ntf-provider-card">
+                <label class="switch-row" for="telegramEnabled"><input type="checkbox" role="switch" id="telegramEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">Telegram</span></span></label>
+                <div class="ntf-provider-body" id="telegramBody">
+                  <div class="settings-grid">
+                    <div class="settings-field">
+                      <label class="settings-label">Bot token</label>
+                      <div class="secret-field" id="ntfBotTokenField" data-cleared="0">
+                        <input type="password" class="field secret-input" id="ntfBotToken" placeholder="123456:ABC-token-from-BotFather" autocomplete="off">
+                        <div class="secret-chip" style="display:none">
+                          <span class="status-badge" style="--status-color:var(--ok)">Configured</span>
+                          <button type="button" class="btn ghost secret-replace">Replace</button>
+                          <button type="button" class="btn ghost secret-clear">Clear</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="settings-field">
+                      <label class="settings-label" for="ntfChatId">Chat ID</label>
+                      <input class="field" id="ntfChatId" placeholder="123456789">
+                      <div class="settings-help">A leading minus means a group chat; a plain positive number is a direct message.</div>
+                    </div>
+                  </div>
+                  <div class="ntf-provider-footer">
+                    <button class="btn ghost" type="button" id="ntfTestTelegram">Send test to Telegram</button>
+                    <span class="pstatus" id="ntfTestTelegramStatus"></span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+
+        <div class="settings-dirty-bar" id="notifDirtyBar" style="display:none">
+          <span class="dirty-text"></span>
+          <span class="pstatus" id="notifSaveStatus"></span>
+          <div class="settings-dirty-actions">
+            <button class="btn ghost" id="notifDiscard">Discard</button>
+            <button class="btn primary" id="notifSaveBtn">Save</button>
           </div>
         </div>
-      </div>
 
+      </div>
       </div>
 
       <div class="set-panel" id="tab-printers" style="display:none">
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
-        <input class="field" id="printerSearch" placeholder="Search printers…" style="max-width:220px" />
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <input class="field" id="printerSearch" placeholder="Search printers…" style="max-width:264px;flex:1;min-width:160px" />
         <button class="btn ghost" id="collapseAll" style="white-space:nowrap;flex:none">Collapse All</button>
+        <button class="btn ghost" id="addPrinter" style="white-space:nowrap;flex:none">+ Add</button>
+        <button class="btn ghost" id="discover" style="white-space:nowrap;flex:none;display:flex;align-items:center;gap:6px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12h-8a1 1 0 1 0 -1 1v8a9 9 0 0 0 9 -9" /><path d="M16 9a5 5 0 1 0 -7 7" /><path d="M20.486 9a9 9 0 1 0 -11.482 11.495" /></svg> Discover
+        </button>
       </div>
       <div id="setPrinters"></div>
-      <div class="row" style="margin-top:8px">
-        <button class="btn ghost" id="addPrinter">+ Add</button>
-        <button class="btn ghost" id="discover">⟳ Discover local</button>
-        <button class="btn ghost" id="discoverSubnet">⟳ Discover subnet</button>
-      </div>
       <div id="discwrap" class="discwrap"></div>
+      <div class="printers-dirty-bar" id="printersDirtyBar" style="display:none">
+        <span class="dirty-text"></span>
+      </div>
       </div>
 
       <div class="set-panel" id="tab-firmware" style="display:none">
@@ -243,6 +369,22 @@
 
       <div class="set-panel" id="tab-users" style="display:none">
         <div class="setcard">
+          <label class="switch-row" for="setUsersEnabled"><input type="checkbox" role="switch" id="setUsersEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">Enable user access management</span><span class="switch-desc">Require login to use SnapCon; gates everything else on this tab</span></span></label>
+          <div class="bootstrap-admin" id="bootstrapAdmin" style="display:none">
+            <div class="hint" style="margin-bottom:8px">Create the first Admin account — it must use a password, not an emailed code.</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input class="field" id="bootFirst" placeholder="First name (optional)" style="max-width:150px">
+              <input class="field" id="bootLast" placeholder="Last name (optional)" style="max-width:150px">
+              <input class="field" id="bootLogin" placeholder="Login name" style="max-width:150px" autocomplete="off">
+              <input class="field" id="bootPassword" type="password" placeholder="Password" style="max-width:150px" autocomplete="new-password">
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
+              <button class="btn primary" id="bootSubmit">Create Admin</button>
+              <span class="pstatus" id="bootStatus"></span>
+            </div>
+          </div>
+        </div>
+        <div class="setcard" style="margin-top:10px">
           <div class="fl" style="margin-bottom:8px">OTP Configuration</div>
           <label style="display:flex;align-items:center;gap:6px">
             <input type="radio" name="otpService" id="otpSvcResend" value="resend" checked> Resend
@@ -265,6 +407,16 @@
               <button class="btn ghost" type="button" id="otpNtfyGenTopic" style="flex:none;white-space:nowrap">Generate</button>
             </div>
           </div>
+          <label style="display:flex;align-items:center;gap:6px">
+            <input type="radio" name="otpService" id="otpSvcTelegram" value="telegram"> Telegram
+          </label>
+          <div id="otpTelegramBody" style="margin:8px 0 12px 24px;display:none">
+            <div class="settings-help" id="otpTelegramBotHint" style="margin-bottom:8px">Uses the Telegram bot configured on the Notifications tab.</div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span class="pi-lbl">Chat ID</span>
+              <input class="field" id="otpTelegramChatId" placeholder="123456789" style="max-width:220px">
+            </div>
+          </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
             <button class="btn ghost" type="button" id="otpTest">Test OTP</button>
             <span class="pstatus" id="otpTestStatus"></span>
@@ -280,44 +432,76 @@
       </div>
 
       <div class="set-panel" id="tab-remote" style="display:none">
-        <div class="setcard">
-          <div id="raInsecureWarning" style="display:none;background:#3a1414;border:1px solid #6b2020;color:#f0a0a0;border-radius:6px;padding:6px 10px;font-size:12px;margin-bottom:12px">
-            ⚠ The tunnel token is stored in an INSECURE local file fallback (no OS credential store was available). This is not real secure storage.
-          </div>
+      <div class="settings-container">
 
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <span class="pi-lbl">Status</span>
-            <span class="status-badge" id="raStatusBadge" style="--status-color:#6A7180">Disabled</span>
-            <button class="btn primary" id="raEnableBtn">Enable Remote Access</button>
-            <button class="btn ghost" id="raDisableBtn" style="display:none">Disable Remote Access</button>
-            <button class="btn ghost" id="raRemoveBtn" style="display:none">Remove Remote Access</button>
-          </div>
-
-          <div id="raRegisterRow" style="display:none;margin-top:14px;align-items:center;gap:8px;flex-wrap:wrap">
-            <span class="pi-lbl">Verification</span>
-            <span>One-time step: open this link and complete the verification challenge in your browser to finish setting up this device.</span>
-            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener">Open Verification Page</a>
-          </div>
-
-          <div id="raUrlRow" style="display:none;margin-top:14px;align-items:center;gap:8px;flex-wrap:wrap">
-            <span class="pi-lbl">Public URL</span>
-            <code id="raPublicUrl" style="font-family:var(--mono)"></code>
-            <a class="btn ghost" id="raOpenBtn" href="#" target="_blank" rel="noopener">Open Remote URL</a>
-            <button class="btn ghost" id="raCopyBtn">Copy URL</button>
-          </div>
-
-          <div class="hint" style="margin-top:14px;line-height:1.9">
-            <div>Tunnel process: <b id="raProcRow">—</b></div>
-            <div>Cloudflare connection: <b id="raConnRow">—</b></div>
-            <div>Local SnapCon service: <b id="raLocalRow">—</b></div>
-            <div>Last connected: <b id="raLastConnRow">—</b></div>
-            <div>Last error: <b id="raLastErrRow">—</b></div>
-          </div>
-          <span class="pstatus" id="raStatus" style="margin-top:10px;display:block"></span>
+        <div class="settings-section">
+          <label class="switch-row" for="raEnabled" id="raSwitchRow">
+            <input type="checkbox" role="switch" id="raEnabled" class="switch-input">
+            <span class="switch-text"><span class="switch-label" style="font-size:16px;font-weight:500">Enable Remote Access</span>
+            <span class="switch-desc" id="raSwitchDesc">Get a public HTTPS address for this SnapCon, tunnelled through Cloudflare.</span></span>
+          </label>
+          <div id="raInsecureWarning" class="settings-warning" style="display:none;margin-top:12px">⚠ The tunnel token is stored in an INSECURE local file fallback (no OS credential store was available). This is not real secure storage.</div>
         </div>
+
+        <div class="settings-section" id="raGateSection" style="display:none">
+          <div class="settings-warning">
+            <div class="settings-warning-title">Turn on User Access Management first</div>
+            <div>A public address with no login lets anyone who has the link start prints and heat beds. Turn on User Access Management and create at least one account before enabling Remote Access.</div>
+            <button class="btn ghost" id="raGoToUsersBtn" style="margin-top:10px">Go to Users</button>
+          </div>
+        </div>
+
+        <div class="settings-section" id="raOffSection" style="display:none">
+          <div class="settings-section-desc" id="raOffLine">Off. No tunnel running, public address not reachable.</div>
+          <div class="settings-help" id="raLastConnLine" style="margin-top:6px">Last connected: —</div>
+        </div>
+
+        <div class="settings-section" id="raOnSection" style="display:none">
+          <div id="raRegisterBlock" style="display:none">
+            <div class="settings-label">Verification needed</div>
+            <div class="settings-help">One-time step: open this link and complete the verification challenge in your browser to finish setting up this device.</div>
+            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener" style="margin-top:10px;align-self:flex-start">Open Verification Page</a>
+          </div>
+
+          <div id="raConnectedBlock" class="settings-section-body">
+            <div class="settings-field">
+              <label class="settings-label">Public address</label>
+              <div class="ra-url-row">
+                <code id="raPublicUrl" class="ra-url-field">—</code>
+                <button class="btn ghost" id="raCopyBtn">Copy</button>
+                <a class="btn ghost" id="raOpenBtn" href="#" target="_blank" rel="noopener">Open</a>
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label">Connection</label>
+              <div class="ra-chain" id="raChain"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section" id="raAccountsSection" style="display:none">
+          <div class="settings-section-title" style="font-size:13px">Who can sign in</div>
+          <div class="settings-section-desc">Anyone signing in through the public address uses one of these accounts.</div>
+          <div id="raAccountList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
+          <button class="btn ghost" id="raManageUsersBtn" style="margin-top:10px;align-self:flex-start">Manage Users</button>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title" style="font-size:13px">Diagnostics</div>
+          <div class="settings-section-body" style="flex-direction:row;gap:8px;flex-wrap:wrap;align-items:center">
+            <button class="btn ghost" id="raRestartBtn" disabled>Restart tunnel</button>
+            <button class="btn ghost" id="raLogBtn" disabled>View tunnel log</button>
+            <button class="btn ghost danger" id="raRemoveBtn" style="margin-left:auto" disabled>Remove Remote Access</button>
+          </div>
+          <pre id="raLogView" class="ra-log" style="display:none"></pre>
+        </div>
+
+        <span class="pstatus" id="raStatus" style="display:block;margin-top:4px"></span>
+      </div>
       </div>
 
-      <div class="row" style="margin-top:16px">
+      <div class="row" style="margin-top:16px" id="globalSaveRow">
         <button class="btn primary" id="saveCfg">Save</button>
         <button class="btn primary" id="addAllSave" style="display:none">Add All &amp; Save</button>
         <span class="pstatus" id="cfgStatus"></span>
@@ -372,19 +556,24 @@
 
   <div class="modal" id="platemodal">
     <div class="modalbox plate-box">
-      <div class="modalhdr"><span id="platetitle">Plate</span><button class="modalx" id="platex">✕</button></div>
+      <div class="modalhdr"><span id="platetitle">Exclude objects</span><button class="modalx" id="platex">✕</button></div>
+      <div class="hint plate-subtitle" id="plateSubtitle"></div>
       <div class="plate-layout">
         <div class="plate-left">
           <div class="platewrap" id="platewrap"></div>
         </div>
         <div class="plate-side">
           <div class="plate-list" id="platelist"></div>
-          <div class="plate-actions">
-            <button class="btn-base btn-pause plate-skip-btn" id="plateSkip" disabled>Skip</button>
-            <span class="pstatus" id="plateStatus"></span>
-          </div>
         </div>
       </div>
+      <div class="plate-footer">
+        <span class="plate-footer-status" id="plateSelStatus"></span>
+        <div class="plate-footer-actions">
+          <button class="btn ghost" id="plateCancel">Cancel</button>
+          <button class="btn-base plate-skip-btn" id="plateSkip" disabled>Exclude</button>
+        </div>
+      </div>
+      <span class="pstatus" id="plateStatus"></span>
     </div>
   </div>
 
@@ -447,18 +636,37 @@
   </div>
 
   <div class="modal" id="bulkheatmodal">
-    <div class="modalbox" style="max-width:420px">
+    <div class="modalbox" style="max-width:480px">
       <div class="modalhdr"><span>Heat Multiple Printers</span><button class="modalx" id="bulkheatx">✕</button></div>
-      <label class="fl">Printers</label>
+
+      <div class="bulkheat-toolbar">
+        <label class="bulkheat-selectall"><input type="checkbox" id="bulkheatSelectAll"> Select all</label>
+        <span class="bulkheat-count" id="bulkheatCount">0 of 0 selected</span>
+      </div>
       <div class="bulkheat-list" id="bulkheatList"></div>
-      <label class="fl" style="margin-top:14px">Bed temperature <span class="hint">0–100°C</span></label>
-      <input class="field" id="bulkheatTemp" type="number" min="0" max="100" placeholder="60" style="max-width:120px">
-      <label style="margin-top:14px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="bulkheatStagger" checked> Staggered heating <span class="hint">start each printer a few seconds after the last, instead of all at once</span></label>
-      <div id="bulkheatStaggerRow" style="margin-top:8px;display:flex;align-items:center;gap:8px">
-        <input class="field" id="bulkheatStaggerSecs" type="number" min="5" max="600" value="60" style="max-width:90px">
+
+      <label class="fl" style="margin-top:14px">Bed temperature <span class="hint" id="bulkheatCapNote"></span></label>
+      <div class="bulkheat-presets" id="bulkheatPresets">
+        <button type="button" class="btn-chip" data-preset="60">PLA <span>60°</span></button>
+        <button type="button" class="btn-chip" data-preset="80">PETG <span>80°</span></button>
+        <button type="button" class="btn-chip" data-preset="100">ABS <span>100°</span></button>
+        <button type="button" class="btn-chip" data-preset="0">Off</button>
+      </div>
+      <div class="bulkheat-slider-row">
+        <input type="range" class="bulkheat-slider" id="bulkheatSlider" min="0" max="120" step="1" value="60">
+        <span class="bulkheat-readout" id="bulkheatReadout">60°C</span>
+      </div>
+
+      <label class="bulkheat-stagger-label"><input type="checkbox" id="bulkheatStagger" checked> Staggered heating</label>
+      <div class="hint bulkheat-stagger-hint">Start each printer a few seconds after the last, instead of all at once.</div>
+      <div class="bulkheat-stagger-row" id="bulkheatStaggerRow">
+        <input class="field" id="bulkheatStaggerSecs" type="number" min="5" max="600" step="5" value="60" style="max-width:90px">
         <span class="hint">seconds between each printer</span>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <div class="bulkheat-summary" id="bulkheatSummary">All start together</div>
+
+      <div class="bulkheat-footer">
+        <button class="btn ghost" id="bulkheatCancelQueue" style="display:none">Stop remaining</button>
         <button class="btn ghost" id="bulkheatCancel">Cancel</button>
         <button class="btn primary" id="bulkheatGo">Heat</button>
       </div>
@@ -468,9 +676,13 @@
 
   <div class="modal" id="subnetModal">
     <div class="modalbox" style="text-align:center;max-width:380px">
-      <div class="modalhdr"><span>Discover Subnet</span><button class="modalx" id="subnetModalX">✕</button></div>
-      <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px">Enter a subnet to scan — e.g. <code>192.168.2.0</code>, or CIDR like <code>192.168.22.128/25</code></p>
-      <input class="field" id="subnetModalInput" placeholder="192.168.2.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto">
+      <div class="modalhdr"><span>Discover Printers</span><button class="modalx" id="subnetModalX">✕</button></div>
+      <div style="display:flex;gap:18px;justify-content:center;margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeLocal" value="local" checked> Local network</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeSubnet" value="subnet"> Specific subnet</label>
+      </div>
+      <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px" id="discoverScopeHint">Scans every subnet this SnapCon host is connected to.</p>
+      <input class="field" id="subnetModalInput" placeholder="192.168.2.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto;display:none">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
         <button class="btn purple" id="subnetModalScan">Scan</button>
         <button class="btn ghost" id="subnetModalCancel">Cancel</button>
@@ -492,7 +704,7 @@
   </div>
 
   <div class="modal" id="maintReportModal">
-    <div class="modalbox" style="max-width:480px">
+    <div class="modalbox" style="max-width:520px">
       <div class="modalhdr"><span>Maintenance</span><button class="modalx" id="maintReportX">✕</button></div>
       <div class="maint-toprow">
         <div class="maint-field" style="flex:1">
@@ -506,33 +718,65 @@
       </div>
       <div id="maintDetail">
         <div class="maint-stats">
-          <div class="maint-stat"><div class="maint-hours-label">Printer Hours</div><div class="maint-hours" id="maintHours">—</div></div>
-          <div class="maint-stat"><div class="maint-hours-label">Warranty</div><div class="maint-hours" id="maintWarranty">—</div></div>
-          <div class="maint-stat" id="maintNextWrap" style="display:none">
-            <div class="maint-hours-label">Next</div>
-            <div class="maint-hours" id="maintNextDate">—</div>
-            <div class="maint-next-component" id="maintNextComponent"></div>
+          <div class="maint-stat"><div class="maint-stat-label">Printer hours</div><div class="maint-stat-value" id="maintHours">—</div></div>
+          <div class="maint-stat"><div class="maint-stat-label">Warranty</div><div class="maint-stat-value" id="maintWarranty">—</div></div>
+          <div class="maint-stat"><div class="maint-stat-label">Last service</div><div class="maint-stat-value" id="maintLastService">—</div></div>
+        </div>
+
+        <div class="maint-form">
+          <div class="maint-field">
+            <label class="fl">Component</label>
+            <input class="field" id="maintComponentFilter" placeholder="Filter or type a new component…" autocomplete="off">
+          </div>
+
+          <div class="maint-row2">
+            <div class="maint-field">
+              <label class="fl">Remind me</label>
+              <select class="field" id="maintFrequency">
+                <option value="none">Don't remind</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly" selected>Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="hours250" disabled title="Needs print-hours-based scheduling, not built yet">Every 250 print hours (coming soon)</option>
+                <option value="hours500" disabled title="Needs print-hours-based scheduling, not built yet">Every 500 print hours (coming soon)</option>
+              </select>
+            </div>
+            <div class="maint-field">
+              <label class="fl">Next due</label>
+              <div class="field maint-readonly" id="maintNextScheduled">—</div>
+            </div>
+          </div>
+          <div class="hint" id="maintNextHint"></div>
+
+          <div class="maint-row2">
+            <div class="maint-field">
+              <label class="fl">Cost (<span id="maintCostCurrency">$</span>)</label>
+              <input class="field" id="maintCost" type="number" min="0" step="0.01" value="0.00">
+            </div>
+            <div class="maint-field">
+              <label class="fl">Part or supplier <span class="hint">optional</span></label>
+              <input class="field" id="maintPart" placeholder="e.g. E3D, Amazon…">
+            </div>
+          </div>
+
+          <div class="maint-field">
+            <label class="fl">Notes</label>
+            <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea>
+          </div>
+
+          <div class="pstatus" id="maintStatus"></div>
+          <div class="maint-footer">
+            <label class="maint-offline-check"><input type="checkbox" id="maintOfflineToggle"> Take printer offline</label>
+            <div class="maint-footer-actions">
+              <button class="btn ghost" id="maintCancel">Cancel</button>
+              <button class="btn primary" id="maintSave" disabled>Save</button>
+            </div>
           </div>
         </div>
-        <div id="maintHistory"></div>
-        <div class="maint-form">
-          <label>Component <input class="field" id="maintComponent" list="maintComponentList" placeholder="Pick or type a component…"></label>
-          <datalist id="maintComponentList"></datalist>
-          <div class="maint-row2">
-            <label style="flex:1">Frequency <select class="field" id="maintFrequency">
-              <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
-              <option value="6months">6 Months</option>
-            </select></label>
-            <label style="flex:1">Next Scheduled <input class="field" id="maintNextScheduled" readonly style="color:var(--ink-dim)"></label>
-          </div>
-          <label>Cost (<span id="maintCostCurrency">$</span>) <input class="field" id="maintCost" type="number" min="0" step="0.01" value="0.00" style="max-width:120px"></label>
-          <label>Comment <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea></label>
-          <div class="pstatus" id="maintStatus"></div>
-          <div class="maint-actions">
-            <button class="btn ghost" id="maintOfflineToggle">Offline</button>
-            <button class="btn primary" id="maintSave">Save</button>
-          </div>
+
+        <div class="maint-history-section">
+          <div class="sechead"><h2 id="maintHistoryTitle">History</h2></div>
+          <div id="maintHistory"></div>
         </div>
       </div>
     </div>

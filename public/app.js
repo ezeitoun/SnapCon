@@ -6,7 +6,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||'Unknown Error'), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.2.0";
+const VERSION = "0.4.1";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -100,14 +100,14 @@ function camBucket(p){
 // Shared by the card grid and the list-view table — one source of truth for
 // the status-badge color/label mapping so the two render paths can't drift.
 function statusColorText(p){
-  if(!p.online) return { statusColor:"#6A7180", statusTxt:"Offline" };
-  if(p.state==="printing") return { statusColor:"#5B9BF0", statusTxt:"Printing" };
+  if(!p.online) return { statusColor:"var(--ink-faint)", statusTxt:"Offline" };
+  if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:"Printing" };
   if(p.state==="paused") return { statusColor:"#fbbf24", statusTxt:"Paused" };
-  if(p.state==="error") return { statusColor:"#E06A5C", statusTxt:"Error" };
+  if(p.state==="error") return { statusColor:"var(--bad)", statusTxt:"Error" };
   if(p.state==="complete") return { statusColor:"#22C5BE", statusTxt:"Complete" };
-  if(p.state==="cancelled") return { statusColor:"#E06A5C", statusTxt:"Cancelled" };
-  if(p.state==="maintenance") return { statusColor:"#A78BFA", statusTxt:"Maintenance" };
-  return { statusColor:"#46C18C", statusTxt:"Idle" };
+  if(p.state==="cancelled") return { statusColor:"var(--bad)", statusTxt:"Cancelled" };
+  if(p.state==="maintenance") return { statusColor:"var(--violet-soft)", statusTxt:"Maintenance" };
+  return { statusColor:"var(--ok)", statusTxt:"Idle" };
 }
 
 // ---- Camera view: live snapshot elements persist ACROSS renders ----
@@ -519,7 +519,7 @@ function wireModal(modalId, closeFn, buttonIds){
 }
 
 function wireUI(){
-  wireModal("platemodal", closePlate, ["platex"]);
+  wireModal("platemodal", closePlate, ["platex","plateCancel"]);
   $("plateSkip").addEventListener("click", doPlateSkip);
   wireModal("thumbmodal", closeThumb, ["thumbx"]);
   wireModal("snapmodal", closeSnapshot, ["snapx"]);
@@ -557,9 +557,18 @@ function wireUI(){
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
   wireModal("bulkheatmodal", closeBulkHeatModal, ["bulkheatx","bulkheatCancel"]);
   $("bulkHeatBtn").addEventListener("click", openBulkHeat);
-  $("bulkheatStagger").addEventListener("change", ()=>{
-    $("bulkheatStaggerRow").style.display = $("bulkheatStagger").checked ? "flex" : "none";
+  $("bulkheatSelectAll").addEventListener("change", bulkheatToggleSelectAll);
+  $("bulkheatSlider").addEventListener("input", ()=>updateBulkHeatTemp(parseInt($("bulkheatSlider").value,10)));
+  $("bulkheatPresets").addEventListener("click", e=>{
+    const btn=e.target.closest(".btn-chip[data-preset]");
+    if(btn) updateBulkHeatTemp(parseInt(btn.dataset.preset,10));
   });
+  $("bulkheatStagger").addEventListener("change", ()=>{
+    $("bulkheatStaggerSecs").disabled = !$("bulkheatStagger").checked;
+    updateBulkHeatSummary();
+  });
+  $("bulkheatStaggerSecs").addEventListener("input", updateBulkHeatSummary);
+  $("bulkheatCancelQueue").addEventListener("click", ()=>{ BULKHEAT_CANCEL=true; });
   $("bulkheatGo").addEventListener("click", doBulkHeat);
   wireModal("subnetModal", closeSubnetModal, ["subnetModalX","subnetModalCancel"]);
   $("subnetModalScan").addEventListener("click", doSubnetScan);
@@ -571,17 +580,14 @@ function wireUI(){
   $("uploadFilesInput").addEventListener("change", e=>{ uploadLocalFiles(e.target.files); e.target.value=""; });
   $("multiselectClear").addEventListener("click", ()=>{ SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); renderList(); });
   wireFileDrag();
-  wireModal("maintReportModal", closeMaintReport, ["maintReportX"]);
+  wireModal("maintReportModal", closeMaintReport, ["maintReportX","maintCancel"]);
   $("maintBtn").addEventListener("click", openMaintReport);
   $("maintPrinterSel").addEventListener("change", ()=>loadMaintDetail(parseInt($("maintPrinterSel").value,10)));
   $("maintSave").addEventListener("click", saveMaintenance);
-  $("maintOfflineToggle").addEventListener("click", toggleMaintenanceMode);
+  $("maintOfflineToggle").addEventListener("change", toggleMaintenanceMode);
   $("maintDate").addEventListener("change", updateNextScheduledPreview);
   $("maintFrequency").addEventListener("change", updateNextScheduledPreview);
-  $("maintComponent").addEventListener("input", ()=>{
-    const known=MAINT_FREQ_MAP[$("maintComponent").value.trim()];
-    if(known){ $("maintFrequency").value=known; updateNextScheduledPreview(); }
-  });
+  $("maintComponentFilter").addEventListener("input", onMaintComponentChange);
   wireModal("browsemodal", closeBrowse, ["browsex","browsecancel"]);
   wireModal("elecmodal", closeElecModal, ["elecmodalx","elecmodalcancel"]);
   wireModal("sendmodal", closeSendModal, ["sendmodalx","sendmodalcancel"]);
@@ -593,13 +599,20 @@ function wireUI(){
   $("browseBtn").addEventListener("click", openBrowse);
   $("browsego").addEventListener("click", ()=>navigateBrowse($("browsepath").value.trim()));
   $("browsepath").addEventListener("keydown", e=>{ if(e.key==="Enter") navigateBrowse($("browsepath").value.trim()); });
-  $("browseok").addEventListener("click", ()=>{ const p=$("browsepath").value.trim(); if(p) $("setFolder").value=p; closeBrowse(); });
+  $("browseok").addEventListener("click", ()=>{ const p=$("browsepath").value.trim(); if(p){ $("setFolder").value=p; scheduleFolderCheck(); updateSettingsDirtyBar("general"); } closeBrowse(); });
+  $("setFolder").addEventListener("input", scheduleFolderCheck);
+  $("setRefresh").addEventListener("input", updateRefreshHelper);
+  $("setCurrency").addEventListener("change", updateCurrencyLabels);
+  $("setAllowMapping").addEventListener("change", syncAutoMatchNesting);
+  $("generalDiscard").addEventListener("click", ()=>discardSettingsTab("general"));
+  $("generalSaveBtn").addEventListener("click", saveConfig);
   $("elecSearch").addEventListener("click", openElecModal);
   $("elecLookup").addEventListener("click", doElecLookup);
   $("elecZip").addEventListener("keydown", e=>{ if(e.key==="Enter") doElecLookup(); });
   $("elecApply").addEventListener("click", ()=>{ closeElecModal(); });
 
   wireFleetDrag();
+  wirePrinterDrag();
 
   applySortUI();
   $("sortBtn").addEventListener("click", e=>{ e.stopPropagation(); $("sortMenu").classList.toggle("open"); });
@@ -625,7 +638,34 @@ function wireUI(){
     });
   });
 
-  document.addEventListener("click", ()=>{ $("sortMenu").classList.remove("open"); $("fileSortMenu").classList.remove("open"); });
+  document.addEventListener("click", ()=>{
+    $("sortMenu").classList.remove("open"); $("fileSortMenu").classList.remove("open");
+    document.querySelectorAll(".prow-menu.open").forEach(m=>m.classList.remove("open"));
+  });
+
+  // Number-input stepper: enhance whatever's already in the DOM, then keep
+  // catching new number inputs (printer rows, modals) as they're rendered —
+  // one observer instead of every render function remembering to call this.
+  enhanceNumberInputs(document);
+  new MutationObserver(muts=>{
+    for(const m of muts) for(const n of m.addedNodes){
+      if(n.nodeType!==1) continue;
+      if(n.matches && n.matches('input[type="number"]')) enhanceNumberInput(n);
+      else if(n.querySelectorAll) enhanceNumberInputs(n);
+    }
+  }).observe(document.body,{childList:true,subtree:true});
+
+  // One delegated listener drives every registered settings tab's dirty
+  // footer — new tabs just need to call registerSettingsTab(), no extra
+  // per-field wiring required.
+  const onSettingsFieldChange=e=>{
+    const panel=e.target.closest(".set-panel");
+    if(!panel) return;
+    const name=panel.id.replace("tab-","");
+    if(SETTINGS_TAB_TRACKERS[name]) updateSettingsDirtyBar(name);
+  };
+  $("setup").addEventListener("input", onSettingsFieldChange);
+  $("setup").addEventListener("change", onSettingsFieldChange);
 
   applyViewMode();
   $("compactBtn").addEventListener("click", cycleViewMode);
@@ -634,7 +674,36 @@ function wireUI(){
   $("filesBtn").addEventListener("click", ()=>{ FILES_OPEN=!FILES_OPEN; applyFilesOpen(); });
 
   $("ntfEnabled").addEventListener("change", applyNtfEnabled);
-  $("ntfGenTopic").addEventListener("click", ()=>{ $("ntfTopic").value=genRandomTopic(); });
+  $("ntfGenTopic").addEventListener("click", ()=>{
+    if($("ntfTopic").value.trim() && !confirm("Regenerate the ntfy topic? Anyone already subscribed to the current one will stop receiving notifications.")) return;
+    $("ntfTopic").value=genRandomTopic();
+    updateSettingsDirtyBar("notif"); // programmatic value change — no native input/change event to catch it
+  });
+  $("ntfTopicCopy").addEventListener("click", async ()=>{
+    const v=$("ntfTopic").value.trim();
+    if(!v) return;
+    try{
+      await navigator.clipboard.writeText(v);
+      const b=$("ntfTopicCopy"), old=b.textContent;
+      b.textContent="Copied"; setTimeout(()=>{ b.textContent=old; },1200);
+    }catch{}
+  });
+  wireSecretField($("ntfBotTokenField"));
+  $("ntfMilestones").addEventListener("change", syncMilestoneNesting);
+  $("ntfMilestoneChips").addEventListener("click", e=>{
+    const btn=e.target.closest(".btn-chip[data-pct]");
+    if(!btn||btn.disabled) return;
+    const pct=parseInt(btn.dataset.pct,10);
+    if(NTF_MILESTONES.has(pct)) NTF_MILESTONES.delete(pct); else NTF_MILESTONES.add(pct);
+    renderMilestoneChips();
+    updateSettingsDirtyBar("notif");
+  });
+  $("ntfyEnabled").addEventListener("change", ()=>syncProviderCard("ntfyEnabled","ntfyBody"));
+  $("telegramEnabled").addEventListener("change", ()=>syncProviderCard("telegramEnabled","telegramBody"));
+  $("ntfTestNtfy").addEventListener("click", ()=>sendProviderTest("ntfy","ntfTestNtfy","ntfTestNtfyStatus"));
+  $("ntfTestTelegram").addEventListener("click", ()=>sendProviderTest("telegram","ntfTestTelegram","ntfTestTelegramStatus"));
+  $("notifDiscard").addEventListener("click", ()=>discardSettingsTab("notif"));
+  $("notifSaveBtn").addEventListener("click", saveConfig);
 
   $("otpSvcResend").addEventListener("change", applyOtpServiceUI);
   $("otpSvcNtfy").addEventListener("change", ()=>{
@@ -645,6 +714,13 @@ function wireUI(){
     applyOtpServiceUI();
   });
   $("otpNtfyGenTopic").addEventListener("click", ()=>{ $("otpNtfyTopic").value=genRandomTopic(); });
+  $("otpSvcTelegram").addEventListener("change", ()=>{
+    // Same pre-fill-but-never-clobber convention as the ntfy topic above —
+    // suggest the fleet-notification chat ID as a starting point, since the
+    // bot token itself is a secret and can't be pre-filled client-side.
+    if(!$("otpTelegramChatId").value.trim()) $("otpTelegramChatId").value=$("ntfChatId").value.trim();
+    applyOtpServiceUI();
+  });
   $("otpTest").addEventListener("click", doOtpTest);
 
   document.querySelectorAll(".set-tab").forEach(btn=>{
@@ -655,23 +731,6 @@ function wireUI(){
   $("fwSelect").addEventListener("click", ()=>{ const st=$("fwStatus"); st.className="pstatus"; st.textContent="Select Firmware — not implemented yet"; });
   $("fwDeploy").addEventListener("click", ()=>{ const st=$("fwStatus"); st.className="pstatus"; st.textContent="Deploy Firmware — not implemented yet"; });
 
-  // Test uses the values currently in the form, so it works before saving.
-  $("ntfTest").addEventListener("click", async ()=>{
-    const st=$("ntfTestStatus");
-    const telegram=$("ntfSvcTelegram").checked;
-    st.className="pstatus work"; st.textContent="Sending test…";
-    try{
-      const r=await postJSON("/api/notify-test",{
-        service:telegram?"telegram":"ntfy",
-        topic:$("ntfTopic").value.trim(),
-        chatId:$("ntfChatId").value.trim(),
-        botToken:$("ntfBotToken").value.trim(),
-        includeImage:$("ntfImage").checked
-      });
-      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-      st.className="pstatus ok"; st.textContent=telegram?"Sent — check Telegram":"Sent — check your ntfy app";
-    }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  });
 
   $("jobEject").addEventListener("click", clearJobSelection);
   $("jobSend").addEventListener("click", openSendModal);
@@ -1063,7 +1122,7 @@ function renderSkeletonFleet(){
       `<div class="top">`+
       `<span class="pn"><span class="printer-icon-sm" style="opacity:.35"></span>`+
       `<span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name||'—')}</div></span></span>`+
-      `<span class="status-badge" style="--status-color:#545B69">Connecting…</span>`+
+      `<span class="status-badge" style="--status-color:var(--idle)">Connecting…</span>`+
       `</div>`+
       `<div class="prism-line" style="opacity:.2"></div>`+
       `<div class="skel-block"><div class="skel-line"></div><div class="skel-line" style="width:42%;margin-top:7px"></div></div>`;
@@ -1105,6 +1164,7 @@ async function loadFleet(){
       FLEET_PREV_BODY=body;
       FLEET=JSON.parse(body);
       renderFleet();
+      updateAllPrinterRowStatuses();
     }
   }
   catch(e){
@@ -1793,6 +1853,33 @@ function wireFleetDrag(){
     wrap.querySelectorAll(".pcard.drag-over").forEach(c=>c.classList.remove("drag-over"));
   });
 }
+// Settings > Printers drag-to-reorder — same shape as wireFleetDrag above,
+// but purely local: reordering the DOM and marking the tab dirty rather than
+// saving immediately, since every other edit in this form waits for Save.
+function wirePrinterDrag(){
+  const wrap=$("setPrinters");
+  wrap.addEventListener("dragover", e=>{
+    const dragging=wrap.querySelector(".prow.dragging");
+    if(!dragging) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect="move";
+    const over=e.target.closest(".prow");
+    wrap.querySelectorAll(".prow.drag-over").forEach(r=>{ if(r!==over) r.classList.remove("drag-over"); });
+    if(over&&over!==dragging) over.classList.add("drag-over");
+  });
+  wrap.addEventListener("drop", e=>{
+    const dragging=wrap.querySelector(".prow.dragging");
+    wrap.querySelectorAll(".prow.drag-over").forEach(r=>r.classList.remove("drag-over"));
+    if(!dragging) return;
+    e.preventDefault();
+    const target=e.target.closest(".prow");
+    if(target&&target!==dragging){
+      const forward=!!(dragging.compareDocumentPosition(target)&Node.DOCUMENT_POSITION_FOLLOWING);
+      wrap.insertBefore(dragging, forward?target.nextSibling:target);
+    } else if(!target) wrap.appendChild(dragging);
+    markPrintersDirty();
+  });
+}
 // order = new sequence expressed in old printer ids (indices into PRINTERS_CFG)
 async function applyPrinterOrder(order){
   if(order.length!==PRINTERS_CFG.length||order.some(id=>!Number.isInteger(id)||id<0||id>=PRINTERS_CFG.length)) return;
@@ -2295,20 +2382,135 @@ function closeBedModal(){ $("bedmodal").classList.remove("show"); }
 // BULKHEAT_CANCEL is checked between each printer in a staggered run, and
 // set whenever the modal closes (✕, Cancel, or backdrop click via
 // wireModal) — closing the modal stops any in-flight sequence rather than
-// letting it keep silently heating printers in the background.
+// letting it keep silently heating printers in the background. It's also
+// set (without closing the modal) by "Stop remaining" so the run's results
+// stay visible on the rows.
 let BULKHEAT_CANCEL = false;
+let BULKHEAT_SELECTED = new Set();
+let BULKHEAT_TEMP = 60;
+
+// A printer that's offline, mid-print, errored, or under maintenance can't
+// take a bed-temp command — same states server.js's connectors would refuse
+// anyway, just surfaced up front instead of failing per-row after the fact.
+function bulkheatDisableReason(p){
+  if(!p||!p.online) return "Offline";
+  if(p.state==="printing") return "Busy";
+  if(p.state==="paused") return "Paused";
+  if(p.state==="error") return "Error";
+  if(p.state==="maintenance") return "Maintenance";
+  return null;
+}
+
+// The slider/presets always clamp to the LOWEST maxBedTemp among the current
+// selection (never the highest) — heating a printer past its own ceiling
+// isn't an option just because another selected printer can go higher.
+function bulkheatCapInfo(ids){
+  const printers=ids.map(id=>FLEET.find(f=>f.id===id)).filter(Boolean);
+  if(!printers.length) return { cap:120, note:"Select printers to see the range" };
+  const caps=printers.map(p=>(p.capabilities&&Number.isFinite(p.capabilities.maxBedTemp))?p.capabilities.maxBedTemp:120);
+  const cap=Math.min(...caps);
+  if(caps.every(c=>c===cap)) return { cap, note:`Range 0–${cap}°C` };
+  const limiter=printers[caps.indexOf(cap)];
+  return { cap, note:`Capped at ${cap}°C by ${esc(limiter.name)}` };
+}
+
+function bulkheatRowHtml(p){
+  const st=statusColorText(p);
+  const reason=bulkheatDisableReason(p);
+  const disabled=!!reason;
+  const checked=BULKHEAT_SELECTED.has(p.id);
+  const maxT=(p.capabilities&&Number.isFinite(p.capabilities.maxBedTemp))?p.capabilities.maxBedTemp:120;
+  const curBed=(p.bed&&typeof p.bed.temp==="number")?p.bed.temp+"°":"—";
+  return `<label class="bulkheat-row${disabled?' disabled':''}">`+
+    `<input type="checkbox" class="bulkheat-chk" data-bulkheatid="${p.id}"${checked?' checked':''}${disabled?' disabled':''}>`+
+    `<span class="bulkheat-dot" style="--status-color:${st.statusColor}"></span>`+
+    `<span class="bulkheat-name">${esc(p.name)}</span>`+
+    `<span class="bulkheat-model">${esc(p.brand||'Printer')}</span>`+
+    `<span class="bulkheat-cur">${curBed}</span>`+
+    `<span class="bulkheat-max">${maxT}°C max</span>`+
+    (disabled?`<span class="status-badge" style="--status-color:${st.statusColor}">${reason}</span>`:``)+
+    `<span class="bulkheat-row-status pstatus" id="bulkheat-st-${p.id}"></span>`+
+  `</label>`;
+}
+
+function renderBulkHeatList(){
+  $("bulkheatList").innerHTML = FLEET.length
+    ? FLEET.map(bulkheatRowHtml).join("")
+    : `<div class="hint">No printers configured.</div>`;
+  $("bulkheatList").querySelectorAll(".bulkheat-chk").forEach(chk=>{
+    chk.addEventListener("change",()=>{
+      const id=parseInt(chk.dataset.bulkheatid,10);
+      if(chk.checked) BULKHEAT_SELECTED.add(id); else BULKHEAT_SELECTED.delete(id);
+      updateBulkHeatToolbar();
+    });
+  });
+  updateBulkHeatToolbar();
+}
+
+function updateBulkHeatTemp(v){
+  const cap=parseInt($("bulkheatSlider").max,10)||120;
+  const t=Math.max(0,Math.min(cap,Math.round(v)));
+  BULKHEAT_TEMP=t;
+  $("bulkheatSlider").value=t;
+  $("bulkheatReadout").textContent=t+"°C";
+  $("bulkheatPresets").querySelectorAll(".btn-chip").forEach(b=>{
+    b.classList.toggle("active",parseInt(b.dataset.preset,10)===t);
+  });
+}
+
+function updateBulkHeatSummary(){
+  const n=BULKHEAT_SELECTED.size;
+  if(!$("bulkheatStagger").checked||n<=1){ $("bulkheatSummary").textContent="All start together"; return; }
+  const secs=Math.max(5,parseInt($("bulkheatStaggerSecs").value,10)||60);
+  const total=(n-1)*secs;
+  $("bulkheatSummary").textContent=`Last printer starts at +${Math.floor(total/60)}:${String(total%60).padStart(2,'0')}`;
+}
+
+// Re-derives everything selection-dependent — count, select-all tri-state,
+// the temp cap (and re-clamps the current value against it), and the Go
+// button's label — from BULKHEAT_SELECTED. Called on every checkbox change
+// rather than threading a diff through, since the full recompute is cheap
+// and this only ever runs on user interaction.
+function updateBulkHeatToolbar(){
+  const eligible=FLEET.filter(p=>!bulkheatDisableReason(p));
+  const unavailable=FLEET.length-eligible.length;
+  for(const id of [...BULKHEAT_SELECTED]) if(!eligible.some(p=>p.id===id)) BULKHEAT_SELECTED.delete(id);
+
+  const selAll=$("bulkheatSelectAll");
+  const n=BULKHEAT_SELECTED.size;
+  selAll.checked = eligible.length>0 && n===eligible.length;
+  selAll.indeterminate = n>0 && n<eligible.length;
+  $("bulkheatCount").textContent = `${n} of ${eligible.length} selected`+(unavailable?` · ${unavailable} unavailable`:'');
+
+  const { cap, note } = bulkheatCapInfo([...BULKHEAT_SELECTED]);
+  $("bulkheatCapNote").textContent = note;
+  $("bulkheatSlider").max = cap;
+  updateBulkHeatTemp(BULKHEAT_TEMP);
+
+  $("bulkheatGo").disabled = n===0;
+  $("bulkheatGo").textContent = n ? `Heat ${n} printer${n>1?'s':''}` : "Heat";
+  updateBulkHeatSummary();
+}
+
+function bulkheatToggleSelectAll(){
+  const checked=$("bulkheatSelectAll").checked;
+  const eligible=FLEET.filter(p=>!bulkheatDisableReason(p));
+  if(checked) eligible.forEach(p=>BULKHEAT_SELECTED.add(p.id));
+  else BULKHEAT_SELECTED.clear();
+  $("bulkheatList").querySelectorAll(".bulkheat-chk:not(:disabled)").forEach(chk=>{ chk.checked=checked; });
+  updateBulkHeatToolbar();
+}
+
 function openBulkHeat(){
-  const online = FLEET.filter(p=>p.online);
-  $("bulkheatList").innerHTML = online.length
-    ? online.map(p=>`<label class="bulkheat-row"><input type="checkbox" class="bulkheat-chk" data-bulkheatid="${p.id}"><span>${esc(p.name)}</span></label>`).join("")
-    : `<div class="hint">No online printers.</div>`;
-  $("bulkheatTemp").value = 60;
-  $("bulkheatStagger").checked = true;
-  $("bulkheatStaggerRow").style.display = "flex";
-  $("bulkheatStaggerSecs").value = 60;
-  $("bulkheatStatus").innerHTML = "";
-  $("bulkheatGo").disabled = false;
-  BULKHEAT_CANCEL = false;
+  BULKHEAT_SELECTED=new Set();
+  BULKHEAT_TEMP=60;
+  renderBulkHeatList();
+  $("bulkheatStagger").checked=true;
+  $("bulkheatStaggerSecs").disabled=false;
+  $("bulkheatStaggerSecs").value=60;
+  $("bulkheatStatus").innerHTML="";
+  $("bulkheatCancelQueue").style.display="none";
+  BULKHEAT_CANCEL=false;
   $("bulkheatmodal").classList.add("show");
 }
 function closeBulkHeatModal(){
@@ -2316,34 +2518,34 @@ function closeBulkHeatModal(){
   $("bulkheatmodal").classList.remove("show");
 }
 function bulkheatSetRowStatus(id, cls, text){
-  const row = document.getElementById("bulkheat-st-"+id);
-  if(!row) return;
-  const v = row.querySelector(".bulkheat-status-val");
-  v.className = "bulkheat-status-val "+cls;
-  v.textContent = text;
+  const el = document.getElementById("bulkheat-st-"+id);
+  if(!el) return;
+  el.className = "bulkheat-row-status pstatus "+cls;
+  el.textContent = text;
 }
 async function bulkheatOne(id, temp){
   bulkheatSetRowStatus(id, "work", "Heating…");
   try{
     const r=await postJSON("/api/bedtemp",{printer:id,temp});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-    bulkheatSetRowStatus(id, "ok", "Set to "+temp+"°");
+    bulkheatSetRowStatus(id, "ok", temp===0 ? "Off" : "Set to "+temp+"°");
   }catch(e){ bulkheatSetRowStatus(id, "err", e.message); }
 }
 async function doBulkHeat(){
-  const ids=[...document.querySelectorAll(".bulkheat-chk:checked")].map(c=>parseInt(c.dataset.bulkheatid,10));
-  const temp=parseInt($("bulkheatTemp").value,10);
+  const ids=[...BULKHEAT_SELECTED];
+  const temp=BULKHEAT_TEMP;
   const status=$("bulkheatStatus");
-  if(!ids.length){ status.innerHTML='<div class="pstatus err">Select at least one printer.</div>'; return; }
-  if(!Number.isFinite(temp)||temp<0||temp>100){ status.innerHTML='<div class="pstatus err">Temperature must be 0–100°C.</div>'; return; }
+  if(!ids.length){ status.className="pstatus err"; status.textContent="Select at least one printer."; return; }
   const staggered=$("bulkheatStagger").checked;
   const delayMs=staggered ? Math.max(5,parseInt($("bulkheatStaggerSecs").value,10)||60)*1000 : 0;
   BULKHEAT_CANCEL=false;
   $("bulkheatGo").disabled=true;
-  status.innerHTML = ids.map(id=>{
-    const p=FLEET.find(f=>f.id===id);
-    return `<div class="bulkheat-status-row" id="bulkheat-st-${id}"><span>${esc(p?p.name:"#"+id)}</span><span class="bulkheat-status-val">Queued…</span></div>`;
-  }).join("");
+  $("bulkheatSelectAll").disabled=true;
+  $("bulkheatList").querySelectorAll(".bulkheat-chk").forEach(c=>c.disabled=true);
+  $("bulkheatCancelQueue").style.display = staggered ? "" : "none";
+  status.className="pstatus"; status.textContent="";
+  ids.forEach(id=>bulkheatSetRowStatus(id,"","Queued…"));
+
   if(staggered){
     for(let i=0;i<ids.length;i++){
       if(BULKHEAT_CANCEL) break;
@@ -2355,13 +2557,29 @@ async function doBulkHeat(){
     // initial "Queued…" placeholder — make that explicit rather than
     // leaving a misleading "about to happen" label behind.
     ids.forEach(id=>{
-      const row=document.getElementById("bulkheat-st-"+id);
-      if(row && row.querySelector(".bulkheat-status-val").textContent==="Queued…") bulkheatSetRowStatus(id,"err","Cancelled");
+      const el=document.getElementById("bulkheat-st-"+id);
+      if(el && el.textContent==="Queued…") bulkheatSetRowStatus(id,"err","Cancelled");
     });
   } else {
     await Promise.allSettled(ids.map(id=>bulkheatOne(id, temp)));
   }
+
+  const okCount=ids.filter(id=>{
+    const el=document.getElementById("bulkheat-st-"+id);
+    return el && el.classList.contains("ok");
+  }).length;
+  const failCount=ids.length-okCount;
+  status.className="pstatus "+(failCount?"err":"ok");
+  status.textContent=failCount ? `${okCount} of ${ids.length} heated, ${failCount} failed` : `${okCount} of ${ids.length} heated`;
+
+  BULKHEAT_CANCEL=false;
   $("bulkheatGo").disabled=false;
+  $("bulkheatSelectAll").disabled=false;
+  $("bulkheatList").querySelectorAll(".bulkheat-chk").forEach(c=>{
+    const id=parseInt(c.dataset.bulkheatid,10);
+    c.disabled=!!bulkheatDisableReason(FLEET.find(f=>f.id===id));
+  });
+  $("bulkheatCancelQueue").style.display="none";
   loadFleet();
 }
 
@@ -2442,21 +2660,55 @@ async function doBedSet(printerId,temp){
 // Both funnel into openMaintModal(), which loads the picker; switching the
 // select (or the initial preselect) calls loadMaintDetail() for that printer.
 let MAINT_TOTAL_SEC=null, PRINTERS_CFG=[], MAINT_PRINTERS=[], MAINT_IDX=null;
+let MAINT_ENTRIES=[];
 function fmtHours(sec){ if(sec==null) return '—'; const h=Math.floor(sec/3600); const m=Math.floor((sec%3600)/60); return h+'h '+m+'m'; }
-// Mirrors the server's defaults (server.js) so a known component picked here
-// auto-fills the same Frequency without a round-trip; the server recomputes
-// Next Scheduled authoritatively on save regardless.
-const MAINT_FREQ_MAP={"Linear Shaft / Linear Bearing":"monthly","X Carbon Rod Assembly":"monthly","Lead Screw / Nut":"quarterly","Steel Pin / Steel Ball":"quarterly","Timing Belt":"monthly","Pogo pin":"6months"};
-const MAINT_FREQ_MONTHS={monthly:1,quarterly:3,"6months":6};
+function fmtMaintDate(iso){
+  if(!iso) return "—";
+  const d=new Date(iso+"T00:00:00");
+  return d.toLocaleDateString([],{day:"numeric",month:"short",year:"numeric"});
+}
+// Mirrors server.js's MAINT_FREQ_SPEC. Only "none" and the two date-based
+// options are actually computable here — hours250/500 stay disabled in the
+// <select> until hour-based scheduling exists server-side (see server.js
+// for what that would take), so there's no client-side unit for them yet.
+const MAINT_FREQ_SPEC={
+  none:null,
+  weekly:{unit:"days",amount:7,label:"Weekly"},
+  monthly:{unit:"months",amount:1,label:"Monthly"},
+  quarterly:{unit:"months",amount:3,label:"Quarterly"}
+};
+// Convenience auto-suggest only, matching the new default component
+// vocabulary (server.js's DEFAULT_MAINT_COMPONENTS) — the server recomputes
+// Next Due authoritatively on save regardless of what this pre-fills.
+const MAINT_FREQ_MAP={"Nozzle":"monthly","Timing Belt":"quarterly","Bed Sheet":"quarterly","Hotend":"monthly","PTFE Tube":"quarterly","Extruder Gears":"quarterly","Lead Screw":"quarterly","Fans":"monthly","Lubrication":"monthly","Firmware":"monthly","Wiper":"monthly"};
+function addDaysClient(dateStr,days){
+  if(!dateStr) return "";
+  const d=new Date(dateStr+"T00:00:00");
+  d.setDate(d.getDate()+days);
+  return d.toISOString().slice(0,10);
+}
 function addMonthsClient(dateStr,months){
   if(!dateStr) return "";
   const d=new Date(dateStr+"T00:00:00");
   d.setMonth(d.getMonth()+months);
   return d.toISOString().slice(0,10);
 }
+// "Next due" is a live preview of what saving THIS entry (current date +
+// component + Remind me) would schedule — not a stored value — so it
+// recomputes on every change to any of those three inputs instead of only
+// on load.
 function updateNextScheduledPreview(){
-  const months=MAINT_FREQ_MONTHS[$("maintFrequency").value]||1;
-  $("maintNextScheduled").value=addMonthsClient($("maintDate").value,months);
+  const spec=MAINT_FREQ_SPEC[$("maintFrequency").value];
+  const date=$("maintDate").value;
+  const component=$("maintComponentFilter").value.trim();
+  if(!spec){
+    $("maintNextScheduled").textContent="Not scheduled";
+    $("maintNextHint").textContent="No reminder will be set for this component.";
+    return;
+  }
+  const next=spec.unit==="days"?addDaysClient(date,spec.amount):addMonthsClient(date,spec.amount);
+  $("maintNextScheduled").textContent=next?fmtMaintDate(next):"—";
+  $("maintNextHint").textContent=date?`Based on ${fmtMaintDate(date)} + ${spec.label}${component?` for ${component}`:''}.`:"";
 }
 
 async function openMaintModal(preselectIdx){
@@ -2482,17 +2734,22 @@ async function loadMaintDetail(idx){
   MAINT_IDX=idx;
   $("maintDetail").style.display="";
   $("maintDate").value=new Date().toISOString().slice(0,10);
-  $("maintComponent").value="";
+  $("maintComponentFilter").value="";
   $("maintFrequency").value="monthly";
   $("maintCost").value="0.00";
+  $("maintPart").value="";
   $("maintComment").value="";
-  updateNextScheduledPreview();
-  updateMaintOfflineButton(idx);
+  $("maintSave").disabled=true;
+  updateMaintOfflineCheckbox(idx);
   $("maintStatus").textContent="";
   $("maintHours").textContent="loading…";
-  $("maintWarranty").textContent="—";
-  $("maintNextWrap").style.display="none";
+  $("maintWarranty").textContent="—"; $("maintWarranty").classList.remove("warn","bad");
+  $("maintLastService").textContent="—";
   $("maintHistory").innerHTML="";
+  const p=MAINT_PRINTERS.find(mp=>mp.id===idx);
+  $("maintHistoryTitle").textContent="History for "+(p?p.name:"printer");
+  MAINT_ENTRIES=[];
+  updateNextScheduledPreview();
   MAINT_TOTAL_SEC=null;
   try{
     const d=await getJSON("/api/printer-hours?printer="+idx);
@@ -2506,21 +2763,16 @@ async function loadMaintDetail(idx){
 }
 // The fleet poll already tells us if a printer is currently parked for
 // maintenance (state:"maintenance", set server-side) — reuse it instead of
-// fetching the flag a second way. Button label is the ACTION, not the state:
-// "Offline" when currently online (click to take it offline), "Online" when
-// currently in maintenance (click to bring it back).
-function updateMaintOfflineButton(idx){
+// fetching the flag a second way.
+function updateMaintOfflineCheckbox(idx){
   const fleetEntry=FLEET.find(f=>f.id===idx);
-  const inMaintenance=!!(fleetEntry&&fleetEntry.state==="maintenance");
-  const btn=$("maintOfflineToggle");
-  btn.textContent=inMaintenance?"Online":"Offline";
-  btn.dataset.next=inMaintenance?"0":"1"; // what maintenanceMode should become on click
+  $("maintOfflineToggle").checked=!!(fleetEntry&&fleetEntry.state==="maintenance");
 }
 async function toggleMaintenanceMode(){
-  const btn=$("maintOfflineToggle");
+  const chk=$("maintOfflineToggle");
   const st=$("maintStatus");
-  const offline=btn.dataset.next==="1";
-  btn.disabled=true;
+  const offline=chk.checked;
+  chk.disabled=true;
   st.className="pstatus work"; st.textContent=offline?"Taking offline…":"Bringing online…";
   try{
     const r=await postJSON("/api/maintenance-mode",{printer:MAINT_IDX,offline});
@@ -2530,35 +2782,54 @@ async function toggleMaintenanceMode(){
     // Use the endpoint's own response, not a re-fetched FLEET — loadFleet()
     // has an in-flight guard that silently no-ops if a periodic poll happens
     // to already be running, which would read back stale state here.
-    btn.textContent=d.maintenanceMode?"Online":"Offline";
-    btn.dataset.next=d.maintenanceMode?"0":"1";
+    chk.checked=!!d.maintenanceMode;
     loadFleet(); // still refresh in the background for the fleet card badge
-  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  finally{ btn.disabled=false; }
+  }catch(e){
+    st.className="pstatus err"; st.textContent=e.message;
+    chk.checked=!offline; // request failed — revert to reflect actual state
+  }
+  finally{ chk.disabled=false; }
+}
+function onMaintComponentChange(){
+  const typed=$("maintComponentFilter").value.trim();
+  const known=MAINT_FREQ_MAP[typed];
+  if(known) $("maintFrequency").value=known;
+  updateNextScheduledPreview();
+  $("maintSave").disabled=!typed;
+}
+function renderMaintWarranty(w){
+  const el=$("maintWarranty");
+  el.classList.remove("warn","bad");
+  if(!w||w.status==="unknown"){ el.textContent="Unknown"; return; }
+  if(w.status==="expired"){ el.textContent="Expired"; el.classList.add("bad"); return; }
+  if(w.status==="expiring"){ el.textContent="Expires "+fmtMaintDate(w.expiry); el.classList.add("warn"); return; }
+  el.textContent="Expires "+fmtMaintDate(w.expiry);
+}
+function renderMaintLastService(entries){
+  if(!entries.length){ $("maintLastService").textContent="Never"; return; }
+  const last=entries[entries.length-1]; // push order — last pushed is most recent
+  $("maintLastService").textContent=`${fmtMaintDate(last.date)} · ${last.component||'—'}`;
 }
 function applyMaintDetailResponse(d){
-  $("maintComponentList").innerHTML=(d.components||[]).map(c=>`<option value="${esc(c)}">`).join("");
-  $("maintWarranty").textContent=d.warranty?"Yes":"No";
-  if(d.next){
-    $("maintNextWrap").style.display="";
-    $("maintNextDate").textContent=d.next.date;
-    $("maintNextComponent").textContent=d.next.component;
-  } else {
-    $("maintNextWrap").style.display="none";
-  }
-  renderMaintHistory(d.entries||[]);
+  MAINT_ENTRIES=d.entries||[];
+  renderMaintWarranty(d.warranty);
+  renderMaintLastService(MAINT_ENTRIES);
+  renderMaintHistory(MAINT_ENTRIES);
 }
 async function saveMaintenance(){
   const st=$("maintStatus");
   const date=$("maintDate").value;
   if(!date){ st.className="pstatus err"; st.textContent="Pick a date"; return; }
+  const component=$("maintComponentFilter").value.trim();
+  if(!component){ st.className="pstatus err"; st.textContent="Pick or type a component"; return; }
   const idx=MAINT_IDX;
   const entry={
-    date, comment:$("maintComment").value.trim(),
+    date, comment:$("maintComment").value.trim(), part:$("maintPart").value.trim(),
     hours:MAINT_TOTAL_SEC!=null?fmtHours(MAINT_TOTAL_SEC):'—', totalSeconds:MAINT_TOTAL_SEC,
-    component:$("maintComponent").value.trim(), frequency:$("maintFrequency").value,
+    component, frequency:$("maintFrequency").value,
     cost:parseFloat($("maintCost").value)||0
   };
+  $("maintSave").disabled=true;
   st.className="pstatus work"; st.textContent="Saving…";
   try{
     const r=await postJSON("/api/maintenance",{printer:idx,entry});
@@ -2568,12 +2839,13 @@ async function saveMaintenance(){
     $("maintComment").value="";
     applyMaintDetailResponse(d);
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ $("maintSave").disabled=!$("maintComponentFilter").value.trim(); }
 }
 function renderMaintHistory(entries){
-  if(!entries.length){ $("maintHistory").innerHTML='<div style="color:var(--ink-faint);font-size:12px;margin-top:6px">No maintenance records yet.</div>'; return; }
+  if(!entries.length){ $("maintHistory").innerHTML='<div class="empty-list">No service logged yet for this printer.</div>'; return; }
   const sorted=entries.slice().sort((a,b)=>b.date.localeCompare(a.date));
-  const rows=sorted.map(e=>`<tr><td>${esc(e.date)}</td><td>${esc(e.component||'—')}</td><td>${esc(e.hours||'—')}</td><td>${esc(CURRENCY)}${(Number(e.cost)||0).toFixed(2)}</td><td>${esc(e.comment||'')}</td></tr>`).join('');
-  $("maintHistory").innerHTML=`<div class="maint-scroll"><table class="maint-table"><thead><tr><th>Date</th><th>Component</th><th>Hours</th><th>Cost</th><th>Comment</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const rows=sorted.map(e=>`<tr><td>${esc(e.date)}</td><td>${esc(e.component||'—')}</td><td>${esc(e.hours||'—')}</td><td>${esc(CURRENCY)}${(Number(e.cost)||0).toFixed(2)}</td></tr>`).join('');
+  $("maintHistory").innerHTML=`<div class="maint-scroll"><table class="maint-table"><thead><tr><th>Date</th><th>Component</th><th>Hours</th><th>Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 // ---- Plate map (exclude-object) ----
 // Tap objects (on the plate or in the list) to SELECT them; nothing is sent
@@ -2599,35 +2871,66 @@ async function refreshPlate(){
   [...PLATE_SELECTED].forEach(n=>{ if(!valid.has(n)||ex.has(n)) PLATE_SELECTED.delete(n); });
   renderPlate();
 }
+// Prime/purge towers are display-only: never selectable, never in the list,
+// never numbered. (Orca doesn't currently label the tower as an object —
+// this is a guard in case a slicer version starts doing so.)
+const isTowerObj=name=>/(prime|purge|wipe)[ _-]?tower/i.test(name);
+
+// Stable 1-based numbering shared by the plate SVG and the list, assigned
+// once per render from object order — NOT renumbered as things get excluded
+// (the 3s poll would otherwise reshuffle every visible number mid-look).
+function plateObjectNumbers(d){
+  const map=new Map();
+  (d.objects||[]).filter(o=>!isTowerObj(o.name)).forEach((o,i)=>map.set(o.name,i+1));
+  return map;
+}
+function polyCentroid(poly){
+  let x=0,y=0;
+  poly.forEach(p=>{x+=p[0];y+=p[1];});
+  return [x/poly.length,y/poly.length];
+}
 function renderPlate(){
   const d=PLATE_DATA;
   if(!d) return;
   const fp=FLEET.find(f=>f.id===PLATE_PRINTER);
-  const live=d.objects.length-(d.excluded||[]).length;
-  $("platetitle").textContent=(fp?fp.name:"Plate")+" — "+live+" of "+d.objects.length+" still printing";
-  $("platewrap").innerHTML=plateSVG(d);
-  $("platelist").innerHTML=plateListHTML(d);
+  const numberOf=plateObjectNumbers(d);
+  const ex=new Set(d.excluded||[]);
+  const remaining=[...numberOf.keys()].filter(n=>!ex.has(n));
+  $("platetitle").textContent="Exclude objects on "+(fp?fp.name:"printer");
+  $("plateSubtitle").textContent=`${remaining.length} object${remaining.length===1?'':'s'} still printing. Excluding one stops it for the rest of the job.`;
+  $("platewrap").innerHTML=plateSVG(d,numberOf);
+  $("platelist").innerHTML=plateListHTML(d,numberOf);
   document.querySelectorAll("#platewrap [data-obj], #platelist [data-obj]").forEach(el=>{
     el.addEventListener("click",()=>togglePlateSel(el.dataset.obj));
+    el.addEventListener("mouseenter",()=>setPlateHover(el.dataset.obj,true));
+    el.addEventListener("mouseleave",()=>setPlateHover(el.dataset.obj,false));
   });
+  const sel=[...PLATE_SELECTED].filter(n=>remaining.includes(n));
+  const n=sel.length, left=remaining.length-n;
+  $("plateSelStatus").textContent=n
+    ? `${n} of ${remaining.length} selected. ${left} keep${left===1?'s':''} printing.`
+    : "Nothing selected";
   const btn=$("plateSkip");
-  btn.disabled=!PLATE_SELECTED.size;
-  btn.textContent=PLATE_SELECTED.size?`Skip (${PLATE_SELECTED.size})`:"Skip";
+  btn.disabled=!n;
+  btn.textContent=n?`Exclude ${n} object${n===1?'':'s'}`:"Exclude";
 }
-// Prime/purge towers are display-only: never selectable, never in the list.
-// (Orca doesn't currently label the tower as an object — this is a guard in
-// case a slicer version starts doing so.)
-const isTowerObj=name=>/(prime|purge|wipe)[ _-]?tower/i.test(name);
-
-function plateListHTML(d){
+// Cross-highlights the plate shape and the list row for the same object,
+// since native CSS :hover can't reach across the two separate containers.
+function setPlateHover(name,on){
+  if(!name) return;
+  const sel='[data-obj="'+CSS.escape(name)+'"]';
+  document.querySelectorAll("#platewrap "+sel+", #platelist "+sel).forEach(el=>el.classList.toggle("hover",on));
+}
+function plateListHTML(d,numberOf){
   const ex=new Set(d.excluded||[]);
   return (d.objects||[]).filter(o=>!isTowerObj(o.name)).map(o=>{
-    const isEx=ex.has(o.name), isCur=o.name===d.current, isSel=PLATE_SELECTED.has(o.name);
-    const disp=o.name.length>40?o.name.slice(0,37)+"...":o.name;
+    const isEx=ex.has(o.name), isSel=PLATE_SELECTED.has(o.name), n=numberOf.get(o.name);
     const cls="plate-item"+(isEx?" ex":"")+(isSel?" sel":"");
+    const chip=isEx?'<span class="pi-chip">Skipped</span>':isSel?'<span class="pi-chip stop">Will stop</span>':'<span class="pi-chip">Printing</span>';
     return `<button class="${cls}" ${isEx?"disabled":`data-obj="${esc(o.name)}"`}>`+
-      `<span class="pi-check">${isSel?"✓":""}</span><span class="pi-name" title="${esc(o.name)}">${esc(disp)}</span>`+
-      (isEx?'<span class="pi-tag">skipped</span>':isCur?'<span class="pi-tag cur">printing</span>':'')+
+      `<span class="pi-num">${n}</span>`+
+      `<span class="pi-text"><span class="pi-label">Object ${n}</span><span class="pi-objid" title="${esc(o.name)}">${esc(o.name)}</span></span>`+
+      chip+
       `</button>`;
   }).join("");
 }
@@ -2639,34 +2942,45 @@ async function doPlateSkip(){
   const names=[...PLATE_SELECTED];
   if(!names.length||PLATE_PRINTER===null) return;
   const st=$("plateStatus");
-  st.className="pstatus work"; st.textContent=`Skipping ${names.length}…`;
+  st.className="pstatus work"; st.textContent=`Excluding ${names.length}…`;
   $("plateSkip").disabled=true;
   try{
     for(const n of names){
       const r=await postJSON("/api/exclude",{printer:PLATE_PRINTER,name:n});
       const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     }
-    st.className="pstatus ok"; st.textContent=`Skipped ${names.length}`;
+    st.className="pstatus ok"; st.textContent=`Excluded ${names.length}`;
     PLATE_SELECTED.clear();
-  }catch(e){ st.className="pstatus err"; st.textContent="Couldn't skip: "+e.message; }
+  }catch(e){ st.className="pstatus err"; st.textContent="Couldn't exclude: "+e.message; }
   refreshPlate();
 }
-function plateSVG(d){
+function plateSVG(d,numberOf){
   const objs=(d.objects||[]).filter(o=>o.polygon&&o.polygon.length>2);
   if(!objs.length) return '<div class="platenote">No objects reported for this print.</div>';
   // Full-bed view over a photo of the real plate: gcode coordinates map 1:1
   // onto the 270×270 U1 bed, so objects appear where they really sit. The
   // photo is shot with the alignment tabs at the back, matching the Y flip.
   const BED=270, pad=8, exSet=new Set(d.excluded||[]);
-  const polys=objs.map(o=>{
+  const groups=objs.map(o=>{
     const pts=o.polygon.map(pt=>pt[0].toFixed(1)+","+(BED-pt[1]).toFixed(1)).join(" "); // flip Y so plate front is at the bottom
-    const isCur=o.name===d.current, isEx=exSet.has(o.name), isTower=isTowerObj(o.name);
-    const cls=isTower?"po tower":(isEx?"po ex":(isCur?"po cur":"po"))+(PLATE_SELECTED.has(o.name)?" sel":"");
-    return `<polygon class="${cls}" points="${pts}"${(isEx||isTower)?"":' data-obj="'+esc(o.name)+'"'}></polygon>`;
+    const isCur=o.name===d.current, isEx=exSet.has(o.name), isTower=isTowerObj(o.name), isSel=PLATE_SELECTED.has(o.name);
+    if(isTower) return `<polygon class="po tower" points="${pts}"></polygon>`;
+    const cls="po"+(isEx?" ex":"")+(isCur?" cur":"")+(isSel?" sel":"");
+    const n=numberOf.get(o.name);
+    let badge="";
+    if(n){
+      const [cx,cyRaw]=polyCentroid(o.polygon);
+      const cy=(BED-cyRaw).toFixed(1);
+      badge=`<circle class="po-badge${isSel?' sel':''}${isEx?' ex':''}" cx="${cx.toFixed(1)}" cy="${cy}" r="9"></circle>`+
+        `<text class="po-badge-text" x="${cx.toFixed(1)}" y="${cy}">${n}</text>`;
+    }
+    return `<g class="po-group"${isEx?"":' data-obj="'+esc(o.name)+'"'}>`+
+      `<polygon class="${cls}" points="${pts}"></polygon>${badge}`+
+      `</g>`;
   }).join("");
   return `<svg viewBox="${-pad} ${-pad} ${BED+2*pad} ${BED+2*pad}" class="platesvg">`+
     `<image href="/plate-bg.png" x="0" y="0" width="${BED}" height="${BED}" preserveAspectRatio="none"/>`+
-    `${polys}</svg>`;
+    `${groups}</svg>`;
 }
 
 
@@ -2680,19 +2994,41 @@ $("gear").addEventListener("click",()=>{
   $("sortBtn").style.display = open ? "none" : "";
   $("compactBtn").style.display = open ? "none" : "";
   $("filesBtn").style.display = open ? "none" : "";
+  if($("bulkHeatBtn")) $("bulkHeatBtn").style.display = open ? "none" : "";
   if($("maintBtn")) $("maintBtn").style.display = open ? "none" : "";
-  if(open){ document.body.classList.remove("showfiles"); loadUsersUI(); }
+  if(open){
+    document.body.classList.remove("showfiles"); loadUsersUI();
+    // showSetTab() is what actually hides #globalSaveRow for a registered
+    // tab (General) in favor of its sticky dirty footer — that only ever
+    // ran on a tab-button click, never on Settings simply opening onto
+    // whichever tab was already marked active, so the old Save row stayed
+    // visible the whole time until you clicked a tab. Re-run it for the
+    // current tab (same name in, same name out — the dirty-tab confirm
+    // guard only fires on an actual switch, so this is a safe no-op reassert).
+    const activeTab=document.querySelector(".set-tab.active")?.dataset.tab||"general";
+    showSetTab(activeTab);
+  }
   else {
     applyFilesOpen(); $("sortMenu").classList.remove("open");
     if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; } // Settings closed — stop polling even if "remote" was the last-open tab
   }
 });
-$("raEnableBtn").addEventListener("click",enableRemoteAccess);
-$("raDisableBtn").addEventListener("click",disableRemoteAccess);
+$("raEnabled").addEventListener("change",async function(){
+  const wantOn=this.checked;
+  if(!wantOn && !confirm("Disable Remote Access? This stops remote access immediately. The tunnel identity is kept so re-enabling doesn't require setting it up again.")){
+    this.checked=true;
+    return;
+  }
+  await raSetEnabled(wantOn);
+});
+$("raGoToUsersBtn").addEventListener("click",()=>showSetTab("users"));
+$("raManageUsersBtn").addEventListener("click",()=>showSetTab("users"));
 $("raRemoveBtn").addEventListener("click",removeRemoteAccess);
+$("raRestartBtn").addEventListener("click",restartRemoteAccessTunnel);
+$("raLogBtn").addEventListener("click",viewRemoteAccessLog);
 $("raCopyBtn").addEventListener("click",async ()=>{
   const url=$("raPublicUrl").textContent;
-  if(!url) return;
+  if(!url||url==="—") return;
   try{ await navigator.clipboard.writeText(url); $("raStatus").className="pstatus ok"; $("raStatus").textContent="Copied"; }
   catch{ $("raStatus").className="pstatus err"; $("raStatus").textContent="Could not copy — copy the URL manually"; }
 });
@@ -2759,29 +3095,94 @@ if($("dockerRestartBtn")) $("dockerRestartBtn").addEventListener("click", async 
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 });
-$("discover").addEventListener("click",()=>runDiscover());
+// One "Discover" button opens this dialog with a scope choice — Local
+// network (every subnet this host is connected to) or a specific one the
+// user types in, matching the two genuinely different scans GET /api/discover
+// already supports (no subnet param vs ?subnet=).
+$("discover").addEventListener("click",openSubnetModal);
+function applyDiscoverScope(){
+  const subnet=$("discoverScopeSubnet").checked;
+  $("subnetModalInput").style.display=subnet?"":"none";
+  $("discoverScopeHint").textContent=subnet
+    ?"Scan one subnet you specify — e.g. 192.168.2.0, or CIDR like 192.168.22.128/25."
+    :"Scans every subnet this SnapCon host is connected to.";
+  if(subnet) setTimeout(()=>$("subnetModalInput").focus(),50);
+}
 function openSubnetModal(){
+  $("discoverScopeLocal").checked=true;
   $("subnetModalInput").value="";
   $("subnetModalStatus").textContent="";
+  applyDiscoverScope();
   $("subnetModal").classList.add("show");
-  setTimeout(()=>$("subnetModalInput").focus(),100);
 }
 function closeSubnetModal(){ $("subnetModal").classList.remove("show"); }
 function doSubnetScan(){
+  if($("discoverScopeLocal").checked){ closeSubnetModal(); runDiscover(); return; }
   const subnet=$("subnetModalInput").value.trim();
   if(!subnet){ $("subnetModalStatus").className="pstatus err"; $("subnetModalStatus").textContent="Enter a subnet first"; return; }
   closeSubnetModal();
   runDiscover(subnet);
 }
-$("discoverSubnet").addEventListener("click",openSubnetModal);
+$("discoverScopeLocal").addEventListener("change",applyDiscoverScope);
+$("discoverScopeSubnet").addEventListener("change",applyDiscoverScope);
 $("subnetModalInput").addEventListener("keydown",e=>{ if(e.key==="Enter") doSubnetScan(); });
 $("saveCfg").addEventListener("click",saveConfig);
 
-// Grey out and disable the notification options while the master box is off.
+// Grey out and disable the entire notification body while the master switch
+// is off. Re-enabling it re-asserts each nested control's OWN disabled state
+// right after (milestone chips need their own switch on, each provider card
+// needs its own switch on) — the blanket toggle above doesn't know about
+// those, only about the master.
 function applyNtfEnabled(){
   const on=$("ntfEnabled").checked;
   $("ntfBody").classList.toggle("disabled", !on);
   $("ntfBody").querySelectorAll("input,button").forEach(i=>i.disabled=!on);
+  if(on){
+    syncMilestoneNesting();
+    syncProviderCard("ntfyEnabled","ntfyBody");
+    syncProviderCard("telegramEnabled","telegramBody");
+  }
+}
+function syncMilestoneNesting(){
+  const on=$("ntfMilestones").checked;
+  $("ntfMilestoneNest").classList.toggle("disabled", !on);
+  document.querySelectorAll("#ntfMilestoneChips .btn-chip").forEach(b=>b.disabled=!on);
+}
+function syncProviderCard(switchId,bodyId){
+  const on=$(switchId).checked;
+  $(bodyId).classList.toggle("disabled", !on);
+  $(bodyId).querySelectorAll("input,button").forEach(el=>el.disabled=!on);
+}
+// Selected milestone percentages — a Set so toggling a chip is O(1) and
+// order in the underlying array never matters for equality checks.
+let NTF_MILESTONES=new Set([25,50,75]);
+// The bot token never round-trips (see setSecretFieldState) — Discard can't
+// "restore" a cleared/replaced value the way it does for every other field,
+// only put the secret control back to whatever visual state (Configured vs
+// empty) matched what was actually on file as of the last load/save.
+let NTF_HAS_TELEGRAM_TOKEN=false;
+function renderMilestoneChips(){
+  document.querySelectorAll("#ntfMilestoneChips .btn-chip").forEach(b=>{
+    b.classList.toggle("active", NTF_MILESTONES.has(parseInt(b.dataset.pct,10)));
+  });
+  const n=NTF_MILESTONES.size;
+  $("ntfMilestoneHint").textContent = n
+    ? `${n} milestone message${n===1?'':'s'} per print, at ${[...NTF_MILESTONES].sort((a,b)=>a-b).join('%, ')}%.`
+    : "No percentages selected — pick at least one below, or the switch above has nothing to send.";
+}
+async function sendProviderTest(provider,btnId,statusId){
+  const st=$(statusId), btn=$(btnId);
+  st.className="pstatus work"; st.textContent="Sending test…";
+  btn.disabled=true;
+  try{
+    const body={ service:provider, includeImage:$("ntfImage").checked };
+    if(provider==="ntfy") body.topic=$("ntfTopic").value.trim();
+    else { body.chatId=$("ntfChatId").value.trim(); body.botToken=secretFieldValue($("ntfBotTokenField")); }
+    const r=await postJSON("/api/notify-test",body);
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent=provider==="telegram"?"Sent — check Telegram":"Sent — check your ntfy app";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 }
 
 // Shared by the Notifications-tab ntfy topic and the OTP-via-ntfy topic — a
@@ -2791,17 +3192,23 @@ function genRandomTopic(){
   const buf=new Uint32Array(12); crypto.getRandomValues(buf);
   return [...buf].map(n=>letters[n%letters.length]).join("");
 }
+function otpServiceValue(){
+  return $("otpSvcNtfy").checked ? "ntfy" : $("otpSvcTelegram").checked ? "telegram" : "resend";
+}
 function applyOtpServiceUI(){
-  const ntfy=$("otpSvcNtfy").checked;
-  $("otpResendBody").style.display=ntfy?"none":"";
-  $("otpNtfyBody").style.display=ntfy?"":"none";
+  const svc=otpServiceValue();
+  $("otpResendBody").style.display=svc==="resend"?"":"none";
+  $("otpNtfyBody").style.display=svc==="ntfy"?"":"none";
+  $("otpTelegramBody").style.display=svc==="telegram"?"":"none";
 }
 async function doOtpTest(){
   const st=$("otpTestStatus");
-  const ntfy=$("otpSvcNtfy").checked;
-  const body={ service: ntfy?"ntfy":"resend" };
-  if(ntfy){
+  const svc=otpServiceValue();
+  const body={ service: svc };
+  if(svc==="ntfy"){
     body.ntfyTopic=$("otpNtfyTopic").value.trim();
+  } else if(svc==="telegram"){
+    body.chatId=$("otpTelegramChatId").value.trim();
   } else {
     const to=prompt("Send a test OTP email to:");
     if(!to) return; // cancelled
@@ -2831,8 +3238,8 @@ async function loadFirmware(){
     wrap.innerHTML=rows.map(r=>{
       if(r.skipped){
         const why=r.online?("skipped — "+(r.reason||"busy")):("offline"+(r.reason?" — "+r.reason:""));
-        return `<div class="fwrow"><input type="checkbox" class="fwchk" data-id="${r.id}" disabled>`+
-               `<div><div class="fwline1"><b>${esc(r.name)}</b></div><div class="fwskip">${esc(why)}</div></div></div>`;
+        return `<div class="fwrow"><input type="checkbox" class="fwchk" id="fwchk-${r.id}" data-id="${r.id}" disabled>`+
+               `<div><label for="fwchk-${r.id}" class="fwline1"><b>${esc(r.name)}</b></label><div class="fwskip">${esc(why)}</div></div></div>`;
       }
       // All MCUs usually share one version — collapse to one entry. If any
       // board disagrees, show the majority version plus an amber callout for
@@ -2852,8 +3259,8 @@ async function loadFirmware(){
           outliers.map(m=>` · <span class="fwdiff">⚠ ${esc(m.name)}: ${esc(m.version||"—")}</span>`).join("");
       }
       const fwTxt="FW "+(r.firmware||"—")+(r.software&&r.software!==r.firmware?" / SW "+r.software:"")+" · Klipper "+(r.klipper||"—");
-      return `<div class="fwrow"><input type="checkbox" class="fwchk" data-id="${r.id}">`+
-        `<div><div class="fwline1"><b>${esc(r.name)}</b><span>${esc(fwTxt)}</span></div>`+
+      return `<div class="fwrow"><input type="checkbox" class="fwchk" id="fwchk-${r.id}" data-id="${r.id}">`+
+        `<div><label for="fwchk-${r.id}" class="fwline1"><b>${esc(r.name)}</b><span>${esc(fwTxt)}</span></label>`+
         `<div class="fwline2">${mcuHtml}${r.os?esc(" · "+r.os):""}</div></div></div>`;
     }).join("");
     const read=rows.filter(r=>!r.skipped).length;
@@ -2862,9 +3269,59 @@ async function loadFirmware(){
   finally{ btn.disabled=false; }
 }
 
+// ---- Generic per-tab dirty tracking for Settings ----
+// A tab opts in by calling registerSettingsTab() with a getValues()/
+// setValues(v) pair. Dirtiness is always a diff against a snapshot taken at
+// load/save time — never a keystroke counter — so undoing an edit clears it
+// again. Only registered tabs get a sticky dirty footer and a switch-away
+// prompt; tabs that haven't been reworked yet keep the plain always-visible
+// Save button. Save itself still submits the one shared /api/config payload
+// (see saveConfig) — this only scopes the UI's *awareness* of what changed
+// to the tab the user is actually looking at.
+const SETTINGS_TAB_TRACKERS={}, SETTINGS_TAB_SNAPSHOTS={};
+function registerSettingsTab(name,getValues,setValues){
+  SETTINGS_TAB_TRACKERS[name]={getValues,setValues};
+}
+function baselineSettingsTab(name){
+  const t=SETTINGS_TAB_TRACKERS[name];
+  if(!t) return;
+  SETTINGS_TAB_SNAPSHOTS[name]=t.getValues();
+  updateSettingsDirtyBar(name);
+}
+function baselineAllSettingsTabs(){ Object.keys(SETTINGS_TAB_TRACKERS).forEach(baselineSettingsTab); }
+function settingsTabChanges(name){
+  const t=SETTINGS_TAB_TRACKERS[name], base=SETTINGS_TAB_SNAPSHOTS[name];
+  if(!t||!base) return 0;
+  const now=t.getValues();
+  return Object.keys(now).filter(k=>JSON.stringify(now[k])!==JSON.stringify(base[k])).length;
+}
+function updateSettingsDirtyBar(name){
+  const bar=document.querySelector(`#tab-${name} .settings-dirty-bar`);
+  if(!bar) return;
+  const n=settingsTabChanges(name);
+  bar.style.display=n?"flex":"none";
+  if(n) bar.querySelector(".dirty-text").textContent=`${n} unsaved change${n===1?'':'s'} on this tab`;
+}
+function discardSettingsTab(name){
+  const t=SETTINGS_TAB_TRACKERS[name], base=SETTINGS_TAB_SNAPSHOTS[name];
+  if(!t||!base) return;
+  t.setValues(base);
+  updateSettingsDirtyBar(name);
+}
+
 function showSetTab(name){
+  const current=document.querySelector(".set-tab.active")?.dataset.tab;
+  if(current && current!==name && SETTINGS_TAB_TRACKERS[current] && settingsTabChanges(current)>0){
+    if(!confirm("You have unsaved changes on this tab. Discard them and switch?")) return;
+    discardSettingsTab(current);
+  }
   document.querySelectorAll(".set-tab").forEach(b=>b.classList.toggle("active", b.dataset.tab===name));
   document.querySelectorAll(".set-panel").forEach(p=>{ p.style.display = p.id==="tab-"+name ? "" : "none"; });
+  // A registered tab (currently just General) shows its own sticky dirty
+  // footer instead of the shared always-visible Save row. Remote Access has
+  // no saved values at all — enabling/disabling/restarting are immediate
+  // actions — so it never shows a Save row either.
+  if($("globalSaveRow")) $("globalSaveRow").style.display=(SETTINGS_TAB_TRACKERS[name]||name==="remote")?"none":"";
   // Remote Access has its own live status poller — only run it while its tab
   // is actually visible, same reasoning as the fleet poller not running
   // forever in the background for no reason.
@@ -2879,72 +3336,125 @@ async function loadRemoteAccessStatus(){
   if(RA_INFLIGHT) return;
   RA_INFLIGHT=true;
   try{
-    const s=await getJSON("/api/remote-access/status");
+    const [s, users]=await Promise.all([getJSON("/api/remote-access/status"), getJSON("/api/users")]);
     // getJSON()'s checkAuthFailure() pops the login overlay on a 401 but
     // doesn't stop the (still-JSON) error body — e.g. {"error":"Login
     // required"} — from reaching here. Without this check, that object has
     // no .state field, and renderRemoteAccess() would render the literal
-    // string "undefined" into the status badge underneath the overlay.
+    // string "undefined" underneath the overlay.
     if(!s || typeof s.state!=="string") throw new Error((s&&s.error)||"Unexpected response");
-    renderRemoteAccess(s);
+    renderRemoteAccess(s, Array.isArray(users)?users:[]);
   }catch(e){
     $("raStatus").className="pstatus err"; $("raStatus").textContent=e.message;
   }finally{ RA_INFLIGHT=false; }
 }
 
-function renderRemoteAccess(s){
+// The chain is built entirely from real signals already on the status
+// object — no step is ever marked "failed" without an actual error behind
+// it. Once a step fails, every step after it is "blocked" (not "failed"):
+// there's no point calling the edge connection broken when the tunnel
+// process backing it never started.
+function raChainRows(s){
+  const rows=[];
+  if(s.localServiceReachable) rows.push({status:"healthy", name:"Local SnapCon service", detail:"Reachable"});
+  else if(s.state==="error" && !s.processRunning) rows.push({status:"failed", name:"Local SnapCon service", detail:s.lastError||"Not reachable"});
+  else rows.push({status:"pending", name:"Local SnapCon service", detail:"Checking…"});
+
+  let blocked=rows[0].status==="failed";
+  if(blocked) rows.push({status:"blocked", name:"Tunnel process", detail:"Blocked"});
+  else if(s.processRunning) rows.push({status:"healthy", name:"Tunnel process", detail:s.pid?("pid "+s.pid):"Running"});
+  else if(s.state==="error") rows.push({status:"failed", name:"Tunnel process", detail:s.lastError||"Process exited"});
+  else rows.push({status:"pending", name:"Tunnel process", detail:s.state==="provisioning"?"Provisioning…":s.state==="downloading"?"Downloading cloudflared…":"Starting…"});
+
+  blocked=blocked||rows[1].status==="failed";
+  if(blocked) rows.push({status:"blocked", name:"Cloudflare edge", detail:"Blocked"});
+  else if(s.logConnectionSeen) rows.push({status:"healthy", name:"Cloudflare edge", detail:"Connected"});
+  else rows.push({status:"pending", name:"Cloudflare edge", detail:"Connecting…"});
+
+  if(blocked) rows.push({status:"blocked", name:"Public address", detail:"Blocked"});
+  else if(s.publicEndpointHealthy) rows.push({status:"healthy", name:"Public address", detail:"Reachable"});
+  else rows.push({status:"pending", name:"Public address", detail:"Waiting…"});
+
+  return rows;
+}
+function renderRaChain(s){
+  const icon={healthy:"✓", failed:"✕", blocked:"–", pending:'<span class="ra-spinner"></span>'};
+  $("raChain").innerHTML=raChainRows(s).map(r=>
+    `<div class="ra-chain-row ra-chain-${r.status}">`+
+      `<span class="ra-chain-icon">${icon[r.status]}</span>`+
+      `<span class="ra-chain-name">${esc(r.name)}</span>`+
+      `<span class="ra-chain-detail">${esc(r.detail)}</span>`+
+    `</div>`
+  ).join("");
+}
+function renderRaAccounts(users){
+  if(!users.length){ $("raAccountList").innerHTML=`<div class="settings-help">No accounts yet.</div>`; return; }
+  $("raAccountList").innerHTML=users.map(u=>{
+    const name=(u.firstName||u.lastName) ? esc((u.firstName+" "+u.lastName).trim()) : esc(u.loginName);
+    return `<div class="ra-account-row">`+
+      `<span class="ra-account-name">${name}</span>`+
+      `<span class="ra-account-role">${esc(roleLabel(u.role))}</span>`+
+      `<span class="ra-account-otp ${u.otpEnabled?"ok":"warn"}">${u.otpEnabled?"OTP on":"Password only"}</span>`+
+    `</div>`;
+  }).join("");
+}
+
+// Gate condition mirrors the server's validateRemoteAccessSecurity(): user
+// access management on AND at least one admin account. Building the UI
+// around the same check the server enforces means Remote Access never
+// looks "ready" here only to be rejected by /api/remote-access/enable.
+function renderRemoteAccess(s, users){
   $("raInsecureWarning").style.display = s.usingInsecureFallback ? "" : "none";
 
-  const stateLabels = { disabled:"Disabled", registering:"Waiting for verification", provisioning:"Starting", downloading:"Starting", starting:"Starting", connected:"Connected", reconnecting:"Reconnecting", error:"Error" };
-  const stateColors = { disabled:"#6A7180", registering:"#fbbf24", provisioning:"#fbbf24", downloading:"#fbbf24", starting:"#fbbf24", connected:"#46C18C", reconnecting:"#fbbf24", error:"#E06A5C" };
-  $("raStatusBadge").textContent = stateLabels[s.state] || s.state;
-  $("raStatusBadge").style.setProperty("--status-color", stateColors[s.state] || "#6A7180");
+  const gateOk = USERS_ENABLED && users.some(u=>u.role==="admin");
+  const on = s.state!=="disabled";
+  const sw=$("raEnabled");
+  sw.disabled=!gateOk;
+  $("raSwitchRow").classList.toggle("disabled", !gateOk);
+  if(document.activeElement!==sw) sw.checked=on;
+  $("raSwitchDesc").textContent = gateOk
+    ? "Get a public HTTPS address for this SnapCon, tunnelled through Cloudflare."
+    : "Requires User Access Management with at least one admin account.";
 
-  const running = s.state!=="disabled";
-  $("raEnableBtn").style.display = running ? "none" : "";
-  $("raDisableBtn").style.display = running ? "" : "none";
-  $("raRemoveBtn").style.display = running ? "" : "none";
+  $("raGateSection").style.display = gateOk ? "none" : "";
+  $("raOffSection").style.display = (gateOk && !on) ? "" : "none";
+  $("raOnSection").style.display = (gateOk && on) ? "" : "none";
+  $("raAccountsSection").style.display = (gateOk && on) ? "" : "none";
 
-  const registering = s.state==="registering" && !!s.registerUrl;
-  $("raRegisterRow").style.display = registering ? "flex" : "none";
-  if(registering) $("raRegisterOpenBtn").href = s.registerUrl;
-
-  const hasUrl = !!s.publicUrl;
-  $("raUrlRow").style.display = hasUrl ? "flex" : "none";
-  if(hasUrl){
-    $("raPublicUrl").textContent = s.publicUrl;
-    $("raOpenBtn").href = s.publicUrl;
+  if(gateOk && !on){
+    $("raLastConnLine").textContent = "Last connected: "+(s.lastConnectedAt ? new Date(s.lastConnectedAt).toLocaleString() : "never");
   }
 
-  $("raProcRow").textContent = s.processRunning ? "Running" : "Stopped";
-  $("raConnRow").textContent = (s.logConnectionSeen && s.publicEndpointHealthy) ? "Connected" : "Disconnected";
-  $("raLocalRow").textContent = s.localServiceReachable ? "Reachable" : "Unreachable";
-  $("raLastConnRow").textContent = s.lastConnectedAt ? new Date(s.lastConnectedAt).toLocaleString() : "—";
-  $("raLastErrRow").textContent = s.lastError || "—";
+  if(gateOk && on){
+    const registering = s.state==="registering" && !!s.registerUrl;
+    $("raRegisterBlock").style.display = registering ? "" : "none";
+    $("raConnectedBlock").style.display = registering ? "none" : "";
+    if(registering) $("raRegisterOpenBtn").href = s.registerUrl;
+
+    $("raPublicUrl").textContent = s.publicUrl || "—";
+    $("raOpenBtn").href = s.publicUrl || "#";
+    $("raOpenBtn").classList.toggle("disabled", !s.publicUrl);
+    $("raCopyBtn").disabled = !s.publicUrl;
+
+    renderRaChain(s);
+    renderRaAccounts(users);
+  }
+
+  $("raRestartBtn").disabled = !gateOk || !s.processRunning;
+  $("raLogBtn").disabled = !gateOk || !s.processRunning;
+  $("raRemoveBtn").disabled = !gateOk || !s.hostname;
 }
 
-async function enableRemoteAccess(){
-  const st=$("raStatus"); st.className="pstatus work"; st.textContent="Starting…";
-  $("raEnableBtn").disabled=true;
+async function raSetEnabled(on){
+  const st=$("raStatus"); st.className="pstatus work"; st.textContent=on?"Starting…":"Stopping…";
+  $("raEnabled").disabled=true;
   try{
-    const r=await postJSON("/api/remote-access/enable",{});
+    const r=await postJSON("/api/remote-access/"+(on?"enable":"disable"),{});
     const d=await r.json();
     if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     st.className="pstatus ok"; st.textContent="";
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  finally{ $("raEnableBtn").disabled=false; loadRemoteAccessStatus(); }
-}
-async function disableRemoteAccess(){
-  if(!confirm("Disable Remote Access? This stops remote access immediately. The tunnel identity is kept so re-enabling doesn't require setting it up again.")) return;
-  const st=$("raStatus"); st.className="pstatus work"; st.textContent="Stopping…";
-  $("raDisableBtn").disabled=true;
-  try{
-    const r=await postJSON("/api/remote-access/disable",{});
-    const d=await r.json();
-    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
-    st.className="pstatus ok"; st.textContent="";
-  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  finally{ $("raDisableBtn").disabled=false; loadRemoteAccessStatus(); }
+  finally{ loadRemoteAccessStatus(); }
 }
 async function removeRemoteAccess(){
   if(!confirm("Remove Remote Access? This permanently deletes this device's remote Hub. You will need to complete the verification step again to re-enable it. This cannot be undone.")) return;
@@ -2956,18 +3466,151 @@ async function removeRemoteAccess(){
     if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     st.className="pstatus ok"; st.textContent="";
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  finally{ $("raRemoveBtn").disabled=false; loadRemoteAccessStatus(); }
+  finally{ loadRemoteAccessStatus(); }
 }
+async function restartRemoteAccessTunnel(){
+  const st=$("raStatus"); st.className="pstatus work"; st.textContent="Restarting…";
+  $("raRestartBtn").disabled=true;
+  try{
+    const r=await postJSON("/api/remote-access/restart",{});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    st.className="pstatus ok"; st.textContent="";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ loadRemoteAccessStatus(); }
+}
+async function viewRemoteAccessLog(){
+  const box=$("raLogView");
+  if(box.style.display!=="none"){ box.style.display="none"; return; }
+  try{
+    const d=await getJSON("/api/remote-access/log");
+    box.textContent=(d.lines||[]).join("\n")||"(no log output yet)";
+  }catch(e){ box.textContent="Failed to load log: "+e.message; }
+  box.style.display="block";
+  box.scrollTop=box.scrollHeight;
+}
+
+// ---- General tab helpers ----
+let FOLDER_CHECK_TIMER=null;
+// Debounced — fires 500ms after the user stops typing, not on every
+// keystroke, since it's a real filesystem + file-count check server-side.
+function scheduleFolderCheck(){
+  clearTimeout(FOLDER_CHECK_TIMER);
+  const el=$("folderCheckStatus");
+  const p=$("setFolder").value.trim();
+  if(!p){ el.className="settings-help"; el.textContent=""; return; }
+  el.className="settings-help"; el.textContent="Checking…";
+  FOLDER_CHECK_TIMER=setTimeout(async()=>{
+    try{
+      const r=await getJSON("/api/check-folder?path="+encodeURIComponent(p));
+      if(!r.ok){ el.className="settings-help err"; el.textContent=r.error||"Path not found"; return; }
+      if(r.count>0){ el.className="settings-help ok"; el.textContent=`✓ Reachable, ${r.count} file${r.count===1?'':'s'}`; }
+      else { el.className="settings-help warn"; el.textContent="⚠ Reachable, but no files found. Check the path, or that it holds files SnapCon scans for (.gcode, .gco, .g, .gx, .3mf)."; }
+    }catch{ el.className="settings-help err"; el.textContent="Couldn't check"; }
+  },500);
+}
+function updateRefreshHelper(){
+  const iv=parseInt($("setRefresh").value,10)||2;
+  const n=PRINTERS_CFG.length;
+  const perMin=Math.round((60/iv)*n);
+  const el=$("refreshHelper");
+  const tooFast=iv<2, tooBusy=perMin>300;
+  if(!tooFast&&!tooBusy){
+    el.className="settings-help";
+    el.textContent=`≈${perMin} printer requests/min across ${n} printer${n===1?'':'s'}.`;
+    return;
+  }
+  el.className="settings-help warn";
+  // Smallest interval that brings the rate back to ≤300/min — 2s is the
+  // floor regardless, since sub-2s is its own separate caution.
+  const suggested=Math.max(2,Math.ceil((60*n)/300)||2);
+  const suggestedRate=Math.round((60/suggested)*n);
+  let msg=`≈${perMin} printer requests/min across ${n} printer${n===1?'':'s'}.`;
+  if(tooFast) msg+=" Under 2s can overwhelm slower printers.";
+  msg+=` Try ${suggested}s instead (≈${suggestedRate}/min).`;
+  el.textContent=msg;
+}
+// The currency SYMBOL is still what's stored/used everywhere costs are
+// shown (unchanged data model) — the select just replaces free-text entry
+// with a fixed, labeled list of codes. This keeps every "$"-hardcoding
+// label in sync with whatever's actually selected.
+function updateCurrencyLabels(){
+  const sym=$("setCurrency").value||"$";
+  if($("filamentCostCurrency")) $("filamentCostCurrency").textContent=sym;
+  if($("elecRateCurrency")) $("elecRateCurrency").textContent=sym;
+  if($("maintCostCurrency")) $("maintCostCurrency").textContent=sym;
+}
+function syncAutoMatchNesting(){
+  const on=$("setAllowMapping").checked;
+  $("autoMatchNest").classList.toggle("disabled",!on);
+  $("setSuggestMatching").disabled=!on;
+}
+function generalTabValues(){
+  return {
+    folder:$("setFolder").value.trim(), refresh:$("setRefresh").value, currency:$("setCurrency").value,
+    filamentCost:$("setFilamentCost").value, electricityRate:$("setElectricityRate").value,
+    allowMapping:$("setAllowMapping").checked, suggestMatching:$("setSuggestMatching").checked
+  };
+}
+function setGeneralTabValues(v){
+  $("setFolder").value=v.folder; scheduleFolderCheck();
+  $("setRefresh").value=v.refresh; updateRefreshHelper();
+  $("setCurrency").value=v.currency; updateCurrencyLabels();
+  $("setFilamentCost").value=v.filamentCost;
+  $("setElectricityRate").value=v.electricityRate;
+  $("setAllowMapping").checked=v.allowMapping;
+  $("setSuggestMatching").checked=v.suggestMatching;
+  syncAutoMatchNesting();
+}
+registerSettingsTab("general",generalTabValues,setGeneralTabValues);
+
+function notifTabValues(){
+  return {
+    enabled:$("ntfEnabled").checked,
+    onStart:$("ntfEvStart").checked, onPause:$("ntfEvPause").checked,
+    onError:$("ntfEvError").checked, onComplete:$("ntfEvComplete").checked,
+    onIntervals:$("ntfMilestones").checked, milestones:[...NTF_MILESTONES].sort((a,b)=>a-b),
+    includeImage:$("ntfImage").checked,
+    ntfyEnabled:$("ntfyEnabled").checked, telegramEnabled:$("telegramEnabled").checked,
+    ntfyTopic:$("ntfTopic").value.trim(), telegramChatId:$("ntfChatId").value.trim(),
+    telegramToken:secretFieldValue($("ntfBotTokenField"))
+  };
+}
+function setNotifTabValues(v){
+  $("ntfEnabled").checked=v.enabled;
+  $("ntfEvStart").checked=v.onStart; $("ntfEvPause").checked=v.onPause;
+  $("ntfEvError").checked=v.onError; $("ntfEvComplete").checked=v.onComplete;
+  $("ntfMilestones").checked=v.onIntervals;
+  NTF_MILESTONES=new Set(v.milestones);
+  renderMilestoneChips();
+  $("ntfImage").checked=v.includeImage;
+  $("ntfyEnabled").checked=v.ntfyEnabled; $("telegramEnabled").checked=v.telegramEnabled;
+  $("ntfTopic").value=v.ntfyTopic; $("ntfChatId").value=v.telegramChatId;
+  setSecretFieldState($("ntfBotTokenField"),NTF_HAS_TELEGRAM_TOKEN);
+  applyNtfEnabled();
+  syncMilestoneNesting();
+  syncProviderCard("ntfyEnabled","ntfyBody");
+  syncProviderCard("telegramEnabled","telegramBody");
+}
+registerSettingsTab("notif",notifTabValues,setNotifTabValues);
 
 async function loadConfigUI(){
   await loadConnectorTypes();
   try{
     const c=await getJSON("/api/config");
     $("setFolder").value=c.gcodeFolder||"";
+    scheduleFolderCheck();
     $("setRefresh").value=c.refreshInterval||2;
-    $("setCurrency").value=c.currency||"$";
     CURRENCY=c.currency||"$";
-    if($("maintCostCurrency")) $("maintCostCurrency").textContent=CURRENCY;
+    // The select is a fixed preset list — if a previously-saved currency
+    // isn't one of them (e.g. set via the old free-text field), add it as a
+    // one-off extra option rather than silently falling back to USD and
+    // quietly changing what's on file the next time this saves.
+    if(![...$("setCurrency").options].some(o=>o.value===CURRENCY)){
+      $("setCurrency").add(new Option(CURRENCY,CURRENCY));
+    }
+    $("setCurrency").value=CURRENCY;
+    updateCurrencyLabels();
     $("setFilamentCost").value=c.filamentCost||"";
     $("setElectricityRate").value=c.electricityRate||"";
     FILAMENT_COST=c.filamentCost||0; ELECTRICITY_RATE=c.electricityRate||0;
@@ -2987,34 +3630,258 @@ async function loadConfigUI(){
     $("setResendKey").placeholder=rs.hasApiKey?"•••••••• (saved — leave blank to keep)":"re_...";
     $("setResendFrom").value=rs.fromAddress||"";
     const otp=c.otp||{};
-    if(otp.service==="ntfy") $("otpSvcNtfy").checked=true; else $("otpSvcResend").checked=true;
+    if(otp.service==="ntfy") $("otpSvcNtfy").checked=true;
+    else if(otp.service==="telegram") $("otpSvcTelegram").checked=true;
+    else $("otpSvcResend").checked=true;
     $("otpNtfyTopic").value=otp.ntfyTopic||"";
+    $("otpTelegramChatId").value=otp.telegramChatId||"";
+    // The bot token itself lives under Notifications, not here — just warn
+    // if OTP-via-Telegram is picked but no bot has been configured there yet.
+    $("otpTelegramBotHint").className="settings-help"+(otp.telegramBotConfigured?"":" warn");
+    $("otpTelegramBotHint").textContent=otp.telegramBotConfigured
+      ? "Uses the Telegram bot configured on the Notifications tab."
+      : "No Telegram bot configured yet — set one up on the Notifications tab first.";
     applyOtpServiceUI();
     VIEW_MODE=c.openCompact?'compact':'regular'; applyViewMode();
     const nf=c.notifications||{};
     $("ntfEnabled").checked=!!nf.enabled;
-    $("ntfEvents").checked=!!nf.onEvents;
-    $("ntfIntervals").checked=!!nf.onIntervals;
+    $("ntfEvStart").checked=!!nf.onStart;
+    $("ntfEvPause").checked=!!nf.onPause;
+    $("ntfEvError").checked=!!nf.onError;
+    $("ntfEvComplete").checked=!!nf.onComplete;
+    $("ntfMilestones").checked=!!nf.onIntervals;
+    NTF_MILESTONES=new Set((Array.isArray(nf.milestonePercents)&&nf.milestonePercents.length)?nf.milestonePercents:[25,50,75]);
+    renderMilestoneChips();
     $("ntfImage").checked=!!nf.includeImage;
-    if(nf.service==="telegram") $("ntfSvcTelegram").checked=true; else $("ntfSvcNtfy").checked=true;
+    $("ntfyEnabled").checked=!!nf.ntfyEnabled;
+    $("telegramEnabled").checked=!!nf.telegramEnabled;
     $("ntfTopic").value=nf.ntfyTopic||"";
     $("ntfChatId").value=nf.telegramChatId||"";
-    // Bot token never round-trips (real secret) — mirror the Resend API key
-    // convention: blank field + placeholder shows whether one's on file.
-    $("ntfBotToken").value="";
-    $("ntfBotToken").placeholder=nf.hasTelegramBotToken?"configured — leave blank to keep":"123456:ABC-token-from-BotFather";
+    // Bot token never round-trips (real secret) — shared masked-secret
+    // control: a "Configured" badge when one's on file, a plain input
+    // otherwise.
+    NTF_HAS_TELEGRAM_TOKEN=!!nf.hasTelegramBotToken;
+    setSecretFieldState($("ntfBotTokenField"), NTF_HAS_TELEGRAM_TOKEN);
     applyNtfEnabled();
+    syncMilestoneNesting();
+    syncProviderCard("ntfyEnabled","ntfyBody");
+    syncProviderCard("telegramEnabled","telegramBody");
+    baselineSettingsTab("notif");
     $("setPrinters").innerHTML="";
     PRINTERS_CFG=c.printers||[];
-    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,brand:p.brand,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,pushNotify:p.pushNotify,connector:p.connector,serial:p.serial,verificationCode:p.verificationCode,token:p.token}));
+    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,brand:p.brand,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,pushNotify:p.pushNotify,connector:p.connector,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken}));
+    baselinePrintersDirty();
+    updateRefreshHelper(); // depends on PRINTERS_CFG.length, so runs after the printer rows above
+    syncAutoMatchNesting();
+    baselineSettingsTab("general");
     // The onboarding "add your first printer" flow drops into the admin-only
     // Printers settings tab — never force that open for a non-Admin role,
     // who couldn't reach or complete it (Settings itself is hidden for them).
     if(!c.configured && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("sortBtn").style.display="none"; $("compactBtn").style.display="none"; if($("filesBtn")) $("filesBtn").style.display="none"; if($("maintBtn")) $("maintBtn").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
   }catch(e){}
 }
+// ---- Shared masked-secret control (printer API token, Telegram bot token) ----
+// A secret's real value is never sent back from the server (see server.js's
+// publicCfg) — only a hasValue boolean. So the UI shows either a "Configured"
+// badge + Replace/Clear, or a plain empty input when nothing's on file.
+// Reading a field's save value is a 3-state result: undefined ("don't touch
+// what's on file"), "" (Clear was clicked — explicitly wipe it), or a
+// non-empty string (replace with this) — the same convention server.js
+// already uses for telegramBotToken/resend.apiKey, now shared by the token
+// field too.
+function secretFieldHtml(cls,hasValue,placeholder){
+  return `<div class="secret-field" data-cleared="0">`+
+    `<input type="password" class="field secret-input ${cls}" style="${hasValue?"display:none":""}" placeholder="${esc(placeholder||"")}" autocomplete="off">`+
+    `<div class="secret-chip" style="${hasValue?"":"display:none"}">`+
+      `<span class="status-badge" style="--status-color:var(--ok)">Configured</span>`+
+      `<button type="button" class="btn ghost secret-replace">Replace</button>`+
+      `<button type="button" class="btn ghost secret-clear">Clear</button>`+
+    `</div>`+
+  `</div>`;
+}
+function wireSecretField(field){
+  const input=field.querySelector(".secret-input"), chip=field.querySelector(".secret-chip");
+  field.querySelector(".secret-replace")?.addEventListener("click",()=>{
+    chip.style.display="none"; input.style.display=""; input.value=""; input.focus();
+    field.dataset.cleared="0";
+    markPrintersDirty(); // harmless no-op outside a printer row (e.g. the Telegram field)
+  });
+  field.querySelector(".secret-clear")?.addEventListener("click",()=>{
+    chip.style.display="none"; input.style.display=""; input.value="";
+    field.dataset.cleared="1";
+    markPrintersDirty();
+  });
+}
+function secretFieldValue(field){
+  if(!field) return undefined;
+  const v=field.querySelector(".secret-input").value.trim();
+  if(v) return v;
+  return field.dataset.cleared==="1" ? "" : undefined;
+}
+
+// ---- Switch: reusable boolean toggle ----
+// Markup is a real <input type="checkbox" role="switch">, styled as a track
+// + knob — not a div with a click handler — so form semantics, keyboard
+// support (Space), and label association all come from the platform for
+// free. The whole row is the <label>, so clicking the description text
+// toggles it too. Because it's still a plain checkbox underneath, every
+// existing `.checked` read/write call site keeps working unchanged — only
+// the markup and CSS differ from a bare <input type=checkbox>.
+function switchHtml(id,checked,label,description,disabled){
+  return `<label class="switch-row${disabled?' disabled':''}" for="${esc(id)}">`+
+    `<input type="checkbox" role="switch" id="${esc(id)}" class="switch-input"${checked?' checked':''}${disabled?' disabled':''}>`+
+    `<span class="switch-text"><span class="switch-label">${esc(label)}</span>`+
+    (description?`<span class="switch-desc">${esc(description)}</span>`:'')+
+    `</span>`+
+  `</label>`;
+}
+// ---- Number-input stepper: replaces the browser's native spinner app-wide ----
+// A generic enhancement, not a per-field opt-in — enhanceNumberInputs() runs
+// once at startup for whatever's already in the DOM, and a MutationObserver
+// (wired in wireUI) catches every number input rendered afterward (printer
+// rows, modals, anything), so no render call site needs to remember to
+// invoke this itself.
+function enhanceNumberInput(input){
+  if(input.dataset.stepped) return;
+  input.dataset.stepped="1";
+  const wrap=document.createElement("span");
+  wrap.className="number-field";
+  // The input's own inline sizing (e.g. style="max-width:140px") described
+  // its footprint as a bare field — move it to the new wrapper so attaching
+  // two buttons doesn't change the control's overall width on the page.
+  if(input.style.maxWidth){ wrap.style.maxWidth=input.style.maxWidth; input.style.maxWidth=""; }
+  if(input.style.width){ wrap.style.width=input.style.width; input.style.width=""; }
+  input.parentNode.insertBefore(wrap,input);
+  const minus=document.createElement("button");
+  minus.type="button"; minus.className="number-step minus"; minus.textContent="−"; minus.tabIndex=-1; minus.setAttribute("aria-label","Decrease");
+  const plus=document.createElement("button");
+  plus.type="button"; plus.className="number-step plus"; plus.textContent="+"; plus.tabIndex=-1; plus.setAttribute("aria-label","Increase");
+  wrap.appendChild(minus); wrap.appendChild(input); wrap.appendChild(plus);
+  const fire=()=>{ input.dispatchEvent(new Event("input",{bubbles:true})); input.dispatchEvent(new Event("change",{bubbles:true})); };
+  const step=dir=>{
+    if(input.disabled) return;
+    if(dir<0 && typeof input.stepDown==="function"){ try{ input.stepDown(); fire(); return; }catch{} }
+    if(dir>0 && typeof input.stepUp==="function"){ try{ input.stepUp(); fire(); return; }catch{} }
+    // stepDown/stepUp throw at the min/max boundary on some browsers instead
+    // of clamping — fall back to plain arithmetic rather than leave the
+    // button looking like it did nothing.
+    const st=parseFloat(input.step)||1, cur=parseFloat(input.value)||0;
+    let next=cur+dir*st;
+    if(input.min!=="") next=Math.max(next,parseFloat(input.min));
+    if(input.max!=="") next=Math.min(next,parseFloat(input.max));
+    input.value=next; fire();
+  };
+  minus.addEventListener("click",()=>step(-1));
+  plus.addEventListener("click",()=>step(1));
+}
+function enhanceNumberInputs(root){
+  (root||document).querySelectorAll('input[type="number"]:not([data-stepped])').forEach(enhanceNumberInput);
+}
+
+// Resets a secret field to reflect freshly-loaded config — used for the
+// Telegram bot token (a static field, unlike the printer token which is
+// built fresh per row via secretFieldHtml already carrying the right state).
+function setSecretFieldState(field,hasValue){
+  if(!field) return;
+  const input=field.querySelector(".secret-input"), chip=field.querySelector(".secret-chip");
+  input.value=""; field.dataset.cleared="0";
+  input.style.display=hasValue?"none":"";
+  chip.style.display=hasValue?"":"none";
+}
+
+// Settings > Printers collapsed-row status — cross-referenced from the
+// already-polled FLEET by URL rather than array index, since a row that's
+// been drag-reordered but not yet saved no longer sits at the same index
+// the server's PRINTERS array (and therefore FLEET) uses.
+function updateAllPrinterRowStatuses(){
+  const box=$("setPrinters");
+  if(!box||!box.children.length) return;
+  box.querySelectorAll(".prow").forEach(row=>{
+    const url=row.querySelector(".purl").value.trim().replace(/\/+$/,"");
+    const f=url && FLEET.find(p=>(p.url||"").replace(/\/+$/,"")===url);
+    const dot=row.querySelector(".prow-status-dot"), stateEl=row.querySelector(".prow-conn-state");
+    if(!f){
+      dot.style.setProperty("--status-color","var(--ink-faint)"); dot.title="Unknown";
+      stateEl.textContent="—"; stateEl.classList.remove("danger");
+      return;
+    }
+    if(!f.online){
+      dot.style.setProperty("--status-color","var(--bad)"); dot.title="Offline";
+      stateEl.textContent="No response"; stateEl.classList.add("danger");
+      return;
+    }
+    const st=statusColorText(f);
+    dot.style.setProperty("--status-color",st.statusColor); dot.title=st.statusTxt;
+    stateEl.textContent=st.statusTxt; stateEl.classList.remove("danger");
+  });
+}
+
+// ---- Printers tab: sticky dirty footer ----
+// PRINTER_SNAPSHOTS holds each row's serialized field values as of the last
+// load/save — a row with no entry is one added since then (always dirty).
+// PRINTER_ORIGINAL_ORDER is the row-element order as of that same baseline,
+// used only to detect a pure reorder. PRINTER_REMOVED collects the names of
+// rows that existed at baseline and were removed this session.
+let PRINTER_SNAPSHOTS=new WeakMap(), PRINTER_ORIGINAL_ORDER=[], PRINTER_REMOVED=[];
+function serializeRowForDiff(row){
+  return JSON.stringify({
+    name:row.querySelector(".pname").value.trim(),
+    brand:row.querySelector(".pbrand").value.trim(),
+    location:row.querySelector(".ploc").value.trim(),
+    url:row.querySelector(".purl").value.trim(),
+    connector:row.querySelector(".pconnector").value,
+    token:secretFieldValue(row.querySelector(".secret-field")),
+    serial:row.querySelector(".pserial").value.trim(),
+    verificationCode:row.querySelector(".pvcode").value.trim(),
+    purchaseDate:row.querySelector(".pdate").value,
+    costKwh:row.querySelector(".pkwh").value.trim(),
+    autoLevel:row.querySelector('[id^="pautolevel-"]').checked,
+    pushNotify:row.querySelector('[id^="ppushnotify-"]').checked
+  });
+}
+// Called once right after printer rows are (re)built from a fresh load or a
+// successful save — establishes the "clean" state everything else diffs
+// against.
+function baselinePrintersDirty(){
+  const rows=[...$("setPrinters").querySelectorAll(".prow")];
+  PRINTER_SNAPSHOTS=new WeakMap();
+  rows.forEach(row=>PRINTER_SNAPSHOTS.set(row,serializeRowForDiff(row)));
+  PRINTER_ORIGINAL_ORDER=rows;
+  PRINTER_REMOVED=[];
+  updatePrintersDirtyFooter();
+}
+function computePrintersDirty(){
+  const rows=[...$("setPrinters").querySelectorAll(".prow")];
+  const names=[];
+  let changed=0;
+  rows.forEach(row=>{
+    const snap=PRINTER_SNAPSHOTS.get(row);
+    if(snap===undefined||serializeRowForDiff(row)!==snap){
+      names.push(row.querySelector(".pname").value.trim()||"New Printer");
+      changed++;
+    }
+  });
+  let total=changed+PRINTER_REMOVED.length;
+  const orderChanged=PRINTER_ORIGINAL_ORDER.length===rows.length&&PRINTER_ORIGINAL_ORDER.some((r,i)=>r!==rows[i]);
+  const allNames=[...names,...PRINTER_REMOVED];
+  if(orderChanged){ if(!allNames.length) allNames.push("printer order"); total++; }
+  return { total, names:[...new Set(allNames)] };
+}
+function updatePrintersDirtyFooter(){
+  const bar=$("printersDirtyBar");
+  if(!bar) return;
+  const {total,names}=computePrintersDirty();
+  if(!total){ bar.style.display="none"; return; }
+  const shown=names.slice(0,2).join(", ")+(names.length>2?` +${names.length-2} more`:"");
+  bar.style.display="flex";
+  bar.querySelector(".dirty-text").textContent=`${total} unsaved change${total===1?'':'s'} on ${shown}`;
+}
+function markPrintersDirty(){ updatePrintersDirtyFooter(); }
+
+let PROW_UID=0;
 function addPrinterRow(name,url,opts,autoOpen){
   opts=opts||{};
+  const uid=++PROW_UID;
   const displayIp=(url||"").replace(/^https?:\/\//,"").replace(/\/+$/,"");
   const row=document.createElement("div"); row.className="prow";
   // Round-tripped so the server can match "this is the same printer" by a
@@ -3022,63 +3889,163 @@ function addPrinterRow(name,url,opts,autoOpen){
   // moment someone re-IP'd a printer (maintenance history would silently
   // detach). Blank for a brand-new row; the server mints one on first save.
   row.dataset.printerId=opts.id||"";
+  const connType=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper";
+  const modelLabel=(CONNECTOR_TYPES.find(c=>c.type===connType)||{}).label||connType;
   row.innerHTML=
     `<details class="prow-details"${autoOpen?" open":""}>`+
-    `<summary><span class="prow-chevron">▶</span>`+
+    `<summary>`+
+    `<span class="prow-drag-handle" draggable="true" title="Drag to reorder">⠿</span>`+
+    `<span class="prow-chevron">▶</span>`+
+    `<span class="prow-status-dot" style="--status-color:var(--ink-faint)" title="Unknown"></span>`+
     `<div class="prow-suminfo"><span class="prow-sumname">${esc(name||"New Printer")}</span><span class="prow-sumip">${esc(displayIp||"—")}</span></div>`+
-    `<div class="prow-sumbtns"><button class="mv-up" title="Move up">▲</button><button class="mv-dn" title="Move down">▼</button><button class="rm" title="Remove">×</button></div>`+
+    `<span class="prow-model-badge">${esc(modelLabel)}</span>`+
+    `<span class="prow-conn-state">—</span>`+
+    `<div class="prow-sumbtns"><div class="prow-menu-wrap">`+
+    `<button type="button" class="prow-menu-btn" title="More actions">⋮</button>`+
+    `<div class="prow-menu">`+
+    `<button type="button" class="prow-menu-item" data-act="maint">Maintenance</button>`+
+    `<button type="button" class="prow-menu-item" data-act="up">Move up</button>`+
+    `<button type="button" class="prow-menu-item" data-act="down">Move down</button>`+
+    `<button type="button" class="prow-menu-item danger" data-act="remove">Remove…</button>`+
+    `</div></div></div>`+
     `</summary>`+
     `<div class="prow-body">`+
-    `<div class="prow-rows">`+
-    `<div class="prow-irow">`+
-    `<span class="pi-lbl">Name</span><input class="field pname" maxlength="25" placeholder="U1" value="${esc(name||"")}" style="width:160px">`+
-    `<span class="pi-lbl">Brand</span><input class="field pbrand" maxlength="25" placeholder="SnapMaker" value="${esc(opts.brand||"")}" style="width:160px">`+
-    `<span class="pi-lbl">Serial</span><input class="field pserial" placeholder="optional, or auto-filled on Save" value="${esc(opts.serial||"")}" style="width:185px">`+
-    `<span class="pi-lbl">Code</span><input class="field pvcode" placeholder="XXXX" maxlength="8" value="${esc(opts.verificationCode||"")}" style="width:65px">`+
+
+    `<div class="prow-section"><div class="prow-section-title">Identity</div>`+
+    `<div class="maint-row2">`+
+    `<div class="maint-field"><label class="fl">Name</label><input class="field pname" maxlength="25" placeholder="U1" value="${esc(name||"")}"></div>`+
+    `<div class="maint-field"><label class="fl">Location</label><input class="field ploc" maxlength="30" placeholder="e.g. Office" value="${esc(opts.location||"")}"></div>`+
     `</div>`+
-    `<div class="prow-irow">`+
-    `<span class="pi-lbl">URL</span><input class="field purl" placeholder="http://192.168.1.50" value="${esc(url||"")}" style="flex:2;min-width:0">`+
-    `<span class="pi-lbl">Location</span><input class="field ploc" maxlength="30" placeholder="e.g. Office" value="${esc(opts.location||"")}" style="flex:1;min-width:0">`+
-    `<span class="pi-lbl">Date</span><input class="field pdate" type="date" value="${esc(opts.purchaseDate||"")}" style="width:145px;flex:none">`+
+    `<div class="maint-field" style="margin-top:10px;max-width:260px"><label class="fl">Brand</label><input class="field pbrand" maxlength="25" placeholder="SnapMaker" value="${esc(opts.brand||"")}"></div>`+
     `</div>`+
-    `<div class="prow-extra">`+
-    `<label class="prow-wh"><input class="field pkwh" type="number" min="0" placeholder="0" value="${esc(opts.costKwh||"")}" style="max-width:72px"><span class="pi-lbl" style="text-transform:none">Wh</span></label>`+
-    `<label class="prow-chk autolevel-wrap"><input type="checkbox" class="pautolevel" ${opts.autoLevel?"checked":""}><span>Auto-level</span></label>`+
-    `<label class="prow-chk"><input type="checkbox" class="ppushnotify" ${opts.pushNotify?"checked":""}><span>Push notifications</span></label>`+
-    `<label title="How SnapCon talks to this printer">Connector <select class="field pconnector" style="max-width:190px">`+
+
+    `<div class="prow-section"><div class="prow-section-title">Connection</div>`+
+    `<div class="maint-field"><label class="fl">URL</label><input class="field purl" placeholder="http://192.168.1.50" value="${esc(url||"")}"></div>`+
+    `<div class="maint-row2" style="margin-top:10px">`+
+    `<div class="maint-field"><label class="fl">Connector</label><select class="field pconnector">`+
     CONNECTOR_TYPES.map(c=>`<option value="${esc(c.type)}">${esc(c.label||c.type)}</option>`).join("")+
-    `</select></label>`+
-    `<label title="Moonraker API token">Token <input class="field ptoken" type="${opts.token?"password":"text"}" maxlength="32" placeholder="optional" value="${esc(opts.token||"")}" style="max-width:200px"></label>`+
-    `<button class="btn ghost pmaint" style="white-space:nowrap">Maintenance</button>`+
-    `</div></div></div></details>`;
-  const connectorEl=row.querySelector(".pconnector"), autolevelWrap=row.querySelector(".autolevel-wrap"), autolevelEl=row.querySelector(".pautolevel");
-  connectorEl.value=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper";
+    `</select></div>`+
+    `<div class="maint-field"><label class="fl">API token <span class="hint">Moonraker, optional</span></label>${secretFieldHtml("ptoken",!!opts.hasToken,"optional")}</div>`+
+    `</div>`+
+    `<div class="prow-test-row">`+
+    `<button type="button" class="btn ghost ptest">Test connection</button>`+
+    `<span class="pstatus ptest-status"></span>`+
+    `</div>`+
+    `</div>`+
+
+    `<div class="prow-section"><div class="prow-section-title">Hardware</div>`+
+    `<div class="maint-row2">`+
+    `<div class="maint-field"><label class="fl">Serial</label><input class="field pserial" placeholder="optional, or auto-filled on Save" value="${esc(opts.serial||"")}"></div>`+
+    `<div class="maint-field"><label class="fl">Access code</label><input class="field pvcode" placeholder="XXXX" maxlength="8" value="${esc(opts.verificationCode||"")}"></div>`+
+    `</div>`+
+    `<div class="maint-row2" style="margin-top:10px">`+
+    `<div class="maint-field"><label class="fl">Purchased</label><input class="field pdate" type="date" value="${esc(opts.purchaseDate||"")}"></div>`+
+    `<div class="maint-field"><label class="fl">Power draw, watts</label><input class="field pkwh" type="number" min="0" placeholder="0" value="${esc(opts.costKwh||"")}"></div>`+
+    `</div>`+
+    `<div class="hint" style="margin-top:6px">Power draw feeds the per-print energy cost estimate (Settings → General → Electricity rate).</div>`+
+    `</div>`+
+
+    `<div class="prow-section"><div class="prow-section-title">Behavior</div>`+
+    `<div class="autolevel-wrap" style="margin-bottom:10px">`+
+    switchHtml("pautolevel-"+uid,!!opts.autoLevel,"Auto-level","Home and probe the bed mesh before each print")+
+    `</div>`+
+    switchHtml("ppushnotify-"+uid,!!opts.pushNotify,"Push notifications","Include this printer in start / pause / error / complete alerts")+
+    `</div>`+
+
+    `</div></details>`;
+
+  const connectorEl=row.querySelector(".pconnector"), autolevelWrap=row.querySelector(".autolevel-wrap"), autolevelEl=row.querySelector('[id^="pautolevel-"]');
+  const modelBadgeEl=row.querySelector(".prow-model-badge");
+  connectorEl.value=connType;
   const syncAutoLevelVisibility=()=>{
     const supported=!!connectorCaps(connectorEl.value).autoLevel;
     autolevelWrap.style.display=supported?"":"none";
     if(!supported) autolevelEl.checked=false;
   };
-  connectorEl.addEventListener("change", syncAutoLevelVisibility);
+  connectorEl.addEventListener("change", ()=>{
+    syncAutoLevelVisibility();
+    modelBadgeEl.textContent=(CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{}).label||connectorEl.value;
+  });
   syncAutoLevelVisibility();
   // Live-update the summary header as user types
   const nameEl=row.querySelector(".pname"), urlEl=row.querySelector(".purl");
   const sumName=row.querySelector(".prow-sumname"), sumIp=row.querySelector(".prow-sumip");
   nameEl.addEventListener("input",()=>{ sumName.textContent=nameEl.value.trim()||"New Printer"; });
   urlEl.addEventListener("input",()=>{ sumIp.textContent=urlEl.value.replace(/^https?:\/\//,"").replace(/\/+$/,"")||"—"; });
-  // Token field: mask when blurred, reveal on focus
-  const tokenEl=row.querySelector(".ptoken");
-  tokenEl.addEventListener("focus",()=>{ tokenEl.type="text"; });
-  tokenEl.addEventListener("blur",()=>{ if(tokenEl.value.trim()) tokenEl.type="password"; });
-  // Prevent summary buttons from toggling accordion
-  row.querySelectorAll(".mv-up,.mv-dn,.rm").forEach(b=>b.addEventListener("click",e=>e.stopPropagation()));
-  row.querySelector(".rm").addEventListener("click",()=>row.remove());
-  row.querySelector(".mv-up").addEventListener("click",()=>{ const prev=row.previousElementSibling; if(prev) row.parentNode.insertBefore(row,prev); });
-  row.querySelector(".mv-dn").addEventListener("click",()=>{ const next=row.nextElementSibling; if(next) row.parentNode.insertBefore(next,row); });
-  row.querySelector(".pmaint").addEventListener("click",()=>{
+  wireSecretField(row.querySelector(".secret-field"));
+
+  // Overflow menu — stop the click from also toggling the <details> open/closed.
+  const menuBtn=row.querySelector(".prow-menu-btn"), menu=row.querySelector(".prow-menu");
+  menuBtn.addEventListener("click",e=>{
+    e.stopPropagation();
+    document.querySelectorAll(".prow-menu.open").forEach(m=>{ if(m!==menu) m.classList.remove("open"); });
+    menu.classList.toggle("open");
+  });
+  row.querySelector('[data-act="maint"]').addEventListener("click",e=>{
+    e.stopPropagation(); menu.classList.remove("open");
     const u=row.querySelector(".purl").value.trim();
     const idx=PRINTERS_CFG.findIndex(p=>p.url===u);
     if(idx>=0) openMaintenance(idx);
   });
+  row.querySelector('[data-act="up"]').addEventListener("click",e=>{
+    e.stopPropagation(); menu.classList.remove("open");
+    const prev=row.previousElementSibling; if(prev) row.parentNode.insertBefore(row,prev);
+    markPrintersDirty();
+  });
+  row.querySelector('[data-act="down"]').addEventListener("click",e=>{
+    e.stopPropagation(); menu.classList.remove("open");
+    const next=row.nextElementSibling; if(next) row.parentNode.insertBefore(next,row);
+    markPrintersDirty();
+  });
+  row.querySelector('[data-act="remove"]').addEventListener("click",e=>{
+    e.stopPropagation(); menu.classList.remove("open");
+    const pname=nameEl.value.trim()||"this printer";
+    if(!confirm(`Remove "${pname}"? This won't take effect until you save.`)) return;
+    // Only a printer that existed at load time is a real "removal" to call
+    // out in the dirty footer — a never-saved new row just vanishes, since
+    // there was nothing on file for it in the first place.
+    if(PRINTER_SNAPSHOTS.has(row)) PRINTER_REMOVED.push(pname);
+    row.remove();
+    markPrintersDirty();
+  });
+
+  // Drag-to-reorder — same dataTransfer/insertBefore pattern as the fleet
+  // card drag-reorder (wireFleetDrag), but purely local: it reorders the DOM
+  // and marks the tab dirty rather than saving immediately, since every
+  // other edit here waits for the Save button too.
+  const handle=row.querySelector(".prow-drag-handle");
+  handle.addEventListener("click",e=>e.stopPropagation());
+  handle.addEventListener("dragstart",e=>{
+    e.stopPropagation();
+    row.classList.add("dragging");
+    e.dataTransfer.effectAllowed="move";
+    e.dataTransfer.setData("text/plain","");
+  });
+  handle.addEventListener("dragend",()=>{ row.classList.remove("dragging"); });
+
+  // Test connection — goes through the connector abstraction (works for
+  // every brand, and before the printer's even been saved), unlike the
+  // Klipper-only probe used to auto-fill name/serial on Save.
+  row.querySelector(".ptest").addEventListener("click",async()=>{
+    const st=row.querySelector(".ptest-status");
+    const u=urlEl.value.trim();
+    if(!u){ st.className="pstatus err"; st.textContent="Enter a URL first"; return; }
+    st.className="pstatus work"; st.textContent="Testing…";
+    try{
+      const r=await getJSON("/api/test-connection?url="+encodeURIComponent(u)+"&connector="+encodeURIComponent(connectorEl.value));
+      if(r.error) throw new Error(r.error);
+      const parts=["state: "+(r.state||"unknown")];
+      if(r.bed&&typeof r.bed.temp==="number") parts.push("bed: "+r.bed.temp+"°C");
+      if(r.firmware&&r.firmware.firmware) parts.push("firmware: "+r.firmware.firmware);
+      st.className="pstatus ok"; st.textContent="Reachable — "+parts.join(", ");
+    }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  });
+
+  row.querySelectorAll(".prow-body input, .prow-body select").forEach(el=>{
+    el.addEventListener("input", markPrintersDirty);
+    el.addEventListener("change", markPrintersDirty);
+  });
+
   $("setPrinters").appendChild(row);
 }
 // ---- Users tab: each row saves itself immediately, independent of #saveCfg ----
@@ -3090,7 +4057,9 @@ async function loadUsersUI(){
   }catch{}
 }
 function roleLabel(r){ return r==='admin'?'Admin':r==='regular'?'Regular':'View Only'; }
+let UROW_UID=0;
 function addUserRow(u,autoOpen){
+  const uid=++UROW_UID;
   const row=document.createElement("div"); row.className="prow";
   row.dataset.userId=u&&u.id?u.id:"";
   row.innerHTML=
@@ -3115,7 +4084,7 @@ function addUserRow(u,autoOpen){
     `<span class="pi-lbl">Phone</span><input class="field uphone" value="${esc(u&&u.phone||"")}" style="width:150px">`+
     `</div>`+
     `<div class="prow-extra">`+
-    `<label class="prow-chk"><input type="checkbox" class="uotp" ${u&&u.otpEnabled?"checked":""}><span>OTP Login</span></label>`+
+    switchHtml("uotp-"+uid,!!(u&&u.otpEnabled),"OTP Login")+
     `<label title="Password" class="upwrap"><span class="pi-lbl">Password</span> <input class="field upassword" type="password" maxlength="64" placeholder="${u?"leave blank to keep":"required"}" style="max-width:180px" autocomplete="new-password"></label>`+
     `<button class="btn primary usave">Save</button>`+
     `<span class="pstatus usave-status"></span>`+
@@ -3124,7 +4093,7 @@ function addUserRow(u,autoOpen){
   const loginEl=row.querySelector(".ulogin"), sumName=row.querySelector(".prow-sumname"), sumRole=row.querySelector(".prow-sumip");
   loginEl.addEventListener("input",()=>{ sumName.textContent=loginEl.value.trim()||"New User"; });
   roleSel.addEventListener("change",()=>{ sumRole.textContent=roleLabel(roleSel.value); });
-  const otpEl=row.querySelector(".uotp"), pwEl=row.querySelector(".upassword"), pwWrap=row.querySelector(".upwrap");
+  const otpEl=row.querySelector('[id^="uotp-"]'), pwEl=row.querySelector(".upassword"), pwWrap=row.querySelector(".upwrap");
   const syncPwState=()=>{
     pwWrap.style.display=otpEl.checked?"none":"";
     pwEl.disabled=otpEl.checked;
@@ -3190,12 +4159,12 @@ function gatherPrinters(){
     location:r.querySelector(".ploc").value.trim()||undefined,
     costKwh:r.querySelector(".pkwh").value.trim()||undefined,
     purchaseDate:r.querySelector(".pdate").value||undefined,
-    autoLevel:r.querySelector(".pautolevel").checked||undefined,
-    pushNotify:r.querySelector(".ppushnotify").checked||undefined,
+    autoLevel:r.querySelector('[id^="pautolevel-"]').checked||undefined,
+    pushNotify:r.querySelector('[id^="ppushnotify-"]').checked||undefined,
     connector:r.querySelector(".pconnector").value,
     serial:r.querySelector(".pserial").value.trim()||undefined,
     verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
-    token:r.querySelector(".ptoken").value.trim()||undefined
+    token:secretFieldValue(r.querySelector(".secret-field"))
   })).filter(p=>p.url);
 }
 async function runDiscover(subnet){
@@ -3248,12 +4217,22 @@ function startFleetRefresh(){
   const ms=(parseInt($("setRefresh").value,10)||2)*1000;
   FLEET_TIMER=setInterval(()=>{ if(document.hidden||PUSHES>0||FLEET_DRAGGING||FLEET_DRAG_SAVING) return; const a=document.activeElement; if(a&&a.closest&&a.closest("#fleet")&&(a.tagName==="SELECT"||a.tagName==="INPUT")) return; loadFleet(); },ms);
 }
+// Mirrors save status to both the shared #cfgStatus (still used by every
+// not-yet-reworked tab) and General's own dirty-bar status, when present —
+// General hides the shared Save row entirely, so it needs its own visible
+// feedback for the exact same saveConfig() call.
+function setSaveStatus(cls,text){
+  ["cfgStatus","generalSaveStatus","notifSaveStatus"].forEach(id=>{
+    const el=$(id);
+    if(el){ el.className="pstatus"+(cls?" "+cls:""); el.textContent=text; }
+  });
+}
 async function saveConfig(){
-  const s=$("cfgStatus"); s.className="pstatus work"; s.textContent="Saving…";
+  setSaveStatus("work","Saving…");
   // Refuse to send usersEnabled:true until the inline bootstrap-admin form
   // has succeeded — no default/throwaway admin is ever created as a fallback.
   if($("setUsersEnabled").checked && $("bootstrapAdmin").style.display!=="none" && !BOOTSTRAPPED_ADMIN){
-    s.className="pstatus err"; s.textContent="Create the first Admin account before enabling User Access Management";
+    setSaveStatus("err","Create the first Admin account before enabling User Access Management");
     return;
   }
   // auto-fill empty name/serial from printer before saving
@@ -3265,7 +4244,7 @@ async function saveConfig(){
     return url&&(noName||noSerial);
   });
   if(needProbe.length){
-    s.textContent="Probing printers…";
+    setSaveStatus("work","Probing printers…");
     await Promise.all(needProbe.map(async r=>{
       const url=r.querySelector(".purl").value.trim();
       try{
@@ -3275,7 +4254,7 @@ async function saveConfig(){
         if(!serialEl.value.trim()&&d.serial) serialEl.value=d.serial;
       }catch{}
     }));
-    s.textContent="Saving…";
+    setSaveStatus("work","Saving…");
   }
   const ri=parseInt($("setRefresh").value,10);
   const cr=parseInt($("setCameraRefresh").value,10);
@@ -3289,25 +4268,34 @@ async function saveConfig(){
   const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
-    otp:{ service:$("otpSvcNtfy").checked?"ntfy":"resend", ntfyTopic:$("otpNtfyTopic").value.trim() },
+    otp:{
+      service: otpServiceValue(),
+      ntfyTopic: $("otpNtfyTopic").value.trim(),
+      telegramChatId: $("otpTelegramChatId").value.trim()
+    },
     notifications:{
       enabled:$("ntfEnabled").checked,
-      onEvents:$("ntfEvents").checked,
-      onIntervals:$("ntfIntervals").checked,
+      onStart:$("ntfEvStart").checked,
+      onPause:$("ntfEvPause").checked,
+      onError:$("ntfEvError").checked,
+      onComplete:$("ntfEvComplete").checked,
+      onIntervals:$("ntfMilestones").checked,
+      milestonePercents:[...NTF_MILESTONES],
       includeImage:$("ntfImage").checked,
-      service:$("ntfSvcTelegram").checked?"telegram":"ntfy",
+      ntfyEnabled:$("ntfyEnabled").checked,
+      telegramEnabled:$("telegramEnabled").checked,
       ntfyTopic:$("ntfTopic").value.trim(),
       telegramChatId:$("ntfChatId").value.trim(),
-      telegramBotToken:$("ntfBotToken").value.trim()
+      telegramBotToken:secretFieldValue($("ntfBotTokenField"))
     },
     printers:gatherPrinters() };
   try{
     const c=await (await postJSON("/api/config",body)).json();
     if(c.error) throw new Error(c.error);
-    s.className="pstatus ok"; s.textContent="Saved";
+    setSaveStatus("ok","Saved");
     $("setupmsg").textContent="";
     FILAMENT_COST=fc>0?fc:0; ELECTRICITY_RATE=er>0?er:0;
-    if($("maintCostCurrency")) $("maintCostCurrency").textContent=CURRENCY;
+    updateCurrencyLabels();
     if(MAP) renderJob(); // refresh cost line immediately
     // Flipping usersEnabled on/off takes effect on THIS tab immediately: going
     // on with no session yet prompts login as the admin just created; going
@@ -3317,5 +4305,8 @@ async function saveConfig(){
     else applyRoleUI();
     applyViewMode(); // refresh the header button's icon/title if Alternate Display just changed
     loadFiles(); loadFleet(); startFleetRefresh();
-  }catch(e){ s.className="pstatus err"; s.textContent=e.message; }
+    baselinePrintersDirty(); // current row values are now what's on file — re-baseline the dirty footer
+    baselineSettingsTab("general");
+    baselineSettingsTab("notif");
+  }catch(e){ setSaveStatus("err",e.message); }
 }

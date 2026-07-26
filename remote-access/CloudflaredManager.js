@@ -203,6 +203,12 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
   let lastError = null;
   let currentToken = null;
   let statusListener = null;
+  // Small in-memory ring buffer so Settings > Remote Access's "View tunnel
+  // log" has something real to fetch — cloudflared's output previously only
+  // ever reached a console.log with nothing capturing it anywhere queryable.
+  // Not persisted across restarts; a diagnostic aid, not an audit log.
+  const LOG_MAX = 300;
+  let recentLog = [];
 
   function scheduleRestart() {
     if (intentionalStop || restartTimer) return;
@@ -216,7 +222,10 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
 
   function handleLine(line) {
     if (CONNECTION_EVIDENCE_RE.test(line)) sawConnectionEvidence = true;
-    if (statusListener) statusListener({ line: redact(line, [currentToken]) });
+    const clean = redact(line, [currentToken]);
+    recentLog.push(clean);
+    if (recentLog.length > LOG_MAX) recentLog.shift();
+    if (statusListener) statusListener({ line: clean });
   }
 
   function spawnChild() {
@@ -304,8 +313,9 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
   }
 
   function getStatus() {
-    return { processRunning: running, restartCount, sawConnectionEvidence, lastExitInfo, lastError };
+    return { processRunning: running, pid: child ? child.pid : null, restartCount, sawConnectionEvidence, lastExitInfo, lastError };
   }
+  function getRecentLog() { return recentLog.slice(); }
 
   function onStatusChange(fn) { statusListener = fn; }
 
@@ -322,7 +332,7 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
   // — see remote-access/serialize.js.
   const serialize = createSerializer();
 
-  return { start: serialize(start), stop: serialize(stop), restart: serialize(restart), getStatus, onStatusChange };
+  return { start: serialize(start), stop: serialize(stop), restart: serialize(restart), getStatus, getRecentLog, onStatusChange };
 }
 
 module.exports = {

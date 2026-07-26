@@ -25,7 +25,9 @@ exports.capabilities = {
   // Confirmed live against a real Ender-3 V3 Plus: it serves its own
   // proprietary web UI (title "Creality", not actually Fluidd/Mainsail) on
   // the same host/port as Moonraker — a real dashboard either way.
-  webUi: true, setColor: false, singleToolhead: false
+  webUi: true, setColor: false, singleToolhead: false,
+  // K1/K1C/K1 Max/K1 SE/Hi/K2 heated beds are all spec'd to 100°C.
+  maxBedTemp: 100
 };
 
 // ---- Fleet status ----
