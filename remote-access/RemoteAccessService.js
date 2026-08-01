@@ -181,51 +181,65 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
     registrationPollTimer = setTimeout(() => runRegistrationPoll(myGeneration), delayMs);
   }
 
+  // Fired from a bare setTimeout in scheduleRegistrationPoll(), with no
+  // caller left to .catch() a rejection — the outer try/catch below is load-
+  // bearing, not defensive dressing: without it, any failure past the first
+  // await (most concretely, completeRegistrationAndProvision's
+  // Ed25519Identity.importPrivateKeyJwk() rejecting on a corrupted stored
+  // key) becomes an unhandled promise rejection, which crashes the entire
+  // SnapCon process by default — every printer, every user — over what
+  // should only ever disable Remote Access.
   async function runRegistrationPoll(myGeneration) {
     const persisted = Store.load(baseDir);
-    let result;
     try {
-      result = await apiClient.getRegistrationSessionStatus(persisted.registrationSessionId);
-    } catch {
+      let result;
+      try {
+        result = await apiClient.getRegistrationSessionStatus(persisted.registrationSessionId);
+      } catch {
+        if (myGeneration !== registrationGeneration) return; // disable() ran while this poll was in flight
+        if (isRegistrationSessionExpired(persisted)) {
+          state = "error";
+          lastError = "Registration session expired. Click Enable to try again.";
+          return;
+        }
+        // Transient failure (network hiccup, backend blip) — keep polling up
+        // to the session's own expiry rather than surfacing a hard error for
+        // what's likely momentary.
+        scheduleRegistrationPoll(REGISTRATION_POLL_MS);
+        return;
+      }
       if (myGeneration !== registrationGeneration) return; // disable() ran while this poll was in flight
-      if (isRegistrationSessionExpired(persisted)) {
-        state = "error";
-        lastError = "Registration session expired. Click Enable to try again.";
-        return;
-      }
-      // Transient failure (network hiccup, backend blip) — keep polling up
-      // to the session's own expiry rather than surfacing a hard error for
-      // what's likely momentary.
-      scheduleRegistrationPoll(REGISTRATION_POLL_MS);
-      return;
-    }
-    if (myGeneration !== registrationGeneration) return; // disable() ran while this poll was in flight
 
-    if (result.status === "pending") {
-      if (isRegistrationSessionExpired(persisted)) {
-        // Defensive: the session's own advertised lifetime passed without
-        // the server having already told us "expired" — don't poll forever
-        // past it.
-        state = "error";
-        lastError = "Registration session expired. Click Enable to try again.";
+      if (result.status === "pending") {
+        if (isRegistrationSessionExpired(persisted)) {
+          // Defensive: the session's own advertised lifetime passed without
+          // the server having already told us "expired" — don't poll forever
+          // past it.
+          state = "error";
+          lastError = "Registration session expired. Click Enable to try again.";
+          return;
+        }
+        scheduleRegistrationPoll(REGISTRATION_POLL_MS);
         return;
       }
-      scheduleRegistrationPoll(REGISTRATION_POLL_MS);
-      return;
-    }
-    if (result.status === "expired" || result.status === "rejected") {
+      if (result.status === "expired" || result.status === "rejected") {
+        state = "error";
+        lastError = "Registration was " + result.status + ". Click Enable to try again.";
+        return;
+      }
+      // approved — hand off to the shared enable/disable/removeRemoteAccess
+      // queue so a concurrent disable() can never interleave with the
+      // provisioning + process-start side effects below (same reasoning as
+      // enable() itself being serialized). Wrapped rather than run inline so a
+      // disable() already queued (or one that arrives while we wait our turn)
+      // is guaranteed to run first — and by the time we do run, a stale
+      // myGeneration is exactly what the check inside detects.
+      await serialize(() => completeRegistrationAndProvision(persisted.installationId, myGeneration))();
+    } catch (e) {
+      if (myGeneration !== registrationGeneration) return; // disable() ran while this poll was in flight
       state = "error";
-      lastError = "Registration was " + result.status + ". Click Enable to try again.";
-      return;
+      lastError = "Registration could not complete: " + redact(e && e.message || String(e), []);
     }
-    // approved — hand off to the shared enable/disable/removeRemoteAccess
-    // queue so a concurrent disable() can never interleave with the
-    // provisioning + process-start side effects below (same reasoning as
-    // enable() itself being serialized). Wrapped rather than run inline so a
-    // disable() already queued (or one that arrives while we wait our turn)
-    // is guaranteed to run first — and by the time we do run, a stale
-    // myGeneration is exactly what the check inside detects.
-    await serialize(() => completeRegistrationAndProvision(persisted.installationId, myGeneration))();
   }
 
   async function completeRegistrationAndProvision(installationId, myGeneration) {
@@ -248,7 +262,19 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
       lastError = "Local identity key is missing — cannot complete provisioning. Click Enable to start over.";
       return;
     }
-    const privateKey = await Ed25519Identity.importPrivateKeyJwk(privateKeyJwk);
+    let privateKey;
+    try {
+      privateKey = await Ed25519Identity.importPrivateKeyJwk(privateKeyJwk);
+    } catch (e) {
+      // A corrupted-but-parseable-as-JSON key blob (e.g. a non-atomic write
+      // torn by a crash) rejects here rather than throwing synchronously —
+      // give a specific, actionable message instead of falling through to
+      // runRegistrationPoll()'s generic catch-all.
+      if (myGeneration !== registrationGeneration) return;
+      state = "error";
+      lastError = "Local identity key is corrupted and could not be used (" + e.message + "). Click Remove, then Enable again to register a fresh installation.";
+      return;
+    }
 
     state = "provisioning";
     let hub;

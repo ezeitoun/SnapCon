@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.4.1
+// server.js — SnapCon  ·  v0.4.6
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.4.1";
+const VERSION = "0.4.6";
 
 const express = require("express");
 const fs = require("fs");
@@ -14,9 +14,21 @@ const crypto = require("crypto");
 const readline = require("readline");
 const { parseGcodeMap, parseGcodeMapLines } = require("./parser");
 const auth = require("./auth");
-const { getConnector, listConnectorTypes, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
+const { getConnector, listConnectorTypes, getCapabilities, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
 const connHttp = require("./connectors/http-utils");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
+
+// Defense in depth, not a substitute for fixing the actual bug: an unhandled
+// promise rejection anywhere (a bare setTimeout callback with no .catch(), a
+// fire-and-forget async call) crashes the entire process by Node's default
+// behavior — every printer, every connected user — over what might be a
+// single isolated feature's failure. Log it instead of letting the process
+// die silently-to-the-user; this is what actually caught H-2 (a corrupted
+// Remote Access identity key crashing the whole server) having no visible
+// trace anywhere before it was fixed at the source in RemoteAccessService.js.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason && reason.stack || reason);
+});
 
 // When packaged as a single executable (pkg), __dirname points inside the
 // read-only bundle. User-editable files (config.json, the gcode folder) must
@@ -37,6 +49,7 @@ const IS_DOCKER = (() => { try { return fs.existsSync("/.dockerenv"); } catch { 
 
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
 const USERS_PATH = path.join(BASE_DIR, "users.json");
+const QUEUED_FILE_PATH = path.join(BASE_DIR, "queued-files.json");
 const DEFAULT_CFG = { gcodeFolder: "./gcode", port: 4545, printers: [] };
 
 // Live config — editable from the Settings page, no restart needed.
@@ -363,7 +376,12 @@ app.post("/api/files/upload", requireRegular, rawGcodeBody, (req, res) => {
   const dir = sub ? safePath(sub) : FOLDER;
   if (!dir || !fs.existsSync(dir)) return res.status(400).json({ error: "Invalid folder" });
   const name = path.basename(String(req.query.name || "").trim());
-  if (!name || !/\.(gcode|gco|g|gx|3mf)$/i.test(name)) {
+  // Same CRLF/quote check as /api/printfile and /api/exclude — this name is
+  // later reused verbatim as the on-printer filename passed to
+  // startPrintFile()/excludeObject(), which build a literal gcode script
+  // line around it (see connectors/http-utils.js). An embedded quote or
+  // newline there injects a second gcode/macro command into the printer.
+  if (!name || /["\r\n]/.test(name) || !/\.(gcode|gco|g|gx|3mf)$/i.test(name)) {
     return res.status(400).json({ error: "Only sliced files (.gcode/.gco/.g/.gx/.3mf) can be uploaded here" });
   }
   const target = path.join(dir, name);
@@ -463,8 +481,20 @@ setInterval(() => {
   for (const [id, job] of JOBS) if (job.done && job.ts < cutoff) JOBS.delete(id);
 }, 60 * 1000).unref();
 
+// Per-print checkboxes (Flow Calibration / Time-Lapse / Auto-Leveling —
+// currently only meaningful to snapmaker-u1-klipper's applyHeadMapping,
+// which folds them into one SET_PRINT_PREFERENCES macro line). A connector
+// that doesn't understand `prefs` simply never sees it reach anything, since
+// only connectors that export applyHeadMapping get called at all.
+const wantsAnyPref = prefs => !!(prefs && (prefs.autoLevel || prefs.flowCalibrate || prefs.timelapse));
+// Same three fields, but read from the PRINTER's own configured defaults
+// (Settings > printer > Behavior) rather than a request's per-job prefs —
+// used so applyHeadMapping still fires when a printer has e.g.
+// flowCalibrate:true by default and the caller sent no override for it.
+const printerHasAnyDefaultPref = p => !!(p.autoLevel || p.flowCalibrate || p.timelapse);
+
 app.post("/api/print", requireRegular, async (req, res) => {
-  const { file, printer, start, map } = req.body || {};
+  const { file, printer, start, map, prefs } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
@@ -486,7 +516,7 @@ app.post("/api/print", requireRegular, async (req, res) => {
     tools = Object.keys(map).map(Number).sort((a, b) => a - b);
     const heads = tools.map(t => map[t]);
     if (start && new Set(heads).size !== heads.length) {
-      const unit = (getConnector(p.connector).capabilities || {}).singleToolhead ? "slot" : "head";
+      const unit = (getCapabilities(p.connector, p) || {}).singleToolhead ? "slot" : "head";
       return res.status(400).json({ error: `Two colors are mapped to the same ${unit} — give each its own ${unit}.` });
     }
   }
@@ -500,7 +530,7 @@ app.post("/api/print", requireRegular, async (req, res) => {
   // CLI hook already uses, so it uploads automatically the moment this
   // printer goes idle and shows the same "ready to print" banner either way.
   if (!start && !(await isPrinterIdle(p))) {
-    pendingLoad.set(printer, { file: fp, name, ts: Date.now(), tools, map });
+    pendingLoad.set(printer, { file: fp, name, ts: Date.now(), tools, map, prefs });
     return res.json({ ok: true, mode: "pending", printer: p.name });
   }
 
@@ -515,12 +545,24 @@ app.post("/api/print", requireRegular, async (req, res) => {
       await c.uploadFile(p, fp, name, job);               // 1) upload (with progress)
       // 2) toolhead mapping + print-preference macros (connector-optional) —
       // still needed with no mapping chosen (tools=[]) when the printer has
-      // its own preferences (e.g. auto-level) to send before print start.
-      if (c.applyHeadMapping && (tools.length || p.autoLevel)) {
+      // its own preferences (auto-level/flow-calibrate/timelapse) to send
+      // before print start.
+      if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) {
         job.phase = "mapping";
-        await c.applyHeadMapping(p, tools, map);
+        await c.applyHeadMapping(p, tools, map, prefs);
       }
-      if (start) { job.phase = "starting"; await c.startPrintFile(p, name); }
+      if (start) {
+        job.phase = "starting"; await c.startPrintFile(p, name);
+      } else {
+        // Upload-only click, printer was idle (the busy case queued via
+        // pendingLoad above, never reaches here) — the file is sitting on
+        // the printer with nothing else loaded or printing, so surface it
+        // the same "ready to print" way uploadNotifiedFile does once a
+        // pending upload finally lands: one click away, not silently just
+        // stored.
+        queuedFile.set(printer, { name, status: "ready", ts: Date.now() });
+        saveQueuedFiles();
+      }
       job.result = { printer: p.name, started: !!start, mapped: tools.length };
       job.phase = "done"; job.done = true;
     } catch (e) {
@@ -567,7 +609,7 @@ app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
 });
 
 app.post("/api/printfile", requireRegular, async (req, res) => {
-  const { printer, filename, map } = req.body || {};
+  const { printer, filename, map, prefs } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
@@ -581,11 +623,12 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
   const c = getConnector(p.connector);
   try {
     // Still needed with no mapping chosen (tools=[]) when the printer has its
-    // own preferences (e.g. auto-level) to send before print start.
-    if (c.applyHeadMapping && (tools.length || p.autoLevel)) await c.applyHeadMapping(p, tools, map);
+    // own preferences (auto-level/flow-calibrate/timelapse) to send before
+    // print start.
+    if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) await c.applyHeadMapping(p, tools, map, prefs);
     await c.startPrintFile(p, filename);
     // Printing it is what "ready to print" was waiting for — clear the badge.
-    if (queuedFile.get(printer)?.name === filename) queuedFile.delete(printer);
+    if (queuedFile.get(printer)?.name === filename) { queuedFile.delete(printer); saveQueuedFiles(); }
     res.json({ ok: true, printer: p.name, filename, mapped: tools.length });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -700,6 +743,37 @@ async function probeCached(p) {
 const pendingLoad = new Map();
 const queuedFile = new Map();
 
+// A file that's actually "ready" is a real, permanent fact — it's sitting on
+// the printer's own storage until it's printed or ejected — but Klipper
+// itself has no concept of "loaded but not started" separate from actually
+// beginning the print, so this in-memory bookkeeping is the ONLY place that
+// fact lives. Persisted (by printer id, not the runtime array index queuedFile
+// itself uses, since a Settings save can reorder PRINTERS[] within the same
+// run) so a SnapCon restart doesn't forget it and silently strand a file the
+// user can no longer see is there. "queued"/"uploading"/"error" are
+// mid-flight snapshots of an operation that's simply dead the moment the
+// process restarts — nothing to resume, so only "ready" is written.
+function saveQueuedFiles() {
+  const out = {};
+  for (const [idx, qf] of queuedFile) {
+    if (qf.status !== "ready") continue;
+    const p = PRINTERS[idx];
+    if (p && p.id) out[p.id] = { name: qf.name, ts: qf.ts };
+  }
+  try { fs.writeFileSync(QUEUED_FILE_PATH, JSON.stringify(out, null, 2)); }
+  catch (e) { console.error("[queued-files] save failed:", e.message); }
+}
+function loadQueuedFiles() {
+  let saved;
+  try { saved = JSON.parse(fs.readFileSync(QUEUED_FILE_PATH, "utf8")); } catch { return; }
+  if (!saved || typeof saved !== "object") return;
+  PRINTERS.forEach((p, idx) => {
+    const entry = p.id && saved[p.id];
+    if (entry && entry.name) queuedFile.set(idx, { name: entry.name, status: "ready", ts: entry.ts || Date.now() });
+  });
+}
+loadQueuedFiles();
+
 const normPrinterName = s => String(s || "").replace(/_/g, " ").trim().toLowerCase();
 function findPrinterIndex(name) {
   const norm = normPrinterName(name);
@@ -715,16 +789,19 @@ async function uploadNotifiedFile(idx, pl) {
   const p = PRINTERS[idx];
   const c = getConnector(p.connector);
   queuedFile.set(idx, { name: pl.name, status: "uploading", ts: Date.now() });
+  saveQueuedFiles();
   try {
     await c.uploadFile(p, pl.file, pl.name, { sent: 0, total: 0 });
     // Only ever set when this came from the Upload-button queue (not the
     // --load CLI hook, which has no color-mapping concept) — apply the same
     // head mapping an immediate upload would have gotten, now that the
     // printer that was busy is finally idle enough to receive it.
-    if (c.applyHeadMapping && ((pl.tools && pl.tools.length) || p.autoLevel)) await c.applyHeadMapping(p, pl.tools || [], pl.map);
+    if (c.applyHeadMapping && ((pl.tools && pl.tools.length) || printerHasAnyDefaultPref(p) || wantsAnyPref(pl.prefs))) await c.applyHeadMapping(p, pl.tools || [], pl.map, pl.prefs);
     queuedFile.set(idx, { name: pl.name, status: "ready", ts: Date.now() });
+    saveQueuedFiles();
   } catch (e) {
     queuedFile.set(idx, { name: pl.name, status: "error", error: e.message, ts: Date.now() });
+    saveQueuedFiles();
   } finally {
     // Remote --snapcon pushes materialize into NOTIFY_TMP_DIR (see
     // /api/notify-load) — that copy is only ever needed for this one upload.
@@ -753,11 +830,16 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     const p = PRINTERS[i];
     if (!p) return res.status(400).json({ error: "Unknown printer" });
     const conn = getConnector(p.connector);
-    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) });
+    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) });
   }
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
     const conn = getConnector(p.connector);
-    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: conn.capabilities, colorPalette: conn.colorPalette, ...(await probeCached(p)) };
+    // autoLevel/flowCalibrate/timelapse: not secrets (unlike token/
+    // verificationCode) — exposed here so the per-print options checkboxes
+    // (pfilemodal) can default to this printer's existing preferences for
+    // every role, not just Admin (who already sees them via /api/config's
+    // printers[]).
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) };
     const qf = queuedFile.get(i);
     const pl = pendingLoad.get(i);
     // queuedFile (uploading/ready/error) reflects the retry sweep actually
@@ -1303,7 +1385,85 @@ app.get("/api/remote-access/probe", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/config", requireAdmin, (req, res) => {
+// Creality-only camera auto-detect (see that connector's detectCamera):
+// runs once per printer, at save time — either on a brand-new printer or
+// whenever its URL changes (could be a different physical unit) — not on
+// every single settings save, so editing an unrelated field doesn't re-probe
+// every Creality printer's network over again. A detection call that
+// couldn't even reach the printer leaves cameraChecked unset so it's retried
+// on a later save instead of permanently caching a false negative.
+async function buildPrinterRecord(p, existing) {
+  const o = { name: String(p.name || p.url), url: String(p.url) };
+  if (p.location) o.location = String(p.location);
+  if (p.costKwh) o.costKwh = String(p.costKwh);
+  if (p.purchaseDate) o.purchaseDate = String(p.purchaseDate);
+  if (p.autoLevel) o.autoLevel = true;
+  if (p.flowCalibrate) o.flowCalibrate = true;
+  if (p.timelapse) o.timelapse = true;
+  if (p.pushNotify) o.pushNotify = true;
+  // Default true (unset = today's one-click Print: apply this printer's own
+  // configured defaults with no per-job popup) — only ever stored when
+  // explicitly turned off, so an old config.json that never wrote this field
+  // still behaves exactly like it always has.
+  if (typeof p.forceDefaults === "boolean") {
+    if (!p.forceDefaults) o.forceDefaults = false;
+  } else if (existing && existing.forceDefaults === false) {
+    o.forceDefaults = false;
+  }
+  o.connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
+  // Brand is derived from the connector, not user-editable (the client's
+  // Brand field is a disabled display, but this is the actual source of
+  // truth — never trusts whatever string a stale/scripted client sends).
+  o.brand = getConnector(o.connector).brand || getConnector(o.connector).label || o.connector;
+  // Only meaningful for creality-klipper (see that connector's
+  // getCapabilities) — harmless if present on any other connector,
+  // just never read.
+  if (p.filamentMode === "cfs") o.filamentMode = "cfs";
+  if (p.serial) o.serial = String(p.serial);
+  // Was capped at 4 chars (Snapmaker's pairing code length) — widened
+  // for FlashForge's checkCode, documented as 4-5 digits.
+  if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 8);
+  o.id = (existing && existing.id) || newPrinterId();
+  // Same "blank means keep the existing secret" convention as
+  // notifications.telegramBotToken — except the token never round-
+  // trips to the client at all now, so blank/omitted is the NORMAL
+  // case on every save, not just when the user didn't touch it.
+  // An explicit "" (the masked-secret control's Clear action) is
+  // what actually wipes it; anything else falls back to whatever's
+  // already on file.
+  o.token = (typeof p.token === "string" && p.token.trim())
+    ? p.token.trim()
+    : (p.token === "" ? undefined : ((existing && existing.token) || undefined));
+  // Tags can also be written via POST /api/printer-tags (the Camera View's
+  // bulk "Edit Tags" modal) — an array here (even empty, meaning the user
+  // cleared every tag in this row) is this save's authoritative value;
+  // its absence (a caller that doesn't touch tags at all) carries the
+  // matched existing printer's tags forward untouched, the same way o.id
+  // is, so saving any general setting can't silently wipe them.
+  if (Array.isArray(p.tags)) {
+    const tags = p.tags.map(t => String(t).trim()).filter(Boolean);
+    if (tags.length) o.tags = tags;
+  } else if (existing && Array.isArray(existing.tags) && existing.tags.length) {
+    o.tags = existing.tags;
+  }
+
+  if (o.connector === "creality-klipper") {
+    const urlChanged = !existing || existing.url !== o.url;
+    if (!urlChanged && existing.cameraChecked) {
+      o.cameraChecked = true;
+      if (existing.cameraUrl) o.cameraUrl = existing.cameraUrl;
+    } else {
+      try {
+        const camUrl = await getConnector(o.connector).detectCamera(o);
+        o.cameraChecked = true;
+        if (camUrl) o.cameraUrl = camUrl;
+      } catch { /* unreachable right now — leave cameraChecked unset, retried next save */ }
+    }
+  }
+  return o;
+}
+
+app.post("/api/config", requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (b.usersEnabled && !USERS.some(u => u.role === "admin")) {
     return res.status(400).json({ error: "Create an Admin user before enabling User Access Management" });
@@ -1315,6 +1475,12 @@ app.post("/api/config", requireAdmin, (req, res) => {
   if (!b.usersEnabled && CFG.usersEnabled && remoteAccess.getStatus().enabled) {
     return res.status(400).json({ error: "Remote Access is on and needs a login requirement. Turn off Remote Access first (Settings → Remote Access), then disable User Access Management." });
   }
+  const printersOut = Array.isArray(b.printers)
+    ? await Promise.all(b.printers.filter(p => p && p.url).map(p => {
+        const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === String(p.url));
+        return buildPrinterRecord(p, existing);
+      }))
+    : (CFG.printers || []);
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
     refreshInterval: (typeof b.refreshInterval === "number" && b.refreshInterval >= 1 && b.refreshInterval <= 60) ? b.refreshInterval : (CFG.refreshInterval || 2),
@@ -1378,47 +1544,13 @@ app.post("/api/config", requireAdmin, (req, res) => {
     // explicitly copied here is lost the moment this file is rewritten).
     maintenanceHistory: CFG.maintenanceHistory || undefined,
     maintenanceComponents: CFG.maintenanceComponents || undefined,
-    printers: Array.isArray(b.printers)
-      ? b.printers.filter(p => p && p.url).map(p => {
-          const o = { name: String(p.name || p.url), url: String(p.url) };
-          if (p.brand) o.brand = String(p.brand);
-          if (p.location) o.location = String(p.location);
-          if (p.costKwh) o.costKwh = String(p.costKwh);
-          if (p.purchaseDate) o.purchaseDate = String(p.purchaseDate);
-          if (p.autoLevel) o.autoLevel = true;
-          if (p.pushNotify) o.pushNotify = true;
-          o.connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
-          if (p.serial) o.serial = String(p.serial);
-          // Was capped at 4 chars (Snapmaker's pairing code length) — widened
-          // for FlashForge's checkCode, documented as 4-5 digits.
-          if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 8);
-          // Persistent identity, independent of name/url — matched by id
-          // first (round-tripped from the client) so renaming or re-IP'ing a
-          // printer doesn't detach it from its own maintenance history
-          // (CFG.maintenanceHistory, keyed by id, never nested in here).
-          // Falls back to a url match for pre-upgrade clients that haven't
-          // got an id yet, then mints a fresh one for a genuinely new printer.
-          const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === o.url);
-          o.id = (existing && existing.id) || newPrinterId();
-          // Same "blank means keep the existing secret" convention as
-          // notifications.telegramBotToken — except the token never round-
-          // trips to the client at all now, so blank/omitted is the NORMAL
-          // case on every save, not just when the user didn't touch it.
-          // An explicit "" (the masked-secret control's Clear action) is
-          // what actually wipes it; anything else falls back to whatever's
-          // already on file.
-          o.token = (typeof p.token === "string" && p.token.trim())
-            ? p.token.trim()
-            : (p.token === "" ? undefined : ((existing && existing.token) || undefined));
-          // Tags are only ever written via POST /api/printer-tags, never
-          // through this form-driven rebuild (the Settings printer-editing
-          // table has no tags field at all) — carry them forward from the
-          // matched existing printer the same way o.id is, or saving any
-          // general setting would silently wipe every printer's tags.
-          if (existing && Array.isArray(existing.tags) && existing.tags.length) o.tags = existing.tags;
-          return o;
-        })
-      : (CFG.printers || [])
+    // Persistent identity, independent of name/url — matched by id first
+    // (round-tripped from the client) so renaming or re-IP'ing a printer
+    // doesn't detach it from its own maintenance history (CFG.maintenanceHistory,
+    // keyed by id, never nested in here). Falls back to a url match for
+    // pre-upgrade clients that haven't got an id yet. Built above (async —
+    // Creality printers may need a live camera-detection round-trip).
+    printers: printersOut
   };
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));

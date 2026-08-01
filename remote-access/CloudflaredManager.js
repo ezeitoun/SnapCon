@@ -275,7 +275,24 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
       if (intentionalStop) { restartCount = 0; }
       else { scheduleRestart(); }
     });
-    child.on("error", e => { lastError = redact(e.message, [currentToken]); });
+    child.on("error", e => {
+      lastError = redact(e.message, [currentToken]);
+      // Spawn-level failures (binary deleted between verification and
+      // exec, permission denied, a noexec mount) emit 'error' — Node does
+      // NOT guarantee a following 'exit' event in that case. Without this,
+      // `running` stayed true forever with no real process behind it: the
+      // next stop() call would see running===true, register a wait for
+      // 'exit' that can now never fire, and its kill() would be a no-op on
+      // a ChildProcess that never got a real pid — deadlocking every
+      // subsequent enable/disable/restart until the whole server restarts.
+      // Mirrors the 'exit' handler above so both paths leave the manager in
+      // the same recoverable state.
+      running = false;
+      child = null;
+      InstanceLock.clear(baseDir);
+      if (intentionalStop) { restartCount = 0; }
+      else { scheduleRestart(); }
+    });
   }
 
   async function start(token) {
@@ -294,10 +311,25 @@ function createProcessManager(baseDir, { spawnFn = cp.spawn, setTimeoutFn = setT
     restartCount = 0;
     if (!running || !child) { InstanceLock.clear(baseDir); return Promise.resolve(getStatus()); }
     const proc = child;
+    // A child that never obtained a real OS pid never actually spawned —
+    // there is no process to signal and no 'exit' event will ever follow a
+    // kill() call against it. Resolve immediately instead of registering a
+    // wait that can never be satisfied (this is the same condition the
+    // 'error' handler above normally already clears `running`/`child` for,
+    // but guard here too in case stop() races ahead of that handler firing).
+    if (!proc.pid) {
+      running = false; child = null;
+      InstanceLock.clear(baseDir);
+      return Promise.resolve(getStatus());
+    }
     return new Promise(resolve => {
       let settled = false;
       const finish = () => { if (!settled) { settled = true; resolve(getStatus()); } };
       proc.once("exit", finish);
+      // Resolve on 'error' too — a spawn-level failure discovered after
+      // stop() has already started waiting guarantees neither a real
+      // process to signal nor a following 'exit'.
+      proc.once("error", finish);
       try { proc.kill("SIGTERM"); } catch { finish(); return; }
       setTimeoutFn(() => {
         if (settled) return;

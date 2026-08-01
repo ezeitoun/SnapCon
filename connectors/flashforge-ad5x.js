@@ -12,10 +12,15 @@ const ff = require("./flashforge-utils");
 const { normHex } = require("../parser");
 
 exports.label = "FlashForge AD5X";
+exports.brand = "FlashForge";
 exports.capabilities = {
   camera: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,
   webUi: false, setColor: true,
+  // See snapmaker-u1-klipper.js's capabilities comment: true here because
+  // this connector's applyHeadMapping (the useMatlStation branch below)
+  // really does send the picked slot mapping to the printer.
+  headMapping: true,
   // AD5X's heated bed is spec'd to 110°C.
   maxBedTemp: 110,
   // "filamentHeads" only means "this printer has a per-color slot picker" —

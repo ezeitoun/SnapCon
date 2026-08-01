@@ -6,7 +6,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||'Unknown Error'), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.4.1";
+const VERSION = "0.4.6";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -19,6 +19,32 @@ let LAST_LOGIN_AT=0;
 function checkAuthFailure(r){ if(r.status===401 && USERS_ENABLED && Date.now()-LAST_LOGIN_AT>1000){ CURRENT_USER=null; showLoginOverlay(); } return r; }
 const getJSON = url => fetch(url).then(r => { checkAuthFailure(r); return r.json(); });
 const postJSON = (url, data) => fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)}).then(r => { checkAuthFailure(r); return r; });
+
+// Per-print options — pfilemodal ("Print from printer") and sendmodal
+// ("Send to Printers") both render a checkbox per entry whose `cap` is true
+// on the target printer('s connector capabilities), so a brand with no
+// SET_PRINT_PREFERENCES equivalent (everything but snapmaker-u1-klipper,
+// today) simply shows none of these.
+const PRINT_OPT_DEFS = [
+  { key: "flowCalibrate", cap: "flowCalibration", label: "Flow Calibration" },
+  { key: "timelapse", cap: "timelapse", label: "Time-Lapse" },
+  { key: "autoLevel", cap: "autoLevel", label: "Auto-Leveling" }
+];
+// Same switch-row/switch-input markup as switchHtml() (see that function's
+// own comment for why it's a real <input type=checkbox role=switch>, not a
+// div) — not reusing switchHtml() itself since it has no way to attach the
+// data-popt hook these need for wiring. idPrefix keeps ids unique between
+// pfileOpts and sendOpts, which both exist in the DOM at once (one just
+// hidden), so a bare "flowCalibrate" id in both would collide.
+function printOptsHtml(caps, prefs, idPrefix) {
+  return PRINT_OPT_DEFS.filter(o => caps && caps[o.cap]).map(o => {
+    const id = idPrefix + "-" + o.key;
+    return `<label class="switch-row" for="${esc(id)}">`+
+      `<input type="checkbox" role="switch" id="${esc(id)}" class="switch-input" data-popt="${o.key}"${prefs[o.key] ? " checked" : ""}>`+
+      `<span class="switch-text"><span class="switch-label">${esc(o.label)}</span></span>`+
+    `</label>`;
+  }).join("");
+}
 let FILES = [], FOLDERS = [], CURRENT_SUB = "", SELECTED = null, MAP = null, FLEET = [], MAPSEL = {};
 // Multi-select state for the file manager (shift/ctrl-click, Explorer-style)
 // — keyed by the same "/"-joined relative path used everywhere else
@@ -104,9 +130,13 @@ function statusColorText(p){
   if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:"Printing" };
   if(p.state==="paused") return { statusColor:"#fbbf24", statusTxt:"Paused" };
   if(p.state==="error") return { statusColor:"var(--bad)", statusTxt:"Error" };
+  if(p.state==="maintenance") return { statusColor:"var(--violet-soft)", statusTxt:"Maintenance" };
+  // A file sitting on the printer ready to print is more useful to see at a
+  // glance than "Idle"/"Complete"/"Cancelled" — takes priority over those
+  // (but not over Printing/Paused/Error/Maintenance, which are more urgent).
+  if(p.queuedFile&&p.queuedFile.status==='ready') return { statusColor:"var(--signal)", statusTxt:"Loaded" };
   if(p.state==="complete") return { statusColor:"#22C5BE", statusTxt:"Complete" };
   if(p.state==="cancelled") return { statusColor:"var(--bad)", statusTxt:"Cancelled" };
-  if(p.state==="maintenance") return { statusColor:"var(--violet-soft)", statusTxt:"Maintenance" };
   return { statusColor:"var(--ok)", statusTxt:"Idle" };
 }
 
@@ -524,6 +554,28 @@ function wireUI(){
   wireModal("thumbmodal", closeThumb, ["thumbx"]);
   wireModal("snapmodal", closeSnapshot, ["snapx"]);
   wireModal("unloadmodal", closeUnload, ["unloadx","unloadNo"]);
+  wireModal("spoolColorModal", closeSpoolColorModal, ["sccX","sccCancel"]);
+  document.querySelectorAll(".scc-tab").forEach(b=>{
+    b.addEventListener("click",()=>{ SPOOL_MODAL_TAB=b.dataset.scctab; renderSpoolColorTabs(); });
+  });
+  $("sccHexField").addEventListener("input",()=>applyCustomHex($("sccHexField").value));
+  $("sccColorInput").addEventListener("input",applyNativeColor);
+  ["sccR","sccG","sccB"].forEach(id=>$(id).addEventListener("input",applyCustomRgb));
+  // Feature-detected, not assumed — EyeDropper is Chromium-only as of this
+  // writing. The button stays hidden (its default state in the markup) on
+  // any browser without it.
+  if(typeof window.EyeDropper!=="undefined"){
+    $("sccEyedropper").style.display="";
+    $("sccEyedropper").addEventListener("click",async ()=>{
+      try{
+        const result=await new window.EyeDropper().open();
+        if(result&&result.sRGBHex) setPendingColor(result.sRGBHex,"Custom");
+      }catch{ /* user pressed Escape / cancelled — not an error */ }
+    });
+  }
+  $("sccApply").addEventListener("click", doApplySpoolColor);
+  wireModal("quickPrintModal", closeQuickPrintModal, ["qpX","qpCancel"]);
+  $("qpPrint").addEventListener("click", doQuickPrint);
   wireModal("tagsmodal", closeTagsModal, ["tagsx","tagsCancel"]);
   $("tagsSave").addEventListener("click", saveTagsEditor);
   $("camEditTags").addEventListener("click", openTagsEditor);
@@ -543,17 +595,6 @@ function wireUI(){
   $("camBulkPause").addEventListener("click",()=>bulkCtl("pause"));
   $("camBulkResume").addEventListener("click",()=>bulkCtl("resume"));
   $("camBulkCancel").addEventListener("click",()=>bulkCtl("cancel"));
-  $("unloadColorSwatch").addEventListener("input",()=>{ $("unloadColorHex").value=$("unloadColorSwatch").value.toUpperCase(); });
-  $("unloadColorHex").addEventListener("input",()=>{
-    let v=$("unloadColorHex").value.trim();
-    if(v && v[0]!=="#") v="#"+v;
-    if(/^#[0-9a-fA-F]{6}$/.test(v)) $("unloadColorSwatch").value=v;
-  });
-  $("unloadColorHex").addEventListener("blur",()=>{
-    let v=$("unloadColorHex").value.trim();
-    if(v && v[0]!=="#") v="#"+v;
-    if(/^#[0-9a-fA-F]{6}$/.test(v)) $("unloadColorHex").value=v.toUpperCase();
-  });
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
   wireModal("bulkheatmodal", closeBulkHeatModal, ["bulkheatx","bulkheatCancel"]);
   $("bulkHeatBtn").addEventListener("click", openBulkHeat);
@@ -845,6 +886,32 @@ function needsDarkText(hex){
   return (0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255 > 0.65;
 }
 
+// Special "/[color]/" tag syntax: a tag literally wrapped in slashes tints
+// that printer's card background with the color inside — a name CSS
+// understands natively ("/red/"), an "r,g,b" triple ("/255,80,80/"), or a
+// hex code ("/#ff5050/" or "/f50/"). The first match wins if a printer has
+// more than one such tag. Anything unresolvable is ignored (never a broken
+// or blank card) — a bare keyword is handed to CSS as-is and trusted to
+// validate itself; an invalid one just fails to apply, same as any other
+// bad CSS color value.
+function parseColorTag(tags){
+  for(const t of (tags||[])){
+    const m=/^\/(.+)\/$/.exec(String(t||"").trim());
+    if(!m) continue;
+    const inner=m[1].trim();
+    if(/^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{8}$/.test(inner)){
+      return inner[0]==='#'?inner:'#'+inner;
+    }
+    const rgb=/^(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})$/.exec(inner);
+    if(rgb){
+      const [r,g,b]=rgb.slice(1,4).map(n=>Math.min(255,parseInt(n,10)));
+      return `rgb(${r},${g},${b})`;
+    }
+    if(/^[a-zA-Z]+$/.test(inner)) return inner.toLowerCase();
+  }
+  return null;
+}
+
 function renderList(){
   const list=$("list");
   list.innerHTML="";
@@ -1088,7 +1155,7 @@ function renderJob(){
   $("needcount").textContent=need.length+(need.length===1?" color":" colors");
   const strip=$("needstrip"); strip.innerHTML="";
   need.forEach(s=>{ const d=document.createElement("div"); d.className="need";
-    d.innerHTML=`<span class="sw" style="background:${s.hex||'#3a3f49'}"></span><span>${esc(s.type||'PLA')}</span><span class="nx">T${s.i+1}${s.wt?` · ${Math.ceil(parseFloat(s.wt))} g`:''}</span>`;
+    d.innerHTML=`<span class="sw" style="background:${esc(s.hex||'#3a3f49')}"></span><span>${esc(s.type||'PLA')}</span><span class="nx">T${s.i+1}${s.wt?` · ${Math.ceil(parseFloat(s.wt))} g`:''}</span>`;
     strip.appendChild(d); });
   const over=need.length>(MAP.physicalHeads||4) && !MAP.isFS;
   $("nohint").innerHTML = `Uses <b style="color:var(--ink)">${need.length}</b> of ${MAP.paletteCount} palette colors. `+
@@ -1265,20 +1332,33 @@ function spoolSvg(color,active,uid){
   <path d="M6.89 19.22 A25.5 25.5 0 0 1 29.11 4.52" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="3" stroke-linecap="round"/>
 </svg>`;
 }
-function afcLanesHtml(heads,activeExt,printerId){
+function afcLanesHtml(heads,activeExt,printerId,canUnload){
   const cards=(heads||[]).map((h,i)=>{
     const loaded=h&&h.loaded;
     const active=loaded&&activeExt===i;
-    const color=h&&h.hex||'#383a4a';
+    const color=esc((h&&h.hex)||'#383a4a');
     const material=h&&h.material||'—';
     const label=headLabel(i);
     const uid=`${printerId}-${i}`;
     const cardStyle=active?`style="border:2px solid ${color}bb;box-shadow:inset 0 0 20px ${color}28,inset 0 0 6px ${color}18;background:${color}14"`:'';
     const hdrStyle=active?`style="color:${color}ee;background:${color}22;border-bottom-color:${color}33"`:'';
+    // Some connectors (Creality CFS so far) only report per-slot status —
+    // no unloadFilament implementation exists yet, so the spool click isn't
+    // wired to anything actionable; showing it anyway would just surface a
+    // "does not support filament unload" error for something that's meant to
+    // be read-only status.
+    const spoolInner=spoolSvg(color,active,uid);
+    // No unload support (e.g. Creality CFS, status-only): a plain, full-
+    // opacity indicator with no click affordance — NOT `.inert-action`,
+    // which dims + shows a "not-allowed" cursor for a temporarily blocked
+    // permission, the wrong signal for something that was never clickable.
+    const spool=canUnload
+      ? `<span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="Unload ${headLabel(i)}">${spoolInner}</span>`
+      : `<span title="${headLabel(i)}">${spoolInner}</span>`;
     return `<div class="afc-lane-card ${active?'active':'idle'}" ${cardStyle}>
       <div class="afc-lane-hdr" ${hdrStyle}>T${i+1}${material&&material!=='—'?' '+esc(material):''}</div>
       <div class="afc-spool-area">
-        <span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="Unload ${headLabel(i)}">${spoolSvg(color,active,uid)}</span>
+        ${spool}
         ${active?`<div class="afc-active-label" style="color:${color}cc">ACTIVE</div>`:''}
         ${loaded&&!active?`<div class="afc-active-label" style="color:var(--ink-faint)">LOADED</div>`:''}
       </div>
@@ -1373,6 +1453,8 @@ function renderFleet(){
     const card=document.createElement("div");
     card.className="pcard"+(p.online?"":" offline");
     card.dataset.pid=p.id;
+    const tagColor=parseColorTag(p.tags);
+    if(tagColor){ card.classList.add("tag-tinted"); card.style.setProperty("--tag-color",tagColor); }
     // status pill
     const {statusColor, statusTxt}=statusColorText(p);
     // heads
@@ -1382,15 +1464,15 @@ function renderFleet(){
       // advisory match: is this head close to any needed color?
       let match=false;
       if(need.length){ for(const n of need){ if(n.hex && h.hex && colorDist(n.hex,h.hex)<MATCH_THRESHOLD){ match=true; break; } } }
-      return `<div class="h${match?' match':''}"><div class="sw" style="background:${h.hex||'#3a3f49'}"></div>`+
-             `<div class="lab"><div class="ht">${headLabel(i)}</div><div class="hm">${esc(h.material||'')}</div><div class="ht" style="margin-top:2px">${h.hex||""}</div></div></div>`;
+      return `<div class="h${match?' match':''}"><div class="sw" style="background:${esc(h.hex||'#3a3f49')}"></div>`+
+             `<div class="lab"><div class="ht">${headLabel(i)}</div><div class="hm">${esc(h.material||'')}</div><div class="ht" style="margin-top:2px">${esc(h.hex||"")}</div></div></div>`;
     }).join("");
     const busy = p.online && (p.state==="printing"||p.state==="paused");
     const maintMode = p.state==="maintenance";
     const canSend = p.online && SELECTED && !busy && !maintMode;
     // per-color head picker (default: greedy nearest distinct head)
     let mapHtml="";
-    if(canSend && ALLOW_MAPPING && p.capabilities?.filamentHeads){
+    if(canSend && ALLOW_MAPPING && p.capabilities?.headMapping){
       // A single-material file reports no used colors — that still means
       // "pick which loaded head feeds this print", so fall back to one
       // unnamed slot standing in for the whole file (see neededColorsOrSlot()).
@@ -1405,7 +1487,7 @@ function renderFleet(){
           const hbtns=allHeads.map(({hi,h})=>{
             const loaded=!!(h&&h.loaded);
             const isSel=chosen!==""&&chosen===String(hi);
-            const bg=loaded?(h.hex||'#3a3f49'):'#2a2d36';
+            const bg=esc(loaded?(h.hex||'#3a3f49'):'#2a2d36');
             const hDark=needsDarkText(loaded?h.hex:null);
             return `<button class="hs-sq${isSel?' selected':''}${loaded?'':' empty'}${hDark?' light-bg':''}" style="background:${bg}" data-card="${p.id}" data-pi="${n.i}" data-hi="${hi}"${loaded?'':' disabled'}>` +
                    `<span class="hs-lbl">T${hi+1}</span>` +
@@ -1416,7 +1498,7 @@ function renderFleet(){
           const assignedH=chosen!==""?allHeads[parseInt(chosen)]?.h:null;
           const matMismatch=!!(n.type&&assignedH?.material&&n.type.trim().toLowerCase()!==assignedH.material.trim().toLowerCase());
           return `<div class="cmaprow">` +
-                 `<div class="fsq${fDark?' light-bg':''}" style="background:${n.hex||'#3a3f49'}"><span class="fsq-t">T${n.i+1}</span>${info?`<span class="fsq-info">${esc(info)}</span>`:''}</div>` +
+                 `<div class="fsq${fDark?' light-bg':''}" style="background:${esc(n.hex||'#3a3f49')}"><span class="fsq-t">T${n.i+1}</span>${info?`<span class="fsq-info">${esc(info)}</span>`:''}</div>` +
                  `<span class="arrow">${matMismatch?'❌':'➜'}</span><div class="head-btns">${hbtns}</div></div>`;
         }).join("");
         mapHtml=`<div class="cmap"><div class="cmaphdr-row"><span class="cmaphdr">Model Color</span><span class="cmaphdr">Printer ToolHeads</span></div>${rows}</div>`;
@@ -1452,7 +1534,12 @@ function renderFleet(){
         // cache) is a Klipper-specific detail that belongs inside that
         // connector's getThumbnail(), not baked in here, since a different
         // connector (FlashForge) needs the exact filename instead.
-        const stem=p.filename||"";
+        // Same "Loaded" precedence as the progress-section below (see
+        // statusColorText) — otherwise this thumbnail would show the
+        // last-printed file's preview while everything else on the card
+        // already points at the newly queued one.
+        const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
+        const stem=queuedReady?queuedReady.name:(p.filename||"");
         const thumbCell=stem
           ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
@@ -1477,7 +1564,14 @@ function renderFleet(){
         // the thumbnail moves up alongside the filename instead.
         const filM=p.filamentUsed!=null?(p.filamentUsed/1000).toFixed(1)+'m':'—';
         const layerTxt=p.layer?p.layer.current+'/'+p.layer.total:'—';
-        const stem=p.filename||"";
+        // A file loaded/queued but not yet started (see statusColorText's
+        // "Loaded" state) takes over this slot instead of the printer's own
+        // last-printed filename — it's the more relevant "what's up next",
+        // and reusing this same spot (rather than a separate line above the
+        // stats-bar) is what keeps an idle-with-something-loaded card the
+        // same height as any other idle card.
+        const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
+        const stem=queuedReady?queuedReady.name:(p.filename||"");
         // Built once, reused as-is for regular/compact (a sibling of
         // .prog-file, unchanged from before) and nested inside .cam-prog-file
         // for camera view, where the thumbnail spans both the filename row
@@ -1508,7 +1602,7 @@ function renderFleet(){
           `<div class="prog-time-cell end"><span class="prog-time-label">Remaining</span><span class="prog-time-val">${fmtRemaining(p.elapsed,p.progress)}</span></div>`+
           `</div>`)+`</div>`;
       })():""}
-      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id):''}
+      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament):''}
       ${mapHtml}
       <div class="foot${busy?'':' foot-idle'}">
         ${busy
@@ -1535,9 +1629,21 @@ function renderFleet(){
   wrap.querySelectorAll("button[data-id]").forEach(b=>{
     b.addEventListener("click",()=>{
       const id=parseInt(b.dataset.id,10), start=b.dataset.start==="1";
+      const p=FLEET.find(f=>f.id===id)||{};
+      const qf=p.queuedFile;
+      // Print already has a file loaded/queued on the printer itself (see
+      // queuedFileBannerHtml) — print THAT rather than uploading whatever
+      // happens to be selected in SnapCon's own file manager, which would
+      // otherwise silently replace it.
+      if(start&&qf&&qf.status==='ready'){
+        if(p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)) openQuickPrintModal(id,'queued',qf.name);
+        else printQueuedFile(id, qf.name);
+        return;
+      }
       // Print with no file selected in SnapCon: offer the printer's own files.
-      if(start&&!SELECTED) openPrinterFiles(id);
-      else pushTo(id, start);
+      if(start&&!SELECTED){ openPrinterFiles(id); return; }
+      if(start&&p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)){ openQuickPrintModal(id,'push'); return; }
+      pushTo(id, start);
     });
   });
   wrap.querySelectorAll(".hs-sq").forEach(b=>{
@@ -1574,9 +1680,6 @@ function renderFleet(){
   });
   wrap.querySelectorAll("button[data-preheat]").forEach(b=>{
     b.addEventListener("click",()=>openPreheat(parseInt(b.dataset.preheat,10)));
-  });
-  wrap.querySelectorAll("button[data-queued-print]").forEach(b=>{
-    b.addEventListener("click",()=>printQueuedFile(parseInt(b.dataset.queuedPrint,10), b.dataset.queuedFile));
   });
   wrap.querySelectorAll(".cam-chk").forEach(el=>{
     el.addEventListener("change",()=>{
@@ -1732,7 +1835,12 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
     const busy=p.online&&(p.state==="printing"||p.state==="paused");
     const maintMode=p.state==="maintenance";
     const canSend=p.online&&SELECTED&&!busy&&!maintMode;
-    const stem=p.filename||"";
+    // Same "Loaded" precedence as the card grid (see statusColorText and the
+    // progress-section's own `stem`) — otherwise this column would keep
+    // showing the last-printed file while the status badge next to it
+    // already says "Loaded" for a different one.
+    const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
+    const stem=queuedReady?queuedReady.name:(p.filename||"");
     const fileCell=stem
       ? `<div class="list-file-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="list-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"><span class="list-file-name">${esc(stem)}</span></div>`
       : `<span class="list-file-empty">—</span>`;
@@ -1753,7 +1861,7 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
       ? ((p.heads||[]).slice(0,4).filter(h=>h&&h.loaded).map(h=>{
           const hex=h.hex||'#3a3f49';
           const dark=needsDarkText(hex);
-          return `<span class="list-filament-chip" style="background:${hex};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,6))}</span>`;
+          return `<span class="list-filament-chip" style="background:${esc(hex)};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,6))}</span>`;
         }).join("")) || `<span class="list-file-empty">—</span>`
       : `<span class="list-file-empty">—</span>`;
     const actionsCell=busy
@@ -1785,23 +1893,179 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
 }
 
 // A file staged by --load while nobody was watching (queuedFile, set server-side
-// by /api/notify-load) — a quiet banner + one-click Print, in any view mode.
+// by /api/notify-load), or just uploaded to an idle printer via the plain
+// Upload button. Only "queued"/"uploading"/"error" get this bordered banner —
+// real, rare in-progress states with nothing else on the card showing them.
+// "ready" gets no banner at all: the status badge already says "Loaded" (see
+// statusColorText) and the filename itself shows in the same slot a printing
+// job's filename would (see the progress-section's `stem`), so a second,
+// separate notice here would just be redundant extra card height.
 function queuedFileBannerHtml(p){
   const qf=p.queuedFile;
+  if(!qf) return '';
   if(qf.status==='queued') return `<div class="queued-banner work">Queued <b>${esc(qf.name)}</b> — waiting for this printer to go idle…</div>`;
   if(qf.status==='uploading') return `<div class="queued-banner work">Staging <b>${esc(qf.name)}</b> on this printer…</div>`;
   if(qf.status==='error') return `<div class="queued-banner err">Couldn't stage ${esc(qf.name)}: ${esc(qf.error||'')}</div>`;
-  return `<div class="queued-banner ok"><span>Ready to print: <b>${esc(qf.name)}</b></span><button class="btn ghost" data-queued-print="${p.id}" data-queued-file="${esc(qf.name)}">Print</button></div>`;
+  return '';
 }
-async function printQueuedFile(printerId, filename){
+async function printQueuedFile(printerId, filename, prefs){
   const st=$("pst-"+printerId);
   if(st){ st.className="pstatus work"; st.textContent="Starting print…"; }
+  let ok=false;
   try{
-    const r=await postJSON("/api/printfile",{printer:printerId,filename,map:{}});
+    const r=await postJSON("/api/printfile",{printer:printerId,filename,map:{},prefs});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     if(st){ st.className="pstatus ok"; st.textContent="Printing "+filename; }
+    ok=true;
   }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
   loadFleet();
+  return ok;
+}
+
+// ---- Quick print options popup ("Force default behavior" off) ----
+// Shown instead of printing immediately when a printer's own "Force default
+// behavior" switch (Settings > printer > Behavior) is off — lets this one
+// print override Auto-level/Flow Calibration/Time-lapse (and, where
+// supported — U1 today — which toolheads to flow-calibrate) instead of
+// silently reusing the printer's configured defaults.
+//
+// Own switch defs (not PRINT_OPT_DEFS/printOptsHtml, which pfilemodal/
+// sendmodal use deliberately WITHOUT a description line at their smaller
+// size) — this dialog follows the General tab's switchHtml() convention
+// instead: sentence-case label + a real .switch-desc line under each.
+const QP_OPT_DEFS=[
+  { key:"flowCalibrate", cap:"flowCalibration", label:"Flow calibration", desc:"Adds a purge and test line before the print starts." },
+  { key:"timelapse", cap:"timelapse", label:"Time-lapse", desc:"Capture a time-lapse video of this print." },
+  { key:"autoLevel", cap:"autoLevel", label:"Auto-leveling", desc:"Home and probe the bed mesh before this print starts." }
+];
+let QP_PRINTER=null, QP_MODE=null, QP_QUEUED_NAME=null, QP_PREFS={}, QP_EXT_SELECTED=new Set();
+
+function printerSupportsAnyPrintOpt(p){
+  return !!(p && p.capabilities && QP_OPT_DEFS.some(o=>p.capabilities[o.cap]));
+}
+
+function openQuickPrintModal(printerId, mode, queuedName){
+  const p=FLEET.find(f=>f.id===printerId);
+  if(!p) return;
+  QP_PRINTER=printerId; QP_MODE=mode; QP_QUEUED_NAME=queuedName||null;
+  QP_PREFS={autoLevel:!!p.autoLevel, flowCalibrate:!!p.flowCalibrate, timelapse:!!p.timelapse};
+  // Default to whichever toolheads are actually loaded right now — a much
+  // more useful starting point for "only one filament was just swapped"
+  // than the firmware's own blanket default of calibrating all four.
+  QP_EXT_SELECTED=new Set((p.heads||[]).map((h,i)=>h&&h.loaded?i:-1).filter(i=>i>=0));
+  if(!QP_EXT_SELECTED.size) QP_EXT_SELECTED=new Set([0,1,2,3]);
+  $("qpSubtitle").textContent=p.name+". These settings apply to this print only.";
+  $("qpStatus").className="pstatus"; $("qpStatus").textContent="";
+  $("qpProgress").style.display="none";
+  $("qpFill").className="send-row-fill"; $("qpFill").style.width="0%";
+  $("qpUploadStatus").className="send-status-txt"; $("qpUploadStatus").textContent="";
+  renderQuickPrintOpts();
+  $("quickPrintModal").classList.add("show");
+}
+function closeQuickPrintModal(){
+  $("quickPrintModal").classList.remove("show");
+  QP_PRINTER=null; QP_MODE=null; QP_QUEUED_NAME=null;
+}
+function renderQuickPrintOpts(){
+  const p=FLEET.find(f=>f.id===QP_PRINTER);
+  const caps=p&&p.capabilities;
+  $("qpOpts").innerHTML=QP_OPT_DEFS.filter(o=>caps&&caps[o.cap]).map(o=>
+    switchHtml("qpopt-"+o.key, !!QP_PREFS[o.key], o.label, o.desc)
+  ).join("");
+  QP_OPT_DEFS.forEach(o=>{
+    const el=$("qpopt-"+o.key);
+    if(!el) return;
+    el.addEventListener("change",()=>{
+      QP_PREFS[o.key]=el.checked;
+      if(o.key==="flowCalibrate") renderQuickPrintExtruders();
+      syncQuickPrintButton();
+    });
+  });
+  renderQuickPrintExtruders();
+  syncQuickPrintButton();
+}
+// Per-toolhead flow-calibration picker, nested under the Flow calibration
+// switch the same way "Auto-match colors" nests under "Head mapping" on the
+// General tab (.settings-nested — indent + left border, dimmed/inert via
+// .disabled rather than hidden, so the option stays visible even while it
+// doesn't apply yet). The wrap itself only fully hides when this printer has
+// no per-extruder support at all (nothing to nest under anything, for now
+// only U1 — see flowCalibrationPerExtruder).
+function renderQuickPrintExtruders(){
+  const p=FLEET.find(f=>f.id===QP_PRINTER);
+  const wrap=$("qpExtruderWrap");
+  const supports=!!(p&&p.capabilities&&p.capabilities.flowCalibrationPerExtruder);
+  wrap.style.display=supports?"":"none";
+  if(!supports) return;
+  wrap.classList.toggle("disabled", !QP_PREFS.flowCalibrate);
+  const heads=p.heads||[];
+  $("qpExtruderRow").innerHTML=Array.from({length:4},(_,i)=>{
+    const h=heads[i], loaded=!!(h&&h.loaded);
+    const hex=h&&h.hex?h.hex.toUpperCase():null;
+    const color=esc(hex||"#3a3f49");
+    // Named against the same 30-color palette the spool-color picker resolves
+    // against — falls back to the raw hex when there's no exact name match,
+    // since a small swatch alone is hard to identify at this size.
+    const titleParts=!loaded ? ["Nothing loaded"] : [hex?(nameForHex(hex)||hex):null, h.material].filter(Boolean);
+    const selected=QP_EXT_SELECTED.has(i);
+    return `<button type="button" class="qp-ext-chip${selected?' selected':''}" data-ext="${i}" aria-pressed="${selected}"${loaded?'':' disabled'} title="${esc(titleParts.join(', ')||headLabel(i))}">`+
+      `<span class="qp-ext-swatch" style="background:${color}"></span><span>${esc(headLabel(i))}</span></button>`;
+  }).join("");
+  $("qpExtruderRow").querySelectorAll("[data-ext]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const i=parseInt(btn.dataset.ext,10);
+      if(QP_EXT_SELECTED.has(i)) QP_EXT_SELECTED.delete(i); else QP_EXT_SELECTED.add(i);
+      const sel=QP_EXT_SELECTED.has(i);
+      btn.classList.toggle("selected", sel);
+      btn.setAttribute("aria-pressed", sel);
+      renderQuickPrintExtruderFooter();
+      syncQuickPrintButton();
+    });
+  });
+  renderQuickPrintExtruderFooter();
+}
+function renderQuickPrintExtruderFooter(){
+  const n=QP_EXT_SELECTED.size;
+  $("qpExtruderFooter").textContent=n?`${n} toolhead${n===1?'':'s'} selected`:"No toolheads selected";
+}
+// Nothing to calibrate is a real dead end (the printer would just run its
+// default of "every extruder"), not a subtle default — block Start print
+// outright rather than let it quietly do more than the user picked.
+function syncQuickPrintButton(){
+  const p=FLEET.find(f=>f.id===QP_PRINTER);
+  const supports=!!(p&&p.capabilities&&p.capabilities.flowCalibrationPerExtruder);
+  const blocked=!!(QP_PREFS.flowCalibrate&&supports&&QP_EXT_SELECTED.size===0);
+  const btn=$("qpPrint");
+  btn.disabled=blocked;
+  btn.title=blocked?"Select at least one toolhead to calibrate, or turn off flow calibration":"";
+}
+async function doQuickPrint(){
+  const prefs={...QP_PREFS};
+  if(prefs.flowCalibrate) prefs.flowCalibrateExtruders=[...QP_EXT_SELECTED];
+  const printer=QP_PRINTER, mode=QP_MODE, name=QP_QUEUED_NAME;
+  const btn=$("qpPrint");
+  btn.disabled=true;
+  let ok=false;
+  try{
+    if(mode==='queued'){
+      // Already sitting on the printer — starting it is a single fast
+      // Moonraker call, no upload bytes to track, so "Starting…" is the
+      // whole story here (unlike the push path below).
+      $("qpStatus").className="pstatus work"; $("qpStatus").textContent="Starting print…";
+      ok=await printQueuedFile(printer, name, prefs);
+      if(!ok){ $("qpStatus").className="pstatus err"; $("qpStatus").textContent="Couldn't start the print — see the printer card for details."; }
+    } else {
+      // Real upload ahead — same {fillEl,statusEl} progress hookup
+      // pushTo/pollJob already drive for the send-modal's per-printer rows,
+      // reused here instead of a static "Starting…" label.
+      $("qpStatus").className="pstatus"; $("qpStatus").textContent="";
+      $("qpProgress").style.display="";
+      ok=await pushTo(printer, true, {fillEl:$("qpFill"), statusEl:$("qpUploadStatus")}, prefs);
+    }
+    if(ok) closeQuickPrintModal();
+  } finally {
+    btn.disabled=false;
+  }
 }
 
 // ---- Fleet card reordering by drag (status pill = drag handle, "No Sort" only) ----
@@ -1892,7 +2156,7 @@ async function applyPrinterOrder(order){
 let PUSHES=0;
 // extraUI (optional): {statusEl, fillEl} — a row in the send-to-printers modal
 // that should mirror this job's progress alongside the fleet card/button.
-async function pushTo(printer, start, extraUI){
+async function pushTo(printer, start, extraUI, prefs){
   if(!SELECTED){ return false; }
   const map={};
   if(ALLOW_MAPPING) neededColorsOrSlot().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
@@ -1907,7 +2171,7 @@ async function pushTo(printer, start, extraUI){
   PUSHES++;
   let ok=false;
   try{
-    const r=await postJSON("/api/print",{file:SELECTED,printer,start,map});
+    const r=await postJSON("/api/print",{file:SELECTED,printer,start,map,prefs});
     const d=await r.json(); if(!r.ok||d.error||(!d.jobId&&d.mode!=="pending")) throw new Error(d.error||("HTTP "+r.status));
     if(d.mode==="pending"){
       // Printer's busy — server queued the file instead of racing an upload
@@ -1983,12 +2247,30 @@ function clearJobSelection(){
 }
 
 // ---- Send-to-printers modal ----
+// Bulk-send is a single explicit action across possibly many printers with
+// different individual defaults — there's no one target to fall back to, so
+// unlike pfilemodal these always start unchecked and whatever they show is
+// sent as an explicit override to every targeted printer, no per-printer
+// fallback (see server.js's applyHeadMapping prefs handling).
+let SEND_PREFS={autoLevel:false, flowCalibrate:false, timelapse:false};
+function renderSendOpts(){
+  const wrap=$("sendOpts");
+  const caps={};
+  urlFilterFleet(FLEET).forEach(p=>{ if(p.capabilities) Object.keys(p.capabilities).forEach(k=>{ if(p.capabilities[k]) caps[k]=true; }); });
+  wrap.innerHTML=printOptsHtml(caps, SEND_PREFS, "sendopt");
+  wrap.querySelectorAll("[data-popt]").forEach(el=>{
+    el.addEventListener("change",()=>{ SEND_PREFS[el.dataset.popt]=el.checked; });
+  });
+}
+
 function openSendModal(){
   if(!SELECTED) return;
   const name=SELECTED.split(/[/\\]/).pop();
   $('sendfilename').textContent=name;
-  $('sendtitle').textContent='Send to Printers';
+  $('sendtitle').textContent='Send to printers';
+  SEND_PREFS={autoLevel:false, flowCalibrate:false, timelapse:false};
   renderSendList();
+  renderSendOpts();
   $('sendFooterStatus').textContent='';
   setSendBtnsDisabled(false);
   $('sendmodal').classList.add('show');
@@ -2026,7 +2308,10 @@ async function doSendUpload(start){
   if(!checked.length){ $('sendFooterStatus').textContent='Select at least one printer.'; return; }
   setSendBtnsDisabled(true);
   $('sendFooterStatus').textContent='';
-  const results=await Promise.all(checked.map(id=>pushTo(id,start,sendRowUI(id))));
+  // Explicit values, straight from whatever's currently checked — see
+  // SEND_PREFS's own comment for why this never falls back to a per-printer
+  // default the way pfilemodal does.
+  const results=await Promise.all(checked.map(id=>pushTo(id,start,sendRowUI(id),SEND_PREFS)));
   const ok=results.filter(Boolean).length;
   $('sendFooterStatus').textContent=ok===checked.length
     ? `Done — ${ok}/${checked.length} succeeded.`
@@ -2065,6 +2350,15 @@ async function ctl(printer, act){
 
 // ---- Print a file already stored on the printer ----
 let PFILE_PRINTER=null, PFILE_SELECTED=null, PFILE_META=null, PFILE_MAP={}, PFILE_FILES=[];
+let PFILE_PREFS={autoLevel:false, flowCalibrate:false, timelapse:false};
+function renderPfileOpts(){
+  const wrap=$("pfileOpts");
+  const p=FLEET.find(f=>f.id===PFILE_PRINTER);
+  wrap.innerHTML=printOptsHtml(p&&p.capabilities, PFILE_PREFS, "pfileopt");
+  wrap.querySelectorAll("[data-popt]").forEach(el=>{
+    el.addEventListener("change",()=>{ PFILE_PREFS[el.dataset.popt]=el.checked; });
+  });
+}
 function renderPfileInfo(){
   const wrap=$("pfileinfo");
   if(!PFILE_META||!PFILE_SELECTED){ wrap.innerHTML=""; return; }
@@ -2091,6 +2385,11 @@ function openPrinterFiles(printerId){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p||!p.online) return;
   PFILE_PRINTER=printerId; PFILE_SELECTED=null; PFILE_META=null; PFILE_MAP={}; PFILE_FILES=[];
+  // All three default to this printer's own configured preference (Settings
+  // > printer > Behavior) — same as they always applied before there was a
+  // per-job checkbox.
+  PFILE_PREFS={autoLevel:!!p.autoLevel, flowCalibrate:!!p.flowCalibrate, timelapse:!!p.timelapse};
+  renderPfileOpts();
   $("pfiletitle").textContent=p.name+" — Print from printer";
   $("pfileSearch").value="";
   $("pfileinfo").innerHTML="";
@@ -2101,7 +2400,7 @@ function openPrinterFiles(printerId){
   $("pfilemodal").classList.add("show");
   loadPrinterFiles();
 }
-function closePrinterFiles(){ $("pfilemodal").classList.remove("show"); PFILE_PRINTER=null; PFILE_SELECTED=null; PFILE_META=null; PFILE_MAP={}; $("pfileinfo").innerHTML=""; }
+function closePrinterFiles(){ $("pfilemodal").classList.remove("show"); PFILE_PRINTER=null; PFILE_SELECTED=null; PFILE_META=null; PFILE_MAP={}; $("pfileinfo").innerHTML=""; $("pfileOpts").innerHTML=""; }
 async function loadPrinterFiles(){
   if(PFILE_PRINTER===null) return;
   try{
@@ -2160,8 +2459,8 @@ async function loadPfileMeta(file){
 }
 function renderPfileMap(){
   const wrap=$("pfilemap");
-  if(!PFILE_META||!ALLOW_MAPPING){ wrap.innerHTML=""; return; }
   const p=FLEET.find(f=>f.id===PFILE_PRINTER);
+  if(!PFILE_META||!ALLOW_MAPPING||!p?.capabilities?.headMapping){ wrap.innerHTML=""; return; }
   const allHeads=Array.from({length:4},(_,i)=>{ const h=(p&&p.heads&&p.heads[i])||null; return {hi:i,h}; });
   if(!allHeads.some(x=>x.h&&x.h.loaded)){ wrap.innerHTML='<div class="browse-empty">No filament loaded on this printer.</div>'; return; }
   // A single-material file (or a connector, like the AD5X, whose per-color
@@ -2175,7 +2474,7 @@ function renderPfileMap(){
     const hbtns=allHeads.map(({hi,h})=>{
       const loaded=!!(h&&h.loaded);
       const isSel=chosen!==""&&chosen===String(hi);
-      const bg=loaded?(h.hex||'#3a3f49'):'#2a2d36';
+      const bg=esc(loaded?(h.hex||'#3a3f49'):'#2a2d36');
       const hDark=needsDarkText(loaded?h.hex:null);
       return `<button class="hs-sq${isSel?' selected':''}${loaded?'':' empty'}${hDark?' light-bg':''}" style="background:${bg}" data-pfi="${n.i}" data-phi="${hi}"${loaded?'':' disabled'}>` +
              `<span class="hs-lbl">T${hi+1}</span>` +
@@ -2186,7 +2485,7 @@ function renderPfileMap(){
     const assignedHpf=chosen!==""?allHeads[parseInt(chosen)]?.h:null;
     const matMismatchPf=!!(n.type&&assignedHpf?.material&&n.type.trim().toLowerCase()!==assignedHpf.material.trim().toLowerCase());
     return `<div class="cmaprow">` +
-           `<div class="fsq${fDark?' light-bg':''}" style="background:${n.hex||'#3a3f49'}"><span class="fsq-t">T${n.i+1}</span>${info?`<span class="fsq-info">${esc(info)}</span>`:''}</div>` +
+           `<div class="fsq${fDark?' light-bg':''}" style="background:${esc(n.hex||'#3a3f49')}"><span class="fsq-t">T${n.i+1}</span>${info?`<span class="fsq-info">${esc(info)}</span>`:''}</div>` +
            `<span class="arrow">${matMismatchPf?'❌':'➜'}</span><div class="head-btns">${hbtns}</div></div>`;
   }).join("");
   wrap.innerHTML=`<div class="cmap"><div class="cmaphdr-row"><span class="cmaphdr">Model Color</span><span class="cmaphdr">Printer ToolHeads</span></div>${rows}</div>`;
@@ -2203,7 +2502,7 @@ async function doPrintFile(){
   st.textContent="Starting print…";
   $("pfilego").disabled=true;
   try{
-    const r=await postJSON("/api/printfile",{printer:PFILE_PRINTER,filename:PFILE_SELECTED,map:ALLOW_MAPPING?PFILE_MAP:{}});
+    const r=await postJSON("/api/printfile",{printer:PFILE_PRINTER,filename:PFILE_SELECTED,map:ALLOW_MAPPING?PFILE_MAP:{},prefs:PFILE_PREFS});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     st.textContent="Print started";
     setTimeout(()=>{ closePrinterFiles(); loadFleet(); },900);
@@ -2265,11 +2564,16 @@ async function loadSnapshot(){
 function openThumb(printerId){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p||!p.online) return;
-  $("thumbtitle").textContent=p.name+(p.filename?' — '+p.filename:'');
+  // Same "Loaded" precedence as the card/list file-name slots (see
+  // statusColorText) — otherwise this would enlarge the last-printed file's
+  // thumbnail instead of the one the card is actually showing right now.
+  const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile.name:null;
+  const name=queuedReady||p.filename;
+  $("thumbtitle").textContent=p.name+(name?' — '+name:'');
   const w=$("thumbwrap");
-  if(!p.filename){ w.innerHTML='<span style="color:var(--ink-dim)">No file loaded</span>'; }
+  if(!name){ w.innerHTML='<span style="color:var(--ink-dim)">No file loaded</span>'; }
   else {
-    const stem=p.filename;
+    const stem=name;
     w.innerHTML='<img src="/api/thumbnail?printer='+p.id+'&file='+encodeURIComponent(stem)+'&t='+thumbToken(p,stem)+'" style="max-width:100%;border-radius:8px" onerror="this.parentNode.innerHTML=\'<span style=color:var(--ink-dim)>No thumbnail available</span>\'">';
   }
   $("thumbmodal").classList.add("show");
@@ -2280,15 +2584,23 @@ function closeThumb(){ $("thumbmodal").classList.remove("show"); }
 function openUnload(printerId,ext){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p||!p.online) return;
-  $("unloadtitle").textContent="Unload Filament — "+p.name;
+  $("unloadtitle").textContent="Unload filament — "+p.name;
   $("unloadmsg").textContent="Are you sure you want to unload T"+ext+"?";
   $("unloadStatus").textContent="";
   $("unloadYes").onclick=()=>doUnload(printerId,[ext]);
   $("unloadAll").onclick=()=>doUnload(printerId,[0,1,2,3]);
   // Only some connectors can write a slot's color/material label back to the
-  // printer itself (currently just FlashForge's AD5X material station) — the
-  // button stays hidden for everything else rather than pretending it works.
-  const supportsColor=!!(p.capabilities&&p.capabilities.setColor);
+  // printer itself — the button stays hidden for everything else rather
+  // than pretending it works. Two different UIs share capabilities.setColor:
+  // a connector with a fixed icon palette (AD5X's material station — only
+  // ever offers exactly those icons, no arbitrary hex) gets the small inline
+  // grid below; anything else (U1's SET_PRINT_FILAMENT_CONFIG, which takes
+  // arbitrary RGBA) gets the bigger dedicated picker (openSpoolColorModal)
+  // instead, since a plain hex/native-input inline section is too little UI
+  // for a real named-palette + custom-hex workflow.
+  const hasFixedPalette=Array.isArray(p.colorPalette)&&p.colorPalette.length;
+  const supportsColor=!!(p.capabilities&&p.capabilities.setColor)&&hasFixedPalette;
+  const supportsBigPicker=!!(p.capabilities&&p.capabilities.setColor)&&!hasFixedPalette;
   $("unloadColorPicker").style.display="none";
   $("unloadColorGrid").style.display="none";
   $("unloadColorGeneric").style.display="none";
@@ -2301,25 +2613,22 @@ function openUnload(printerId,ext){
     // would otherwise show as "you picked X but got black" with no clue why.
     if(current[0]!=="#") current="#"+current;
     $("unloadColorBtn").onclick=()=>{ $("unloadColorPicker").style.display="block"; };
-    if(Array.isArray(p.colorPalette)&&p.colorPalette.length){
-      // AD5X (so far the only connector with this): the printer only has
-      // icons for a fixed color set, so the picker only ever offers exactly
-      // those — no arbitrary hex entry, nothing to snap.
-      const grid=$("unloadColorGrid");
-      grid.innerHTML=p.colorPalette.map(c=>{
-        const hex=c.hex.toUpperCase();
-        return `<button class="color-swatch${hex===current?' active':''}" style="background:${esc(c.hex)}" title="${esc(c.name)}" data-hex="${esc(c.hex)}"></button>`;
-      }).join("");
-      grid.style.display="grid";
-      grid.querySelectorAll(".color-swatch").forEach(btn=>{
-        btn.addEventListener("click",()=>doSetColor(printerId,ext,btn.dataset.hex));
-      });
-    } else {
-      $("unloadColorSwatch").value=current;
-      $("unloadColorHex").value=current;
-      $("unloadColorGeneric").style.display="block";
-      $("unloadColorSave").onclick=()=>doSetColor(printerId,ext,$("unloadColorHex").value);
-    }
+    // AD5X (so far the only connector with a fixed palette): the printer
+    // only has icons for a fixed color set, so the picker only ever offers
+    // exactly those — no arbitrary hex entry, nothing to snap.
+    const grid=$("unloadColorGrid");
+    grid.innerHTML=p.colorPalette.map(c=>{
+      const hex=c.hex.toUpperCase();
+      return `<button class="color-swatch${hex===current?' active':''}" style="background:${esc(c.hex)}" title="${esc(c.name)}" data-hex="${esc(c.hex)}"></button>`;
+    }).join("");
+    grid.style.display="grid";
+    grid.querySelectorAll(".color-swatch").forEach(btn=>{
+      btn.addEventListener("click",()=>doSetColor(printerId,ext,btn.dataset.hex));
+    });
+  }
+  $("unloadSpoolColorBtn").style.display=supportsBigPicker?"":"none";
+  if(supportsBigPicker){
+    $("unloadSpoolColorBtn").onclick=()=>openSpoolColorModal(printerId,ext);
   }
   $("unloadmodal").classList.add("show");
 }
@@ -2351,7 +2660,6 @@ async function doSetColor(printerId,ext,hex){
     const applied=(d.hex||v).toUpperCase();
     if(applied!==v.toUpperCase()){
       st.className="pstatus ok"; st.textContent="Closest supported color applied: "+applied;
-      $("unloadColorSwatch").value=applied; $("unloadColorHex").value=applied;
     } else {
       st.className="pstatus ok"; st.textContent="Color updated";
     }
@@ -2359,11 +2667,183 @@ async function doSetColor(printerId,ext,hex){
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 }
 
+// ---- Spool color picker (capabilities.setColor — a real printer write, via
+// the same /api/filament-color route and the same doSetColor()-style flow
+// as AD5X's inline Color button above, just a bigger dedicated UI for U1's
+// larger named-palette + custom-hex use case). ----
+// A general-purpose named filament-color list — unlike flashforge-ad5x.js's
+// COLOR_PALETTE (which only lists exactly what THAT printer's own
+// touchscreen can display), this isn't tied to any one connector's fixed
+// icon set. 6 per row by design (see the picker's grid).
+const SPOOL_COLOR_PALETTE=[
+  {name:"White",hex:"#FFFFFF"},{name:"Natural",hex:"#F2EAD8"},{name:"Beige",hex:"#E8DCC8"},
+  {name:"Silver",hex:"#C7CCD1"},{name:"Gray",hex:"#8A8F98"},{name:"Black",hex:"#161616"},
+  {name:"Red",hex:"#E4332A"},{name:"Maroon",hex:"#7A1F2B"},{name:"Orange",hex:"#F07C1E"},
+  {name:"Gold",hex:"#D9A441"},{name:"Yellow",hex:"#F5D629"},{name:"Olive",hex:"#7C7A34"},
+  {name:"Lime",hex:"#8FD13F"},{name:"Green",hex:"#2FA84F"},{name:"Teal",hex:"#128277"},
+  {name:"Cyan",hex:"#22C2D6"},{name:"Sky Blue",hex:"#4FB4E8"},{name:"Blue",hex:"#2A6FE0"},
+  {name:"Navy",hex:"#1B3B77"},{name:"Purple",hex:"#6E3FA3"},{name:"Violet",hex:"#9B5FD1"},
+  {name:"Magenta",hex:"#C43FA8"},{name:"Pink",hex:"#EC8FC0"},{name:"Rose",hex:"#D65A72"},
+  {name:"Brown",hex:"#7A4B2E"},{name:"Tan",hex:"#C9A876"},{name:"Copper",hex:"#B5702F"},
+  {name:"Bronze",hex:"#8C6B2E"},{name:"Mint",hex:"#7FE0C0"},{name:"Lavender",hex:"#C3B3EA"}
+];
+function nameForHex(hex){
+  const m=SPOOL_COLOR_PALETTE.find(c=>c.hex.toUpperCase()===hex.toUpperCase());
+  return m?m.name:null;
+}
+
+let SPOOL_MODAL_PRINTER=null, SPOOL_MODAL_EXT=null, SPOOL_MODAL_CURRENT=null, SPOOL_MODAL_PENDING=null, SPOOL_MODAL_TAB="palette";
+
+function openSpoolColorModal(printerId,ext){
+  const p=FLEET.find(f=>f.id===printerId);
+  if(!p||!p.online) return;
+  const h=(p.heads&&p.heads[ext])||null;
+  const currentHex=h&&h.hex?h.hex.toUpperCase():null;
+  const currentName=currentHex&&nameForHex(currentHex);
+  SPOOL_MODAL_PRINTER=printerId; SPOOL_MODAL_EXT=ext;
+  SPOOL_MODAL_CURRENT={hex:currentHex,name:currentName};
+  SPOOL_MODAL_PENDING={hex:currentHex||"#FFFFFF",name:currentName||"Custom"};
+  SPOOL_MODAL_TAB="palette";
+  $("sccSubtitle").textContent=headLabel(ext)+" · "+p.name;
+  $("sccStatus").textContent="";
+  renderSpoolColorTabs();
+  renderSpoolColorCompare();
+  renderSpoolPaletteGrid();
+  syncCustomFieldsFromPending();
+  $("spoolColorModal").classList.add("show");
+}
+function closeSpoolColorModal(){ $("spoolColorModal").classList.remove("show"); }
+
+function renderSpoolColorCompare(){
+  const nowHex=SPOOL_MODAL_CURRENT.hex;
+  $("sccNowSwatch").style.background=nowHex||"#2a2d36";
+  $("sccNowSwatch").style.opacity=nowHex?"1":".5";
+  $("sccPendingSwatch").style.background=SPOOL_MODAL_PENDING.hex;
+  $("sccPendingName").textContent=SPOOL_MODAL_PENDING.name||"Custom";
+  $("sccPendingHex").textContent=SPOOL_MODAL_PENDING.hex;
+}
+function renderSpoolColorTabs(){
+  $("sccPalettePane").style.display=SPOOL_MODAL_TAB==="palette"?"":"none";
+  $("sccCustomPane").style.display=SPOOL_MODAL_TAB==="custom"?"":"none";
+  document.querySelectorAll(".scc-tab").forEach(b=>b.classList.toggle("active",b.dataset.scctab===SPOOL_MODAL_TAB));
+}
+
+// hex/name: the color to move to. opts.skip{HexField,Native,Rgb}: which
+// Custom-tab field to leave alone because IT is the one the user is
+// actively typing into (rewriting it mid-edit would fight their cursor).
+function setPendingColor(hex,name,opts){
+  opts=opts||{};
+  hex=hex.toUpperCase();
+  SPOOL_MODAL_PENDING={hex,name:name||"Custom"};
+  renderSpoolColorCompare();
+  renderSpoolPaletteGrid();
+  if(!opts.skipHexField) $("sccHexField").value=hex;
+  if(!opts.skipNative) $("sccColorInput").value=hex;
+  if(!opts.skipRgb){ const rgb=hexRGB(hex)||[255,255,255]; $("sccR").value=rgb[0]; $("sccG").value=rgb[1]; $("sccB").value=rgb[2]; }
+  $("sccHexError").style.display="none";
+}
+function selectSpoolColor(hex,name){ setPendingColor(hex,name); }
+
+function swatchHtmlFor(c){
+  const isLight=needsDarkText(c.hex);
+  const selected=SPOOL_MODAL_PENDING&&SPOOL_MODAL_PENDING.hex===c.hex.toUpperCase();
+  return `<button type="button" class="color-swatch${selected?' selected':''}${isLight?' light':''}" `+
+    `style="background:${esc(c.hex)}" role="button" tabindex="0" `+
+    `title="${esc(c.name)} (${esc(c.hex.toUpperCase())})" data-scchex="${esc(c.hex)}" data-sccname="${esc(c.name)}"></button>`;
+}
+function wireSwatchGrid(gridEl){
+  gridEl.querySelectorAll(".color-swatch").forEach(btn=>{
+    btn.addEventListener("click",()=>selectSpoolColor(btn.dataset.scchex,btn.dataset.sccname));
+    btn.addEventListener("keydown",e=>{
+      if(e.key==="Enter"||e.key===" "){ e.preventDefault(); selectSpoolColor(btn.dataset.scchex,btn.dataset.sccname); }
+    });
+  });
+}
+function renderSpoolPaletteGrid(){
+  $("sccPaletteGrid").innerHTML=SPOOL_COLOR_PALETTE.map(c=>swatchHtmlFor(c)).join("");
+  wireSwatchGrid($("sccPaletteGrid"));
+
+  // "Recent on this fleet": distinct colors currently loaded anywhere in the
+  // fleet, deduped by hex, capped at 6 — there's no persisted apply-history
+  // to draw a true chronological "last used" from, so this is the closest
+  // useful proxy: colors genuinely in active use fleet-wide right now.
+  const seen=new Set(), recent=[];
+  outer: for(const p of FLEET){
+    for(const h of (p.heads||[])){
+      if(h&&h.loaded&&h.hex){
+        const hex=h.hex.toUpperCase();
+        if(!seen.has(hex)){ seen.add(hex); recent.push({hex,name:nameForHex(hex)||"Custom"}); }
+        if(recent.length>=6) break outer;
+      }
+    }
+  }
+  const hdr=$("sccRecentHdr"), grid=$("sccRecentGrid");
+  if(recent.length){
+    hdr.style.display=""; grid.style.display="";
+    grid.innerHTML=recent.map(c=>swatchHtmlFor(c)).join("");
+    wireSwatchGrid(grid);
+  } else {
+    hdr.style.display="none"; grid.style.display="none"; grid.innerHTML="";
+  }
+}
+
+// ---- Custom tab: hex <-> RGB <-> native <input type=color>, kept in sync ----
+function normalizeHexInput(raw){
+  let v=(raw||"").trim();
+  if(v[0]==="#") v=v.slice(1);
+  if(/^[0-9a-fA-F]{3}$/.test(v)) v=v[0]+v[0]+v[1]+v[1]+v[2]+v[2];
+  if(!/^[0-9a-fA-F]{6}$/.test(v)) return null;
+  return "#"+v.toUpperCase();
+}
+function syncCustomFieldsFromPending(){
+  const hex=SPOOL_MODAL_PENDING.hex;
+  $("sccHexField").value=hex;
+  $("sccColorInput").value=hex;
+  $("sccHexError").style.display="none";
+  const rgb=hexRGB(hex)||[255,255,255];
+  $("sccR").value=rgb[0]; $("sccG").value=rgb[1]; $("sccB").value=rgb[2];
+}
+function applyCustomHex(raw){
+  const norm=normalizeHexInput(raw);
+  if(!norm){
+    const err=$("sccHexError");
+    err.textContent='Enter a 3- or 6-digit hex color, with or without "#".';
+    err.style.display="block";
+    return; // invalid input is never silently reset — it stays exactly as typed
+  }
+  setPendingColor(norm,"Custom",{skipHexField:true});
+}
+function applyCustomRgb(){
+  const clamp=v=>Math.max(0,Math.min(255,Math.round(Number(v))||0));
+  const r=clamp($("sccR").value), g=clamp($("sccG").value), b=clamp($("sccB").value);
+  $("sccR").value=r; $("sccG").value=g; $("sccB").value=b;
+  const hex="#"+[r,g,b].map(n=>n.toString(16).padStart(2,"0")).join("");
+  setPendingColor(hex,"Custom",{skipRgb:true});
+}
+function applyNativeColor(){
+  setPendingColor($("sccColorInput").value,"Custom",{skipNative:true});
+}
+async function doApplySpoolColor(){
+  const st=$("sccStatus");
+  st.textContent="Saving…";
+  try{
+    // Real printer write (see connectors/snapmaker-u1-klipper.js's
+    // setFilamentColor) — the same generic route AD5X's Color button already
+    // uses. The palette/custom "name" picked in this modal is a client-side
+    // display convenience only (nameForHex()); there's no printer-side field
+    // for it, so it's never sent.
+    const r=await postJSON("/api/filament-color",{printer:SPOOL_MODAL_PRINTER,extruder:SPOOL_MODAL_EXT,hex:SPOOL_MODAL_PENDING.hex});
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    st.textContent="Saved";
+    setTimeout(()=>{ closeSpoolColorModal(); loadFleet(); },700);
+  }catch(e){ st.textContent=e.message; }
+}
+
 // ---- Bed temperature modal ----
 function openBedModal(printerId){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p||!p.online) return;
-  $("bedmodaltitle").textContent=(p.brand||'SnapMaker')+" "+p.name+" — Set Bed Temp";
+  $("bedmodaltitle").textContent=(p.brand||'SnapMaker')+" "+p.name+" — Set bed temperature";
   $("bedmodalinput").value="";
   $("bedmodalstatus").textContent="";
   $("bedmodalset").onclick=()=>{
@@ -3669,7 +4149,7 @@ async function loadConfigUI(){
     baselineSettingsTab("notif");
     $("setPrinters").innerHTML="";
     PRINTERS_CFG=c.printers||[];
-    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,brand:p.brand,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,pushNotify:p.pushNotify,connector:p.connector,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken}));
+    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags}));
     baselinePrintersDirty();
     updateRefreshHelper(); // depends on PRINTERS_CFG.length, so runs after the printer rows above
     syncAutoMatchNesting();
@@ -3836,7 +4316,12 @@ function serializeRowForDiff(row){
     purchaseDate:row.querySelector(".pdate").value,
     costKwh:row.querySelector(".pkwh").value.trim(),
     autoLevel:row.querySelector('[id^="pautolevel-"]').checked,
-    pushNotify:row.querySelector('[id^="ppushnotify-"]').checked
+    flowCalibrate:row.querySelector('[id^="pflowcal-"]').checked,
+    timelapse:row.querySelector('[id^="ptimelapse-"]').checked,
+    pushNotify:row.querySelector('[id^="ppushnotify-"]').checked,
+    forceDefaults:row.querySelector('[id^="pforcedefaults-"]').checked,
+    filamentMode:row.querySelector(".pfilmode").value,
+    tags:row.querySelector(".ptags").value.trim()
   });
 }
 // Called once right after printer rows are (re)built from a fresh load or a
@@ -3890,7 +4375,12 @@ function addPrinterRow(name,url,opts,autoOpen){
   // detach). Blank for a brand-new row; the server mints one on first save.
   row.dataset.printerId=opts.id||"";
   const connType=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper";
-  const modelLabel=(CONNECTOR_TYPES.find(c=>c.type===connType)||{}).label||connType;
+  const connTypeInfo=CONNECTOR_TYPES.find(c=>c.type===connType)||{};
+  const modelLabel=connTypeInfo.label||connType;
+  // Brand is derived from the connector, never user-typed — the server
+  // re-derives it too (never trusts this field), this just keeps the
+  // display in sync without a round-trip.
+  const brandLabel=connTypeInfo.brand||modelLabel;
   row.innerHTML=
     `<details class="prow-details"${autoOpen?" open":""}>`+
     `<summary>`+
@@ -3916,7 +4406,10 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="maint-field"><label class="fl">Name</label><input class="field pname" maxlength="25" placeholder="U1" value="${esc(name||"")}"></div>`+
     `<div class="maint-field"><label class="fl">Location</label><input class="field ploc" maxlength="30" placeholder="e.g. Office" value="${esc(opts.location||"")}"></div>`+
     `</div>`+
-    `<div class="maint-field" style="margin-top:10px;max-width:260px"><label class="fl">Brand</label><input class="field pbrand" maxlength="25" placeholder="SnapMaker" value="${esc(opts.brand||"")}"></div>`+
+    `<div class="maint-row2" style="margin-top:10px">`+
+    `<div class="maint-field"><label class="fl">Brand</label><input class="field pbrand" disabled value="${esc(brandLabel)}"></div>`+
+    `<div class="maint-field"><label class="fl">Tags <span class="hint">comma-separated — e.g. filter Camera View, or /red/ to tint the card</span></label><input class="field ptags" maxlength="200" placeholder="e.g. garage, /red/" value="${esc((opts.tags||[]).join(", "))}"></div>`+
+    `</div>`+
     `</div>`+
 
     `<div class="prow-section"><div class="prow-section-title">Connection</div>`+
@@ -3943,30 +4436,72 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="maint-field"><label class="fl">Power draw, watts</label><input class="field pkwh" type="number" min="0" placeholder="0" value="${esc(opts.costKwh||"")}"></div>`+
     `</div>`+
     `<div class="hint" style="margin-top:6px">Power draw feeds the per-print energy cost estimate (Settings → General → Electricity rate).</div>`+
+    `<div class="filmode-wrap" style="display:none;margin-top:10px;max-width:320px">`+
+    `<label class="fl">Filament system</label>`+
+    `<select class="field pfilmode">`+
+    `<option value="single">Single Color</option>`+
+    `<option value="cfs">Creality Filament System (CFS)</option>`+
+    `</select>`+
+    `<div class="hint" style="margin-top:6px">Whether this printer has a CFS multi-slot box attached. Status-only for now — SnapCon doesn't yet drive CFS slot selection at print start.</div>`+
+    `</div>`+
     `</div>`+
 
     `<div class="prow-section"><div class="prow-section-title">Behavior</div>`+
+    `<div style="margin-bottom:10px">`+
+    switchHtml("pforcedefaults-"+uid, opts.forceDefaults!==false, "Force default behavior", "Print always uses the defaults below with no prompt. Turn off to confirm Auto-level / Flow Calibration / Time-lapse (and which toolheads to calibrate, on U1) before each print instead.")+
+    `</div>`+
     `<div class="autolevel-wrap" style="margin-bottom:10px">`+
     switchHtml("pautolevel-"+uid,!!opts.autoLevel,"Auto-level","Home and probe the bed mesh before each print")+
     `</div>`+
+    `<div class="flowcal-wrap" style="margin-bottom:10px">`+
+    switchHtml("pflowcal-"+uid,!!opts.flowCalibrate,"Flow calibration","Run a flow-rate calibration pass before each print")+
+    `</div>`+
+    `<div class="timelapse-wrap" style="margin-bottom:10px">`+
+    switchHtml("ptimelapse-"+uid,!!opts.timelapse,"Time-lapse","Capture a time-lapse video of each print")+
+    `</div>`+
+    `<div class="hint" style="margin-bottom:10px">These are just the defaults — Print and Send-to-Printers both let you override them per job.</div>`+
     switchHtml("ppushnotify-"+uid,!!opts.pushNotify,"Push notifications","Include this printer in start / pause / error / complete alerts")+
     `</div>`+
 
     `</div></details>`;
 
-  const connectorEl=row.querySelector(".pconnector"), autolevelWrap=row.querySelector(".autolevel-wrap"), autolevelEl=row.querySelector('[id^="pautolevel-"]');
+  // Capability-gated per-printer defaults: same three options as the print-
+  // time checkboxes (pfilemodal), keyed the same way, so a connector that
+  // doesn't declare the capability hides (and force-unchecks) the matching
+  // Settings switch too, not just the print-time one.
+  const PRINTER_PREF_SWITCHES=[
+    {cap:"autoLevel", wrap:".autolevel-wrap", input:'[id^="pautolevel-"]'},
+    {cap:"flowCalibration", wrap:".flowcal-wrap", input:'[id^="pflowcal-"]'},
+    {cap:"timelapse", wrap:".timelapse-wrap", input:'[id^="ptimelapse-"]'}
+  ].map(s=>({...s, wrapEl:row.querySelector(s.wrap), inputEl:row.querySelector(s.input)}));
+  const connectorEl=row.querySelector(".pconnector");
   const modelBadgeEl=row.querySelector(".prow-model-badge");
   connectorEl.value=connType;
-  const syncAutoLevelVisibility=()=>{
-    const supported=!!connectorCaps(connectorEl.value).autoLevel;
-    autolevelWrap.style.display=supported?"":"none";
-    if(!supported) autolevelEl.checked=false;
+  const filModeWrap=row.querySelector(".filmode-wrap"), filModeEl=row.querySelector(".pfilmode");
+  filModeEl.value=(opts.filamentMode==="cfs")?"cfs":"single";
+  const syncPrintPrefVisibility=()=>{
+    const caps=connectorCaps(connectorEl.value);
+    PRINTER_PREF_SWITCHES.forEach(({cap,wrapEl,inputEl})=>{
+      const supported=!!caps[cap];
+      wrapEl.style.display=supported?"":"none";
+      if(!supported) inputEl.checked=false;
+    });
+    // Filament-system mode is a Creality-only config choice (see
+    // connectors/creality-klipper.js's getCapabilities), not a fixed
+    // capability — U1/AD5X are always one fixed mode each, so this selector
+    // only makes sense for creality-klipper.
+    const isCreality=connectorEl.value==="creality-klipper";
+    filModeWrap.style.display=isCreality?"":"none";
+    if(!isCreality) filModeEl.value="single";
   };
+  const brandEl=row.querySelector(".pbrand");
   connectorEl.addEventListener("change", ()=>{
-    syncAutoLevelVisibility();
-    modelBadgeEl.textContent=(CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{}).label||connectorEl.value;
+    syncPrintPrefVisibility();
+    const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
+    modelBadgeEl.textContent=ct.label||connectorEl.value;
+    brandEl.value=ct.brand||ct.label||connectorEl.value;
   });
-  syncAutoLevelVisibility();
+  syncPrintPrefVisibility();
   // Live-update the summary header as user types
   const nameEl=row.querySelector(".pname"), urlEl=row.querySelector(".purl");
   const sumName=row.querySelector(".prow-sumname"), sumIp=row.querySelector(".prow-sumip");
@@ -4155,16 +4690,24 @@ function gatherPrinters(){
     id:r.dataset.printerId||undefined,
     name:r.querySelector(".pname").value.trim(),
     url:r.querySelector(".purl").value.trim(),
-    brand:r.querySelector(".pbrand").value.trim()||undefined,
     location:r.querySelector(".ploc").value.trim()||undefined,
     costKwh:r.querySelector(".pkwh").value.trim()||undefined,
     purchaseDate:r.querySelector(".pdate").value||undefined,
     autoLevel:r.querySelector('[id^="pautolevel-"]').checked||undefined,
+    flowCalibrate:r.querySelector('[id^="pflowcal-"]').checked||undefined,
+    timelapse:r.querySelector('[id^="ptimelapse-"]').checked||undefined,
     pushNotify:r.querySelector('[id^="ppushnotify-"]').checked||undefined,
+    // Real boolean, not the ||undefined pattern above — the server tells
+    // "explicitly off" apart from "field never sent" by checking
+    // typeof === "boolean", and collapsing false to undefined here would
+    // break that (this switch defaults to true, unlike the others).
+    forceDefaults:r.querySelector('[id^="pforcedefaults-"]').checked,
     connector:r.querySelector(".pconnector").value,
+    filamentMode:r.querySelector(".pfilmode").value==="cfs"?"cfs":undefined,
     serial:r.querySelector(".pserial").value.trim()||undefined,
     verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
-    token:secretFieldValue(r.querySelector(".secret-field"))
+    token:secretFieldValue(r.querySelector(".secret-field")),
+    tags:r.querySelector(".ptags").value.split(",").map(t=>t.trim()).filter(Boolean)
   })).filter(p=>p.url);
 }
 async function runDiscover(subnet){

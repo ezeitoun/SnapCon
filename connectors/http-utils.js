@@ -79,7 +79,21 @@ const cancel = p => sendGcode(p, "CANCEL_PRINT");
 const eject = p => sendGcode(p, "SDCARD_RESET_FILE");
 const estop = p => moonrakerPost(p, "/printer/emergency_stop");
 const bedTemp = (p, t) => sendGcode(p, "M140 S" + Math.round(t));
-const startPrintFile = (p, filename) => sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${filename}"`);
+
+// A value interpolated into a literal `script` line must never contain a
+// quote or a line break: Moonraker executes a multi-line `script` value one
+// gcode/macro command per line, so an embedded CR/LF turns one intended
+// command into two attacker-chosen ones. This is the shared sink for every
+// Klipper-family connector (klipper-moonraker, creality-klipper,
+// snapmaker-u1-klipper all re-export startPrintFile/excludeObject
+// unchanged), so it enforces this itself rather than trusting every caller
+// upstream (server.js's /api/print, /api/printfile, /api/exclude, and the
+// --load/--snapcon CLI/notify-load path) to have validated first.
+function assertSafeGcodeArg(value) {
+  if (/["\r\n]/.test(String(value))) throw new Error("Invalid characters in gcode argument");
+  return value;
+}
+const startPrintFile = (p, filename) => sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${assertSafeGcodeArg(filename)}"`);
 
 // ---- Exclude-object: live plate map + skip a single object mid-print
 // (stock Klipper's exclude_object module) ----
@@ -94,7 +108,7 @@ async function getPlate(p) {
   };
 }
 async function excludeObject(p, name) {
-  await sendGcode(p, `EXCLUDE_OBJECT NAME=${name}`);
+  await sendGcode(p, `EXCLUDE_OBJECT NAME=${assertSafeGcodeArg(name)}`);
 }
 
 // ---- File management on the printer (stock Moonraker) ----
@@ -117,6 +131,38 @@ async function getThumbnail(p, file) {
   const r = await fetchTimeout(url, 5000);
   if (!r.ok) { const e = new Error("HTTP " + r.status); e.status = r.status; throw e; }
   return { contentType: r.headers.get("content-type") || "image/png", buffer: Buffer.from(await r.arrayBuffer()) };
+}
+
+// Fallback slicer-comment parsing for gcode Moonraker's own scanner didn't
+// recognize at all (slicer:"Unknown", no estimated_time/filament_colour) —
+// confirmed live against real Creality-Print-sliced files, which come in (at
+// least) two comment dialects depending on slicer version, neither of which
+// Moonraker's built-in scanner picked up on these real files:
+//  - Cura-derived (older Creality Print, "FLAVOR:Creality OS"): plain header
+//    tags positioned right before the actual gcode starts —
+//    `;TIME:<seconds>`, `;Filament Weight:<grams>`.
+//  - OrcaSlicer/BambuStudio-derived (newer Creality Print): a stats block at
+//    the very end of the file, just before the alphabetical CONFIG_BLOCK
+//    settings dump — `; estimated printing time (normal mode) = 9h 42m 19s`,
+//    `; total filament used [g] = 236.85`.
+function parseFallbackStats(text) {
+  let estimatedTime = null, filamentG = null;
+  const curaTime = /^;TIME:([\d.]+)/m.exec(text);
+  if (curaTime) estimatedTime = parseFloat(curaTime[1]);
+  if (estimatedTime == null) {
+    const orcaTime = /estimated printing time(?:\s*\([^)]*\))?\s*=\s*((?:\d+h\s*)?(?:\d+m\s*)?(?:\d+s)?)/i.exec(text);
+    if (orcaTime && orcaTime[1].trim()) {
+      const hh = /(\d+)h/.exec(orcaTime[1]), mm = /(\d+)m/.exec(orcaTime[1]), ss = /(\d+)s/.exec(orcaTime[1]);
+      estimatedTime = (hh ? +hh[1] * 3600 : 0) + (mm ? +mm[1] * 60 : 0) + (ss ? +ss[1] : 0);
+    }
+  }
+  const curaWeight = /^;Filament Weight:([\d.]+)/m.exec(text);
+  if (curaWeight) filamentG = parseFloat(curaWeight[1]);
+  if (filamentG == null) {
+    const orcaWeight = /total filament used \[g\]\s*=\s*([\d.]+)/i.exec(text) || /filament used \[g\]\s*=\s*([\d.]+)/i.exec(text);
+    if (orcaWeight) filamentG = parseFloat(orcaWeight[1]);
+  }
+  return { estimatedTime, filamentG };
 }
 
 // Palette of a file stored on the printer, from Moonraker's slicer metadata,
@@ -142,21 +188,48 @@ async function getFileMetadata(p, file) {
       used: (typeof wt === "number") ? wt > 0 : !!(hex || type)
     });
   }
-  let isFS = false, fsFork = null;
+  let isFS = false, fsFork = null, tailText = "";
+  const encodedPath = file.split("/").map(encodeURIComponent).join("/");
   try {
-    const encodedPath = file.split("/").map(encodeURIComponent).join("/");
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 10000);
     try {
       const r = await fetch(baseUrl(p) + "/server/files/gcodes/" + encodedPath,
         { signal: ctrl.signal, headers: { Range: "bytes=-51200" } });
       if (r.ok || r.status === 206) {
-        const fsResult = parseGcodeMap(await r.text(), { scanBody: false });
+        tailText = await r.text();
+        const fsResult = parseGcodeMap(tailText, { scanBody: false });
         isFS = fsResult.isFS; fsFork = fsResult.fsFork;
       }
     } finally { clearTimeout(tid); }
   } catch {}
-  return { palette, estimatedTime: m.estimated_time || null, isFS, fsFork };
+
+  let estimatedTime = m.estimated_time || null;
+  const havePalette = palette.some(s => s.used);
+  if (!estimatedTime || !havePalette) {
+    let fb = parseFallbackStats(tailText); // OrcaSlicer/BambuStudio dialect — already have the bytes, no extra request
+    if (fb.estimatedTime == null && fb.filamentG == null && typeof m.gcode_start_byte === "number" && m.gcode_start_byte > 0) {
+      // Tail dialect found nothing — try the Cura dialect's header window instead,
+      // a small Range request just before where the real gcode begins.
+      try {
+        const start = Math.max(0, m.gcode_start_byte - 16384);
+        const ctrl = new AbortController();
+        const tid = setTimeout(() => ctrl.abort(), 8000);
+        try {
+          const r = await fetch(baseUrl(p) + "/server/files/gcodes/" + encodedPath,
+            { signal: ctrl.signal, headers: { Range: `bytes=${start}-${m.gcode_start_byte}` } });
+          if (r.ok || r.status === 206) fb = parseFallbackStats(await r.text());
+        } finally { clearTimeout(tid); }
+      } catch {}
+    }
+    if (!estimatedTime && fb.estimatedTime != null) estimatedTime = fb.estimatedTime;
+    // Replaces (never appends to) an all-unused palette — that placeholder
+    // entry exists only so an empty file still has a "which slot feeds this
+    // print" row elsewhere in the UI; leaving it in place alongside a real
+    // fallback entry would just be a second, redundant blank row.
+    if (!havePalette && fb.filamentG != null) palette.splice(0, palette.length, { i: 0, hex: null, type: "", wt: String(fb.filamentG), used: true });
+  }
+  return { palette, estimatedTime, isFS, fsFork };
 }
 
 // ---- Firmware inventory (same Moonraker APIs fluidd reads — no brand-
@@ -227,5 +300,7 @@ module.exports = {
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile,
   getPlate, excludeObject,
   listFiles, getThumbnail, getFileMetadata,
-  queryFirmwareInfo, pickIface
+  queryFirmwareInfo, pickIface,
+  // exported for tests only
+  _internal: { assertSafeGcodeArg, parseFallbackStats }
 };

@@ -6,4 +6,5 @@ gcode/*.gcode
 gcode/*.mapped.gcode
 config.json
 users.json
+queued-files.json
 remote-access-data/

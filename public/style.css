@@ -119,6 +119,10 @@
   .fleet{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; margin-top:14px;}
   .pcard{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:15px; display:flex; flex-direction:column; gap:13px;}
   .pcard.offline{opacity:.55;}
+  /* A "/[color]/" tag (see parseColorTag in app.js) sets --tag-color and this
+     class — blended rather than a flat fill, so status pills/text on top
+     stay readable and it still reads as part of the same dark theme. */
+  .pcard.tag-tinted{background:color-mix(in srgb, var(--panel) 72%, var(--tag-color) 28%);}
   .pcard .top{display:flex; align-items:center; justify-content:space-between; gap:10px;}
   .pcard .pn{display:flex; align-items:center; gap:8px;}
   .hdr-brand{font-size:9px; letter-spacing:0.2em; text-transform:uppercase; color:rgba(255,255,255,0.90); font-weight:600; line-height:1; margin-bottom:2px;}
@@ -250,6 +254,43 @@
   .color-swatch{width:36px; height:36px; border-radius:8px; border:2px solid var(--line); cursor:pointer; padding:0; transition:transform .1s, border-color .15s;}
   .color-swatch:hover{transform:scale(1.08); border-color:var(--ink-faint);}
   .color-swatch.active{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
+
+  /* ---- Spool color picker (spoolColorModal) ---- */
+  .scc-subtitle{font-size:12.5px; color:var(--ink-dim); margin-top:-4px;}
+  .scc-note{font-size:11.5px; color:var(--ink-faint); margin-top:4px; line-height:1.4;}
+  .scc-compare{display:flex; align-items:center; justify-content:center; gap:16px; margin:16px 0;}
+  .scc-now-col{display:flex; flex-direction:column; align-items:center; gap:6px; opacity:.75;}
+  .scc-swatch-sm{width:28px; height:28px; border-radius:7px; border:2px solid var(--line);}
+  .scc-compare-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint);}
+  .scc-arrow{color:var(--ink-faint); font-size:16px;}
+  .scc-pending-col{display:flex; align-items:center; gap:10px;}
+  .scc-swatch-lg{width:52px; height:52px; border-radius:10px; border:2px solid var(--line); flex:none;}
+  .scc-pending-text{display:flex; flex-direction:column; gap:2px;}
+  .scc-pending-name{font-size:13.5px; font-weight:600; color:var(--ink);}
+  .scc-pending-hex{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim);}
+  .scc-tabs{display:flex; gap:6px; border-bottom:1px solid var(--line-soft); margin-bottom:12px;}
+  .scc-tab{background:transparent; border:none; border-bottom:2px solid transparent; padding:7px 4px 9px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; margin-bottom:-1px;}
+  .scc-tab:hover{color:var(--ink);}
+  .scc-tab.active{color:var(--ink); font-weight:600; border-bottom-color:var(--accent);}
+  .scc-grid{max-width:none;}
+  .scc-recent-hdr{font-size:11px; color:var(--ink-faint); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.04em;}
+  /* Selection ring: box-shadow, not the swatch's own border — a border
+     change alone reads as barely different at this size, a ring around the
+     outside is unambiguous even for a swatch already lighter than --accent. */
+  .scc-grid .color-swatch.selected{box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--accent); border-color:transparent;}
+  /* White/natural/beige-family swatches: needsDarkText(hex) flags these in
+     JS — the default --line border is tuned for mid/dark swatches and is
+     too close in value to a light fill, so the swatch edge nearly
+     disappears against the dark modal surface without this override. */
+  .scc-grid .color-swatch.light{border-color:rgba(255,255,255,.4);}
+  .scc-custom-row{display:flex; align-items:center; gap:10px;}
+  .scc-native-color{width:40px; height:40px; padding:0; border:1px solid var(--line); border-radius:8px; cursor:pointer; background:none; flex:none;}
+  .scc-hex-field{flex:1; text-align:center; font-family:var(--mono); text-transform:uppercase;}
+  .scc-eyedropper{flex:none; padding:0; width:40px; height:40px; font-size:16px;}
+  .scc-hex-error{color:var(--bad); font-size:11.5px; margin-top:6px; min-height:14px;}
+  .scc-rgb-row{display:flex; gap:8px; margin-top:12px;}
+  .scc-rgb-row label{flex:1; display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--ink-faint); text-align:center;}
+  .scc-rgb-row input{width:100%; text-align:center; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:var(--mono); font-size:13px; padding:6px 0;}
   .maint-table{width:100%; border-collapse:collapse; font-size:12px; margin-top:10px;}
   .maint-table th{text-align:left; color:var(--ink-dim); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--line);}
   .maint-table td{padding:5px 8px; border-bottom:1px solid var(--line); color:var(--ink-faint);}
@@ -418,6 +459,19 @@
   .hs-sq .hs-lbl{font-family:var(--mono); font-size:11px; font-weight:700; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,.7); line-height:1;}
   .hs-sq .hs-mat{font-size:8px; color:rgba(255,255,255,.82); text-shadow:0 1px 2px rgba(0,0,0,.6); max-width:32px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .light-bg .fsq-t,.light-bg .hs-lbl{color:#111 !important; text-shadow:none !important;}
+
+  /* Quick-print popup's per-toolhead flow-calibration picker (multi-select,
+     unlike the single-select .hs-sq color-mapping squares above) — nested
+     under its "Flow calibration" switch via .settings-nested (see that
+     component's own rule for the indent/left-border/disabled treatment). */
+  .qp-nested-label{font-size:13px; color:var(--ink); margin-bottom:2px;}
+  .qp-extruder-row{display:flex; gap:8px; margin-top:6px; flex-wrap:wrap;}
+  .qp-ext-chip{display:flex; align-items:center; gap:6px; padding:6px 10px; border-radius:8px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink-dim); cursor:pointer; font:inherit; font-size:12px;}
+  .qp-ext-chip:hover:not(:disabled){border-color:var(--ink-faint);}
+  .qp-ext-chip.selected{border-color:var(--accent); color:var(--ink); background:color-mix(in srgb, var(--accent) 14%, var(--panel-2)); box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);}
+  .qp-ext-chip:disabled{opacity:.5; cursor:not-allowed;}
+  .qp-extruder-footer{font-size:12px; color:var(--ink-faint); margin-top:6px;}
+  .qp-ext-swatch{width:12px; height:12px; border-radius:50%; border:1px solid rgba(255,255,255,.25); flex-shrink:0;}
   .light-bg .fsq-info,.light-bg .hs-mat{color:rgba(0,0,0,.7) !important; text-shadow:none !important;}
   .topbar{display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-bottom:6px;}
   .topbar-brand{display:flex; align-items:center; gap:10px; margin-right:auto;}
@@ -446,6 +500,7 @@
   .fl{display:block; font-size:12px; font-weight:700; letter-spacing:.04em; color:var(--ink-dim); margin-bottom:6px; text-transform:uppercase;}
   .fl .hint{text-transform:none; font-weight:400; color:var(--ink-faint); letter-spacing:0; margin-left:6px;}
   .field{width:100%; font:inherit; font-size:14px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:7px; padding:10px 12px;}
+  .field:disabled{opacity:.55; cursor:not-allowed; color:var(--ink-dim);}
   /* ---- Number-input stepper — replaces the browser's native up/down
      spinner app-wide (see enhanceNumberInput in app.js). The wrapper takes
      over the input's own width/max-width (copied at enhancement time), and
@@ -570,6 +625,30 @@
   .secret-field{display:inline-flex; align-items:center;}
   .secret-chip{display:inline-flex; align-items:center; gap:8px;}
   .secret-chip .btn{padding:5px 10px; font-size:11.5px;}
+  /* ---- Per-print options (Flow Calibration / Time-Lapse / Auto-Leveling) —
+     pfilemodal ("Print from printer") and sendmodal ("Send to Printers"),
+     capability-gated per printer so only options the connector actually
+     supports are ever shown. ---- */
+  /* Reuses the app-wide switch-row/switch-input toggle (see that component's
+     own rules below) — same track+knob design as Settings/Notifications/
+     Remote Access, just laid out as a compact wrapping row instead of a
+     vertical stack, and with no .switch-desc line (not needed at this size). */
+  .print-opts{display:flex; flex-wrap:wrap; gap:8px 20px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-soft);}
+  .print-opts:empty{display:none; border-top:none; padding-top:0; margin-top:0;}
+  .print-opts .switch-row{gap:8px;}
+  .print-opts .switch-label{font-size:12.5px;}
+  /* pfilemodal folds the toggles into the same footer row as Cancel/Print
+     (see .send-footer below) rather than a standalone row above it — no top
+     divider/spacing there, and it takes the leftover space the way
+     .send-footer-status normally does, so Cancel/Print stay pinned right. */
+  .send-footer .print-opts{margin-top:0; padding-top:0; border-top:none; flex:1;}
+  /* pfileStatus shares .send-footer-status's flex:1 by default (needed
+     elsewhere so that status text alone pushes Cancel/Print right) — here
+     .print-opts is the one doing that job instead, so the status span goes
+     back to its natural (usually empty) width rather than splitting the row
+     with it. */
+  #pfileStatus{flex:none;}
+
   .discwrap{margin-top:8px;}
   .discrow{display:flex; align-items:center; gap:9px; padding:8px 10px; border:1px solid var(--line-soft); border-radius:8px; margin-bottom:6px; font-size:13px;}
   .discrow .di{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim); flex:1;}
@@ -592,10 +671,8 @@
   .klipper-err-link:hover{opacity:1;}
 
   .queued-banner{margin:10px 0 0;padding:9px 12px;border-radius:8px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
-  .queued-banner.ok{background:color-mix(in srgb,var(--ok) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);color:var(--ink-dim);}
   .queued-banner.work{background:color-mix(in srgb,var(--accent) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);color:var(--ink-dim);}
   .queued-banner.err{background:color-mix(in srgb,var(--bad) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);color:var(--ink-dim);}
-  .queued-banner .btn{padding:4px 12px;font-size:11px;flex:none;}
 
   /* ---- User Access Management ---- */
   .user-badge{display:flex;align-items:center;gap:8px;margin-left:6px;padding-left:10px;border-left:1px solid var(--line);}

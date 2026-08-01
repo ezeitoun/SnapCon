@@ -324,14 +324,6 @@ Remote Access cannot be enabled unless User Access Management is active and at l
 </p>
 <br clear="all">
 
-
-
-
-
-
-
-
-
 ### Cost Tracking
 Set an average filament cost (per spool) and an electricity rate ($/kWh), and SnapCon estimates filament +
 energy cost per print (shown on the Selected Model card and in the print-from-printer picker). Don't know your
@@ -362,35 +354,6 @@ planned but not implemented yet.)
   appears (file list, job title, print-from-printer picker), along with which fork produced them
 
 ---
-
-### Interface
-① **Control Buttons** — Clicking the folder icon opens the local gcode repository (configurable), which appears as a pane on the left side, letting you upload files from it. Next is Sort files, New Folder, Upload from PC, and Refresh. On the right: Sort printers (No Sort / By Status / By Time Remaining / By Name), the view-mode button described above, Heat Multiple Printers, Maintenance, and Settings.
-The search field lets you search by printer name, spool color, or job progress (e.g. `>30%`).
-② **Files/Folder Pane** — Opens when you click the folder icon, showing the contents of your configured gcode folder. Clicking a file lets you upload it either directly from a printer card's Upload button, or to all printers at once via "Upload All" on the Selected Model card.
-③ **Selected Model Card** — Shows details about the selected file: slicer print time, weight, cost (if configured in settings), and the spool colors/materials required. If the file is a Full Spectrum file, an "FS" indicator appears next to the filename. The Selected Model card has two icons — one to eject the file (deselect it), and one to upload it to all printers.
-
-
-### User Management
-A new option under General Settings lets you enable "Enable User Access Management."
-Once turned on, logging in becomes required to use SnapCon. This is also a prerequisite for Remote Access (above).
-![usermanagement](./docs/usermanagement.png)
-#### OTP Login
-configured at the top of the panel, lets you skip setting a password for a user entirely.
-Instead, a one-time password is sent at each login, delivered either by email (via the Resend
-service) or via ntfy.sh (using the same notification channel as your printers, or a separate one
-you create just for this).
-
-#### Adding a user
-Enter their first name, last name, and desired login name, then assign a role:
-**View**, read-only, no control over printers
-**Regular**, full control over printers
-**Admin**, full control, plus access to SnapCon's own configuration
-
-You can also set an email address (required for OTP) and a phone number
-(reserved for future SMS-based OTP support).
-To use OTP login for a user, check the OTP Login checkbox.
-Otherwise, set a password for that user directly.
-
 
 ### CLI / slicer integration hook
 SnapCon ships a small command-line hook any slicer's post-processing step can call to hand a sliced file
@@ -431,7 +394,7 @@ its own folder, and run it — a browser opens to the dashboard.
 
 - **Windows** (`snapcon-win-x64.exe`): SmartScreen may warn "unknown publisher"
   (the app isn't code-signed). Click **More info -> Run anyway**.
-- **macOS** (`snapcon-macos-AppleSilicon` / `-Intel`): right-click -> **Open**
+- **macOS** (`snapcon-macos-arm64` / `-intel`): right-click -> **Open**
   the first time to clear Gatekeeper, or run `xattr -dr com.apple.quarantine <file>` once.
   You may need to `chmod +x` it.
 - **Linux** (`snapcon-Linux-x64`): `chmod +x` then run it.
@@ -475,3 +438,4 @@ Reopen Settings anytime with the gear button.
 ---
 ## License
 MIT — see `LICENSE`. Free to use, change, and share.
+

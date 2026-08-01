@@ -3,6 +3,9 @@ dist
 .git
 *.log
 config.json
+users.json
+queued-files.json
+remote-access-data
 gcode/*.gcode
 gcode/*.mapped.gcode
 .github

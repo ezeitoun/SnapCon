@@ -3,6 +3,13 @@
 # Quick start:
 #   cp config.example.json config.json      # a writable config the hub persists to
 #   mkdir -p gcode                           # where your sliced .gcode lives
+#   touch users.json                        # pre-create as a FILE — a missing
+#                                            # bind-mount source for a single
+#                                            # FILE (unlike a directory) gets
+#                                            # created by Docker as an empty
+#                                            # DIRECTORY instead, which breaks
+#                                            # User Access Management the
+#                                            # moment it's turned on
 #   docker compose up -d
 #   open http://<this-host-ip>:4545
 #
@@ -26,6 +33,18 @@ services:
     # ports:
     #   - "4545:4545"
 
+    # users.json and remote-access-data/ must be mounted too, not just
+    # config.json — otherwise recreating the container (an image update,
+    # `docker compose up -d --build`) silently wipes every user account
+    # (while config.json's usersEnabled:true survives, locking everyone out)
+    # and orphans any live Remote Access tunnel.
     volumes:
-      - ./config.json:/app/config.json   # persists your printer list & settings
-      - ./gcode:/app/gcode               # your Orca output folder
+      - ./config.json:/app/config.json              # persists your printer list & settings
+      - ./gcode:/app/gcode                          # your Orca output folder
+      - ./users.json:/app/users.json                # User Access Management accounts
+      - ./remote-access-data:/app/remote-access-data # Remote Access tunnel identity/token
+      # Optional — without it, a container recreate just forgets which
+      # printers have a file sitting on them ready to print (nothing lost,
+      # just re-upload/re-select). Same "pre-create as a FILE" caveat as
+      # users.json above if you do mount it: touch queued-files.json first.
+      # - ./queued-files.json:/app/queued-files.json

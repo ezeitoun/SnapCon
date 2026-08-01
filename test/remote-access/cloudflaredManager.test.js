@@ -37,6 +37,34 @@ function makeFakeChild(pid = 4242) {
   return child;
 }
 
+// Models a genuine OS-level spawn failure (binary deleted between
+// verification and exec, permission denied, a noexec mount): Node never
+// assigns a real pid, and per Node's own documented spawn semantics, 'exit'
+// is NOT guaranteed to follow 'error' in this case — kill() on such a child
+// is a no-op (neither throws nor causes 'exit').
+function makeFakeChildThatFailsToSpawn() {
+  const child = new EventEmitter();
+  child.pid = undefined;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.killSignals = [];
+  child.kill = signal => { child.killSignals.push(signal); };
+  return child;
+}
+
+// A rarer but real variant: the child DID obtain a real pid (looks fully
+// spawned from Node's perspective) but then hits an 'error' (e.g. an EPIPE
+// on a stdio stream) and never emits 'exit' at all.
+function makeFakeChildThatErrorsWithoutExiting(pid = 4242) {
+  const child = new EventEmitter();
+  child.pid = pid;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.killSignals = [];
+  child.kill = signal => { child.killSignals.push(signal); };
+  return child;
+}
+
 function fakeTimers() {
   const scheduled = [];
   return {
@@ -193,4 +221,90 @@ test("stop() called immediately after start() (without awaiting either first) is
   await stopPromise;
 
   assert.equal(mgr.getStatus().processRunning, false, "stop() must take effect even when it lands while start() is still mid-flight");
+});
+
+// C-5 regression: a spawn failure emits 'error' but Node does NOT guarantee
+// a following 'exit' — before the fix, the 'error' handler only recorded
+// lastError, leaving `running`/`child` stuck as if a real process were still
+// alive. The next stop() call would then wait forever for an 'exit' that
+// could never fire, and its kill() would be a no-op against a ChildProcess
+// with no real pid — deadlocking every subsequent enable/disable/restart
+// until the whole SnapCon process was killed and restarted.
+
+test("C-5: the 'error' handler resets running/child and records lastError, mirroring 'exit'", async () => {
+  const dir = tempBaseDir();
+  fakeInstalledBinary(dir);
+  const fakeChild = makeFakeChildThatFailsToSpawn();
+  // Deliberately REAL timers here, not fakeTimers(): fakeTimers() fires
+  // scheduleRestart()'s backoff callback synchronously, which would
+  // immediately re-spawn (via the same spawnFn) and flip running back to
+  // true again within this same emit() call, masking the exact regression
+  // this test exists to catch. With real timers, the ~2s backoff hasn't
+  // fired by the time we assert below, so the post-'error', pre-restart
+  // state is actually observable.
+  const mgr = CFM.createProcessManager(dir, { spawnFn: () => fakeChild });
+
+  await mgr.start("tok");
+  assert.equal(mgr.getStatus().processRunning, true, "sanity: spawnChild() optimistically sets running=true before the OS confirms anything");
+
+  fakeChild.emit("error", new Error("spawn ENOENT"));
+
+  assert.equal(mgr.getStatus().processRunning, false, "the 'error' handler must reset running, just like 'exit' does");
+  assert.match(mgr.getStatus().lastError, /ENOENT/);
+  await mgr.stop(); // cleanup: cancel the real backoff-restart timer scheduleRestart() just armed
+});
+
+test("C-5: stop() after a spawn failure resolves promptly instead of deadlocking (the reported bug: Enable fails, later Disable hangs forever)", async () => {
+  const dir = tempBaseDir();
+  fakeInstalledBinary(dir);
+  const fakeChild = makeFakeChildThatFailsToSpawn();
+  const mgr = CFM.createProcessManager(dir, { spawnFn: () => fakeChild }); // real timers — see note above
+
+  await mgr.start("tok");
+  fakeChild.emit("error", new Error("spawn EACCES"));
+
+  const outcome = await Promise.race([
+    mgr.stop().then(() => "resolved"),
+    new Promise(r => setTimeout(() => r("timed-out"), 1000))
+  ]);
+  assert.equal(outcome, "resolved", "stop() must not hang forever after a spawn failure");
+  assert.equal(mgr.getStatus().processRunning, false);
+});
+
+test("C-5: stop() resolves immediately (no signal attempted) when the child never obtained a real pid, independent of whether 'error' has fired yet", async () => {
+  const dir = tempBaseDir();
+  fakeInstalledBinary(dir);
+  const fakeChild = makeFakeChildThatFailsToSpawn(); // pid stays undefined; deliberately never emits anything in this test
+  const mgr = CFM.createProcessManager(dir, { spawnFn: () => fakeChild, ...fakeTimers() });
+
+  await mgr.start("tok");
+  const outcome = await Promise.race([
+    mgr.stop().then(() => "resolved"),
+    new Promise(r => setTimeout(() => r("timed-out"), 1000))
+  ]);
+  assert.equal(outcome, "resolved");
+  assert.equal(fakeChild.killSignals.length, 0, "a child with no real pid must never be sent a signal");
+});
+
+test("C-5: stop() resolves via the 'error' event (not just 'exit') when a child with a real pid errors without ever exiting", async () => {
+  const dir = tempBaseDir();
+  fakeInstalledBinary(dir);
+  const fakeChild = makeFakeChildThatErrorsWithoutExiting();
+  const mgr = CFM.createProcessManager(dir, { spawnFn: () => fakeChild, ...fakeTimers() });
+
+  await mgr.start("tok");
+  const stopPromise = mgr.stop();
+  // stop() is itself serialized (see remote-access/serialize.js) — its real
+  // body, which registers the 'exit'/'error' listeners, runs on a microtask
+  // queued by that wrapper rather than synchronously inside this call. Flush
+  // pending microtasks before emitting, so the emit lands after those
+  // listeners actually exist.
+  await new Promise(r => setImmediate(r));
+  fakeChild.emit("error", new Error("EPIPE"));
+
+  const outcome = await Promise.race([
+    stopPromise.then(() => "resolved"),
+    new Promise(r => setTimeout(() => r("timed-out"), 1000))
+  ]);
+  assert.equal(outcome, "resolved", "stop() must not hang forever waiting only for 'exit' when 'error' fires instead");
 });

@@ -22,8 +22,20 @@ function getConnector(type) {
 function listConnectorTypes() {
   return Object.keys(REGISTRY).map(type => {
     const c = getConnector(type);
-    return { type, label: c.label || type, capabilities: c.capabilities };
+    return { type, label: c.label || type, brand: c.brand || c.label || type, capabilities: c.capabilities };
   });
 }
 
-module.exports = { getConnector, listConnectorTypes, DEFAULT_TYPE, CONNECTOR_TYPES: Object.keys(REGISTRY) };
+// Capabilities are usually fixed per connector module, but a handful of
+// brands (Creality's K2 line: fixed single-color hotend vs a swappable CFS
+// multi-slot box) cover more than one physical configuration under one
+// connector — those export a `getCapabilities(printer)` that reads the
+// printer's own config (e.g. `filamentMode`) to report the right shape.
+// Every other connector doesn't export it, so this falls back to the same
+// static `capabilities` object as before.
+function getCapabilities(type, printer) {
+  const c = getConnector(type);
+  return typeof c.getCapabilities === "function" ? c.getCapabilities(printer) : c.capabilities;
+}
+
+module.exports = { getConnector, listConnectorTypes, getCapabilities, DEFAULT_TYPE, CONNECTOR_TYPES: Object.keys(REGISTRY) };

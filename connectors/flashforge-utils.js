@@ -12,6 +12,7 @@ const fs = require("fs");
 const http = require("http");
 const net = require("net");
 const { Transform } = require("stream");
+const { normHex } = require("../parser");
 
 // Port 8898 is FlashForge's HTTP API port — not the obvious default the way
 // Moonraker's port-80-via-proxy convention is, so it's easy to type just the
@@ -195,8 +196,15 @@ async function getFileMetadata(p, file) {
   const j = await ffPost(p, "/gcodeList", {}, 8000);
   const detail = (j.gcodeListDetail || []).find(f => f.gcodeFileName === file);
   if (!detail) return { palette: [], estimatedTime: null, isFS: false, fsFork: null };
+  // materialColor comes straight from the printer's own JSON with no format
+  // guarantee — every other hex color in the codebase (parsed gcode files,
+  // live head status, flashforge-ad5x.js's own materialColor uses) goes
+  // through normHex(), which enforces a strict #RRGGBB/#RGB shape and
+  // returns null on anything else. Skipping that here let an unvalidated
+  // device-controlled string reach an unescaped `style="background:${...}"`
+  // template in public/app.js.
   const palette = (detail.gcodeToolDatas || []).map((t, i) => ({
-    i, hex: t.materialColor || null, type: t.materialName || "",
+    i, hex: normHex(t.materialColor), type: t.materialName || "",
     wt: t.filamentWeight != null ? String(t.filamentWeight) : "",
     used: true
   }));

@@ -5,6 +5,7 @@
 const http = require("./http-utils");
 
 exports.label = "Klipper (Moonraker)";
+exports.brand = "Klipper";
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true, autoLevel: false,
   unloadFilament: false, firmwareInfo: true, inventory: false, discovery: false,

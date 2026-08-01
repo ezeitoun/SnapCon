@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- SnapCon — index v0.4.1 -->
+<!-- SnapCon — index v0.4.6 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -586,33 +586,79 @@
 
   <div class="modal" id="unloadmodal">
     <div class="modalbox" style="text-align:center;max-width:360px">
-      <div class="modalhdr"><span id="unloadtitle">Unload Filament</span><button class="modalx" id="unloadx">✕</button></div>
+      <div class="modalhdr"><span id="unloadtitle">Unload filament</span><button class="modalx" id="unloadx">✕</button></div>
       <p style="color:var(--ink-dim);font-size:13px;margin:12px 0 18px" id="unloadmsg"></p>
       <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-        <button class="btn primary" id="unloadYes">Yes</button>
-        <button class="btn ghost" id="unloadNo">No</button>
+        <button class="btn primary" id="unloadYes">Unload</button>
+        <button class="btn ghost" id="unloadNo">Cancel</button>
         <button class="btn ghost" id="unloadAll">Unload All</button>
         <button class="btn ghost" id="unloadColorBtn" style="display:none">Color</button>
+        <button class="btn ghost" id="unloadSpoolColorBtn" style="display:none">Change Color</button>
       </div>
       <div id="unloadColorPicker" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-soft)">
         <div id="unloadColorGrid" class="color-grid" style="display:none"></div>
-        <div id="unloadColorGeneric" style="display:none">
-          <div style="display:flex;align-items:center;justify-content:center;gap:10px">
-            <input type="color" id="unloadColorSwatch" value="#ffffff" style="width:40px;height:40px;padding:0;border:1px solid var(--line);border-radius:8px;cursor:pointer;background:none">
-            <input class="field" id="unloadColorHex" placeholder="#RRGGBB" maxlength="7" style="width:110px;text-align:center;font-family:var(--mono);text-transform:uppercase">
-          </div>
-          <div style="display:flex;gap:8px;justify-content:center;margin-top:12px">
-            <button class="btn primary" id="unloadColorSave">Save Color</button>
-          </div>
-        </div>
       </div>
       <div class="pstatus" id="unloadStatus" style="margin-top:10px"></div>
     </div>
   </div>
 
+  <div class="modal" id="spoolColorModal">
+    <div class="modalbox" style="max-width:400px">
+      <div class="modalhdr"><span>Spool color</span><button class="modalx" id="sccX">✕</button></div>
+      <div class="scc-subtitle" id="sccSubtitle"></div>
+      <div class="scc-note">Used for head matching when sending prints. Written to the printer itself — an official Snapmaker RFID spool's color can't be changed.</div>
+
+      <div class="scc-compare">
+        <div class="scc-now-col">
+          <div class="scc-swatch-sm" id="sccNowSwatch"></div>
+          <div class="scc-compare-label">Now</div>
+        </div>
+        <div class="scc-arrow">→</div>
+        <div class="scc-pending-col">
+          <div class="scc-swatch-lg" id="sccPendingSwatch"></div>
+          <div class="scc-pending-text">
+            <div class="scc-pending-name" id="sccPendingName"></div>
+            <div class="scc-pending-hex" id="sccPendingHex"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="scc-tabs">
+        <button type="button" class="scc-tab active" data-scctab="palette">Palette</button>
+        <button type="button" class="scc-tab" data-scctab="custom">Custom</button>
+      </div>
+
+      <div class="scc-tabpane" id="sccPalettePane">
+        <div class="color-grid scc-grid" id="sccPaletteGrid"></div>
+        <div class="scc-recent-hdr" id="sccRecentHdr" style="display:none">Recent on this fleet</div>
+        <div class="color-grid scc-grid" id="sccRecentGrid"></div>
+      </div>
+
+      <div class="scc-tabpane" id="sccCustomPane" style="display:none">
+        <div class="scc-custom-row">
+          <input type="color" id="sccColorInput" class="scc-native-color" title="Pick with the OS color picker">
+          <input class="field scc-hex-field" id="sccHexField" placeholder="#RRGGBB" maxlength="7">
+          <button type="button" class="btn ghost scc-eyedropper" id="sccEyedropper" style="display:none" title="Pick a color from anywhere on screen">👁</button>
+        </div>
+        <div class="scc-hex-error" id="sccHexError" style="display:none"></div>
+        <div class="scc-rgb-row">
+          <label>R<input type="number" min="0" max="255" step="1" id="sccR"></label>
+          <label>G<input type="number" min="0" max="255" step="1" id="sccG"></label>
+          <label>B<input type="number" min="0" max="255" step="1" id="sccB"></label>
+        </div>
+      </div>
+
+      <div class="send-footer">
+        <span class="send-footer-status" id="sccStatus"></span>
+        <button class="btn-base btn-cancel" id="sccCancel">Cancel</button>
+        <button class="btn-base btn-start" id="sccApply">Apply</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="tagsmodal">
     <div class="modalbox" style="max-width:480px">
-      <div class="modalhdr"><span>Edit Tags</span><button class="modalx" id="tagsx">✕</button></div>
+      <div class="modalhdr"><span>Edit tags</span><button class="modalx" id="tagsx">✕</button></div>
       <div class="tags-list" id="tagsList"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
         <button class="btn ghost" id="tagsCancel">Cancel</button>
@@ -623,7 +669,7 @@
 
   <div class="modal" id="bedmodal">
     <div class="modalbox" style="text-align:center;max-width:340px">
-      <div class="modalhdr"><span id="bedmodaltitle">Set Bed Temperature</span><button class="modalx" id="bedmodalx">✕</button></div>
+      <div class="modalhdr"><span id="bedmodaltitle">Set bed temperature</span><button class="modalx" id="bedmodalx">✕</button></div>
       <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px">Enter target temperature (0–100°C, 0 to turn off)</p>
       <input class="field" id="bedmodalinput" type="number" min="0" max="100" placeholder="60" style="text-align:center;font-size:18px;max-width:120px;margin:0 auto">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
@@ -637,7 +683,7 @@
 
   <div class="modal" id="bulkheatmodal">
     <div class="modalbox" style="max-width:480px">
-      <div class="modalhdr"><span>Heat Multiple Printers</span><button class="modalx" id="bulkheatx">✕</button></div>
+      <div class="modalhdr"><span>Heat multiple printers</span><button class="modalx" id="bulkheatx">✕</button></div>
 
       <div class="bulkheat-toolbar">
         <label class="bulkheat-selectall"><input type="checkbox" id="bulkheatSelectAll"> Select all</label>
@@ -676,7 +722,7 @@
 
   <div class="modal" id="subnetModal">
     <div class="modalbox" style="text-align:center;max-width:380px">
-      <div class="modalhdr"><span>Discover Printers</span><button class="modalx" id="subnetModalX">✕</button></div>
+      <div class="modalhdr"><span>Discover printers</span><button class="modalx" id="subnetModalX">✕</button></div>
       <div style="display:flex;gap:18px;justify-content:center;margin-bottom:10px">
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeLocal" value="local" checked> Local network</label>
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeSubnet" value="subnet"> Specific subnet</label>
@@ -693,7 +739,7 @@
 
   <div class="modal" id="newFolderModal">
     <div class="modalbox" style="text-align:center;max-width:340px">
-      <div class="modalhdr"><span>New Folder</span><button class="modalx" id="newFolderModalX">✕</button></div>
+      <div class="modalhdr"><span>New folder</span><button class="modalx" id="newFolderModalX">✕</button></div>
       <input class="field" id="newFolderModalInput" placeholder="Folder name" maxlength="80" style="text-align:center;font-size:14px;max-width:240px;margin:8px auto 0">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
         <button class="btn purple" id="newFolderModalCreate">Create</button>
@@ -784,14 +830,14 @@
 
   <div class="modal" id="browsemodal">
     <div class="modalbox" style="max-width:520px">
-      <div class="modalhdr"><span>Browse for Folder</span><button class="modalx" id="browsex">✕</button></div>
+      <div class="modalhdr"><span>Browse for folder</span><button class="modalx" id="browsex">✕</button></div>
       <div style="display:flex;gap:6px;margin-bottom:10px">
         <input class="field" id="browsepath" style="flex:1;font-family:var(--mono);font-size:12px" placeholder="Type a path or network location…">
-        <button class="btn ghost" id="browsego" style="white-space:nowrap;flex:none">Go</button>
+        <button class="btn ghost" id="browsego" style="white-space:nowrap;flex:none">Open</button>
       </div>
       <div id="browselist" style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;max-height:340px;overflow:auto;min-height:60px"></div>
       <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
-        <span style="font-size:11px;color:var(--ink-faint);flex:1">For network paths type the address and press Go</span>
+        <span style="font-size:11px;color:var(--ink-faint);flex:1">For network paths type the address and press Open</span>
         <button class="btn ghost" id="browsecancel">Cancel</button>
         <button class="btn primary" id="browseok">Select</button>
       </div>
@@ -817,7 +863,7 @@
   <div class="modal" id="snapmodal">
     <div class="modalbox" style="max-width:680px;text-align:center">
       <div class="modalhdr">
-        <span id="snaptitle">Camera Snapshot</span>
+        <span id="snaptitle">Camera snapshot</span>
         <div style="display:flex;align-items:center;gap:8px">
           <button class="btn ghost" id="snaprefresh" style="padding:4px 10px;font-size:11px">↺ Refresh</button>
           <button class="modalx" id="snapx">✕</button>
@@ -842,6 +888,7 @@
         </div>
       </div>
       <div class="send-footer">
+        <div class="print-opts" id="pfileOpts"></div>
         <span class="send-footer-status" id="pfileStatus"></span>
         <button class="btn-base btn-cancel" id="pfilecancel">Cancel</button>
         <button class="btn-base btn-start" id="pfilego" disabled>Print</button>
@@ -851,7 +898,7 @@
 
   <div class="modal" id="sendmodal">
     <div class="modalbox" style="max-width:440px">
-      <div class="modalhdr"><span id="sendtitle">Send to Printers</span><button class="modalx" id="sendmodalx">✕</button></div>
+      <div class="modalhdr"><span id="sendtitle">Send to printers</span><button class="modalx" id="sendmodalx">✕</button></div>
       <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);word-break:break-all" id="sendfilename"></div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px">
         <span style="font-size:12px;color:var(--ink-faint)">Printers</span>
@@ -859,11 +906,42 @@
         <button class="btn ghost" id="sendSelectIdle" style="padding:3px 9px;font-size:11px">Idle only</button>
       </div>
       <div class="send-list" id="sendlist"></div>
+      <div class="print-opts" id="sendOpts"></div>
       <div class="send-footer">
         <span class="send-footer-status" id="sendFooterStatus"></span>
         <button class="btn ghost" id="sendmodalcancel">Cancel</button>
         <button class="btn ghost" id="doUpload">Upload</button>
         <button class="btn primary" id="doUploadPrint">Upload &amp; Print</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shown instead of printing immediately when a printer has "Force default
+       behavior" turned off (Settings > printer > Behavior) — lets this one
+       print override Auto-level/Flow Calibration/Time-lapse instead of
+       silently using the printer's configured defaults. -->
+  <div class="modal" id="quickPrintModal">
+    <div class="modalbox" style="max-width:380px">
+      <div class="modalhdr"><span>Print options</span><button class="modalx" id="qpX">✕</button></div>
+      <div class="scc-subtitle" id="qpSubtitle"></div>
+      <div id="qpOpts"></div>
+      <div class="settings-nested" id="qpExtruderWrap" style="display:none;margin-top:12px">
+        <label class="qp-nested-label">Calibrate flow on</label>
+        <div class="qp-extruder-row" id="qpExtruderRow"></div>
+        <div class="qp-extruder-footer" id="qpExtruderFooter"></div>
+      </div>
+      <div class="pstatus" id="qpStatus" style="margin-top:10px"></div>
+      <!-- Real upload progress (same {fillEl,statusEl} hookup pushTo/pollJob
+           already drive for the send-modal's per-printer rows) — hidden
+           until an upload actually starts (printing an already-queued file
+           has no bytes to upload, so it never shows this). -->
+      <div class="qp-progress" id="qpProgress" style="display:none;position:relative;overflow:hidden;border:1px solid var(--line-soft);border-radius:8px;padding:9px 12px;margin-top:10px">
+        <div class="send-row-fill" id="qpFill"></div>
+        <span class="send-status-txt" id="qpUploadStatus" style="position:relative"></span>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost" id="qpCancel">Cancel</button>
+        <button class="btn primary" id="qpPrint">Start print</button>
       </div>
     </div>
   </div>

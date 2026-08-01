@@ -8,6 +8,10 @@
 //  * So the right answer is "which palette colors does this print use", and the
 //    machine decides which of its 4 heads each lands in.
 
+// No real printer (Snapmaker U1 included) has anywhere near this many
+// logical or physical heads — used to clamp T<n> body tokens (see feed()).
+const MAX_REALISTIC_HEAD_INDEX = 999;
+
 const SKIP = new Set([
   "G0","G1","G2","G3","G4","G17","G28","G29","G90","G91","G92",
   "M82","M83","M84","M104","M105","M106","M107","M109","M140","M190",
@@ -15,9 +19,34 @@ const SKIP = new Set([
   "SET_VELOCITY_LIMIT","EXCLUDE_OBJECT_START","EXCLUDE_OBJECT_END"
 ]);
 
-const CFG_RE = /^\s*;\s*([A-Za-z0-9_ %\[\]\(\)\/.-]+?)\s*=\s*(.*?)\s*$/;
+// Only the KEY side needs a character-class check — the two adjacent \s*
+// quantifiers a single combined regex would need here (one before the key,
+// one between the key and "=") both accept plain spaces, which is exactly
+// the shape that causes catastrophic backtracking: on a comment line with a
+// long run of spaces and no "=", the engine explores every way to split that
+// run between the two quantifiers before giving up. matchCfgLine() below
+// does the same match by hand — indexOf("=") is linear no matter what the
+// line contains, so there's nothing left to backtrack.
+const CFG_KEY_RE = /^[A-Za-z0-9_ %\[\]\(\)\/.-]+$/;
 const INTERESTING = /filament_colou?r|filament_type|filament_vendor|_map|mapping|initial_tool|initial_extruder/i;
 const NOISE = /WIPE_START|WIPE_END|Change Tool|^[;\s]*[A-Za-z0-9+\/]{40,}={0,2}$/;
+
+// Replaces the old single CFG_RE regex — see the comment above for why.
+// Matches "  ; key = value" (arbitrary leading/trailing whitespace, key
+// restricted to CFG_KEY_RE's charset, value is everything after the first
+// "=", trimmed) and returns { key, value }, or null if the line isn't a
+// recognizable "; key = value" comment.
+function matchCfgLine(line) {
+  const afterLeadingWs = line.replace(/^\s+/, "");
+  if (afterLeadingWs[0] !== ";") return null;
+  const afterSemi = afterLeadingWs.slice(1).replace(/^\s+/, "");
+  const eq = afterSemi.indexOf("=");
+  if (eq === -1) return null;
+  const key = afterSemi.slice(0, eq).trim();
+  if (!key || !CFG_KEY_RE.test(key)) return null;
+  const value = afterSemi.slice(eq + 1).trim();
+  return { key, value };
+}
 
 function splitAligned(s) {
   if (s == null) return [];
@@ -60,8 +89,8 @@ function makeParser({ scanBody = false } = {}) {
   const bodyUsed = new Set(); let bodyAny = false; const hist = {};
 
   function feed(line) {
-    const m = line.match(CFG_RE);
-    if (m) cfg[m[1].trim().toLowerCase()] = m[2];
+    const m = matchCfgLine(line);
+    if (m) cfg[m.key.toLowerCase()] = m.value;
     const t = line.trim();
     if (t.startsWith(";") && INTERESTING.test(t) && !NOISE.test(t) && cfgLines.length < 50) {
       cfgLines.push(t);
@@ -71,7 +100,14 @@ function makeParser({ scanBody = false } = {}) {
     if (!code) return;
     const tok = code.split(/\s+/)[0];
     const tm = tok.match(/^T(\d+)$/);
-    if (tm) { bodyUsed.add(parseInt(tm[1], 10)); bodyAny = true; }
+    // No real printer has anywhere near this many logical/physical heads —
+    // clamp before adding to bodyUsed so a corrupt/adversarial file (e.g.
+    // "T99999999999999999999") can't inflate paletteCount below into an
+    // effectively-infinite build loop.
+    if (tm) {
+      const n = parseInt(tm[1], 10);
+      if (n >= 0 && n <= MAX_REALISTIC_HEAD_INDEX) { bodyUsed.add(n); bodyAny = true; }
+    }
     if (!SKIP.has(tok)) hist[tok] = (hist[tok] || 0) + 1;
   }
 
@@ -95,7 +131,13 @@ function makeParser({ scanBody = false } = {}) {
         .map(([k, v]) => String(v).padStart(7) + "  " + k);
     }
 
-    const paletteCount = Math.max(colours.length, types.length, any ? Math.max(...used) + 1 : 0, 1);
+    // Not Math.max(...used): spreading a Set as call arguments hits V8's
+    // apply-argument-count ceiling (~65,536) and throws RangeError once a
+    // file has that many distinct T<n> values — an explicit loop has no
+    // such limit.
+    let maxUsed = -1;
+    if (any) for (const v of used) if (v > maxUsed) maxUsed = v;
+    const paletteCount = Math.max(colours.length, types.length, any ? maxUsed + 1 : 0, 1);
 
     const palette = [];
     for (let i = 0; i < paletteCount; i++) {
@@ -149,4 +191,8 @@ async function parseGcodeMapLines(lines, opts = {}) {
   return p.result();
 }
 
-module.exports = { parseGcodeMap, parseGcodeMapLines, normHex };
+module.exports = {
+  parseGcodeMap, parseGcodeMapLines, normHex,
+  // exported for tests only
+  _internal: { matchCfgLine, MAX_REALISTIC_HEAD_INDEX }
+};

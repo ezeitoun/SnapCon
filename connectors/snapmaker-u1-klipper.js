@@ -6,13 +6,38 @@
 const http = require("./http-utils");
 
 exports.label = "SnapMaker (U1-Klipper)";
+exports.brand = "SnapMaker";
 exports.capabilities = {
   camera: true, filamentHeads: true, excludeObject: true, autoLevel: true,
   unloadFilament: true, firmwareInfo: true, inventory: true, discovery: true,
-  // No documented macro for writing filament_color_rgba back to the
-  // printer (it's touchscreen/RFID-set) — unlike AD5X's msConfig_cmd, there's
-  // nothing to call here yet.
-  webUi: true, setColor: false, singleToolhead: false,
+  // SET_PRINT_FILAMENT_CONFIG (see setFilamentColor below) really does write
+  // filament_color_rgba back to the printer — the same command the
+  // touchscreen itself issues. Verified against dlgambill/u1hub (the
+  // project this codebase forked from), whose implementation was checked
+  // against real U1 hardware.
+  webUi: true, setColor: true, singleToolhead: false,
+  // filamentHeads means "show per-slot status" (colors/materials/active
+  // lane); headMapping means "assigning a model color to a slot in the
+  // print/send UI actually does something" — only true here because
+  // applyHeadMapping below really sends that assignment to the printer.
+  // Kept as a separate flag since a connector can have the former without
+  // the latter (Creality's CFS: real status, no confirmed print-start
+  // slot-selection mechanism to apply a mapping through).
+  headMapping: true,
+  // Per-print options sent via SET_PRINT_PREFERENCES (see applyHeadMapping) —
+  // real, registered U1 firmware parameters (print_task_config.py), not a
+  // guess: BED_LEVEL/FLOW_CALIBRATE/TIME_LAPSE_CAMERA are each an optional
+  // 0/1 int stored into that print's task config and acted on at print start.
+  flowCalibration: true, timelapse: true,
+  // print_task_config.py's SET_PRINT_PREFERENCES also takes a real
+  // FLOW_CALIBRATE_EXTRUDERS='0,2' parameter (confirmed against the actual
+  // Snapmaker/u1-klipper source) restricting which of the 4 physical
+  // extruders get calibrated — the firmware's own flow_calib_extruders
+  // config field defaults to all four, this just lets a job narrow it down
+  // (e.g. only the one toolhead whose filament was just swapped). Not
+  // confirmed for any other connector, so this is its own flag rather than
+  // implied by flowCalibration.
+  flowCalibrationPerExtruder: true,
   // Stock U1 firmware rejects a bed target above 100°C.
   maxBedTemp: 100
 };
@@ -126,16 +151,41 @@ exports.bedTemp = http.bedTemp;
 // Toolhead/color mapping + print preferences (auto-level, flow-calibrate,
 // timelapse) — U1-only macros, sent once before a print starts. Called even
 // when `tools` is empty (no color mapping to apply) so the preferences line
-// — auto-level in particular — still goes out; only the extruder-map macros
-// are conditional on there actually being a mapping (SET_PRINT_USED_EXTRUDERS
-// with an empty EXTRUDERS= list isn't a meaningful thing to send).
-async function applyHeadMapping(p, tools, map) {
+// still goes out; only the extruder-map macros are conditional on there
+// actually being a mapping (SET_PRINT_USED_EXTRUDERS with an empty EXTRUDERS=
+// list isn't a meaningful thing to send).
+//
+// `prefs` (optional): { autoLevel, flowCalibrate, timelapse } booleans from
+// the per-job checkboxes (pfilemodal in app.js — an explicit choice for one
+// print) or a bulk send (sendmodal — always sends explicit values, since
+// there's no single target printer's default to fall back to). Any field
+// left undefined here falls back to that printer's own configured default
+// (Settings > printer > Behavior: Auto-level / Flow calibration / Time-lapse).
+function withPrefFallback(prefValue, printerDefault) {
+  return prefValue !== undefined ? !!prefValue : !!printerDefault;
+}
+async function applyHeadMapping(p, tools, map, prefs = {}) {
   const lines = tools.map(t => `SET_PRINT_EXTRUDER_MAP CONFIG_EXTRUDER=${t} MAP_EXTRUDER=${map[t]}`);
   if (tools.length) {
     const usedHeads = [...new Set(tools.map(t => map[t]))];
     lines.push("SET_PRINT_USED_EXTRUDERS EXTRUDERS=" + usedHeads.join(","));
   }
-  lines.push("SET_PRINT_PREFERENCES BED_LEVEL=" + (p.autoLevel ? "1" : "0") + " FLOW_CALIBRATE=0 TIME_LAPSE_CAMERA=0");
+  const bedLevel = withPrefFallback(prefs.autoLevel, p.autoLevel);
+  const flowCalibrate = withPrefFallback(prefs.flowCalibrate, p.flowCalibrate);
+  const timelapse = withPrefFallback(prefs.timelapse, p.timelapse);
+  let prefsLine = "SET_PRINT_PREFERENCES BED_LEVEL=" + (bedLevel ? "1" : "0") +
+    " FLOW_CALIBRATE=" + (flowCalibrate ? "1" : "0") +
+    " TIME_LAPSE_CAMERA=" + (timelapse ? "1" : "0");
+  // FLOW_CALIBRATE_EXTRUDERS restricts calibration to specific physical
+  // extruders (0-3) — irrelevant, and omitted, unless flow calibration is
+  // actually on for this print. No entry (or an empty list) means "leave the
+  // firmware's own flow_calib_extruders as-is" (defaults to all four), same
+  // as never having sent the parameter at all.
+  if (flowCalibrate && Array.isArray(prefs.flowCalibrateExtruders)) {
+    const idxs = [...new Set(prefs.flowCalibrateExtruders.map(n => parseInt(n, 10)).filter(n => n >= 0 && n <= 3))];
+    if (idxs.length) prefsLine += " FLOW_CALIBRATE_EXTRUDERS='" + idxs.join(",") + "'";
+  }
+  lines.push(prefsLine);
   await http.sendGcode(p, lines.join("\n"));
 }
 exports.applyHeadMapping = applyHeadMapping;
@@ -146,6 +196,49 @@ async function unloadFilament(p, extruders) {
   }
 }
 exports.unloadFilament = unloadFilament;
+
+// ---- Set a slot's stored color on the printer itself ----
+// SET_PRINT_FILAMENT_CONFIG is a real, registered print_task_config.py
+// gcode command — the exact one the touchscreen itself issues — confirmed
+// against dlgambill/u1hub's implementation (this codebase's origin), which
+// was checked against real hardware. Deliberately mirrors that
+// implementation closely rather than reinventing it:
+//  - idle-only: the firmware has no documented "change color mid-print"
+//    story, and there's no reason to risk finding out live.
+//  - a slot with nothing loaded has no color to correct.
+//  - an official Snapmaker RFID spool's color comes from the tag itself —
+//    firmware refuses this write outright unless FORCE=1 is also passed,
+//    which u1hub deliberately never does (forcing it also flips that slot's
+//    filament_official to false). This does the same: block, don't bypass.
+//  - after sending, re-query and confirm the printer actually reports back
+//    the value just sent — SAVE='1' on the gcode line is what u1hub's own
+//    real-hardware testing settled on for this to stick.
+async function setFilamentColor(p, ext, hex) {
+  const slot = parseInt(ext, 10);
+  if (!(slot >= 0 && slot <= 3)) throw new Error("Slot must be 0–3");
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex || ""));
+  if (!m) throw new Error("Color must be RRGGBB hex");
+  const rgba = m[1].toUpperCase() + "FF";
+
+  const { ok, status, json } = await http.fetchJSONTimeout(http.baseUrl(p) + "/printer/objects/query?print_stats&print_task_config", 3500);
+  if (!ok) throw new Error("Moonraker " + status);
+  const st = (json.result || {}).status || {};
+  const state = (st.print_stats || {}).state || "unknown";
+  if (state === "printing" || state === "paused") throw new Error("Printer is " + state + " — colors can only be changed while idle");
+  const ptc = st.print_task_config || {};
+  if (!(ptc.filament_exist || [])[slot]) throw new Error("No filament loaded in slot T" + (slot + 1));
+  if ((ptc.filament_edit || [])[slot] === false) throw new Error("T" + (slot + 1) + " is an official Snapmaker RFID spool — its color comes from the tag and can't be changed");
+
+  await http.sendGcode(p, `SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER='${slot}' FILAMENT_COLOR_RGBA='${rgba}' SAVE='1'`);
+
+  const confirm = await http.fetchJSONTimeout(http.baseUrl(p) + "/printer/objects/query?print_task_config", 3500);
+  if (!confirm.ok) throw new Error("Write sent but read-back failed: Moonraker " + confirm.status);
+  const gotPtc = ((confirm.json.result || {}).status || {}).print_task_config || {};
+  const got = (gotPtc.filament_color_rgba || [])[slot];
+  if (String(got || "").toUpperCase() !== rgba) throw new Error("Write not confirmed — printer reports " + (got || "nothing"));
+  return "#" + m[1].toUpperCase();
+}
+exports.setFilamentColor = setFilamentColor;
 
 // ---- Exclude-object (stock Klipper module — identical to generic Klipper) ----
 exports.getPlate = http.getPlate;

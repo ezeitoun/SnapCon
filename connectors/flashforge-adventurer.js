@@ -12,6 +12,7 @@
 const ff = require("./flashforge-utils");
 
 exports.label = "FlashForge (Adventurer 5M / 5M Pro)";
+exports.brand = "FlashForge";
 exports.capabilities = {
   camera: true, filamentHeads: false, excludeObject: false, autoLevel: false,
   unloadFilament: false, firmwareInfo: false, inventory: false, discovery: false,

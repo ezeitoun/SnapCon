@@ -694,3 +694,45 @@ test("removeRemoteAccess() is a no-op when nothing is provisioned locally", asyn
   const result = await svc.removeRemoteAccess();
   assert.equal(result.ok, true);
 });
+
+// H-2 regression: a corrupted-but-parseable-as-JSON stored key (e.g. a
+// non-atomic write torn by a crash — see RemoteAccessStore.js) used to reach
+// an unguarded `await Ed25519Identity.importPrivateKeyJwk(...)` inside
+// completeRegistrationAndProvision(), called from runRegistrationPoll()'s
+// bare setTimeout callback with no caller left to .catch() it — an unhandled
+// promise rejection that crashes the ENTIRE SnapCon process by Node's
+// default behavior, not just Remote Access. This installs a real
+// process-level 'unhandledRejection' listener for the duration of the test
+// specifically to prove none fires; it does not (and cannot) prove the old,
+// unpatched code was broken without reverting the fix, but it does prove the
+// exact reachable trigger (a corrupted stored key, completing registration)
+// no longer escapes as an unhandled rejection and instead surfaces as a
+// normal, visible error state.
+test("H-2: a corrupted stored Ed25519 key during registration completion sets state=error instead of crashing the process", async () => {
+  const dir = tempBaseDir();
+  // Valid JSON, has the "x" (public) field publicKeyB64UrlFromPrivateJwk()
+  // reads during enable()'s "reuse an existing keypair" branch, but has no
+  // "d" (private) field — WebCrypto's importKey() rejects this for a
+  // ["sign"] usage, which is exactly what completeRegistrationAndProvision()
+  // needs it for. This mirrors a real torn-write corruption: the file is
+  // intact JSON, just missing the field that matters.
+  const corruptedJwk = JSON.stringify({ kty: "OKP", crv: "Ed25519", x: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" });
+  const secureStoreFn = fakeSecureCredentialStoreFn();
+  const seedStore = await secureStoreFn(dir);
+  await seedStore.set("ed25519PrivateKeyJwk", corruptedJwk);
+
+  const svc = makeService(dir, { getSecureCredentialStoreFn: secureStoreFn });
+
+  const unhandled = [];
+  const onUnhandledRejection = e => unhandled.push(e);
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    const result = await svc.enable();
+    assert.equal(result.ok, true, "enable() itself just kicks off registration — the corrupted key isn't touched until the poll completes it");
+    await waitFor(() => svc.getStatus().state === "error", { timeoutMs: 3000 });
+    assert.match(svc.getStatus().lastError, /corrupted|Local identity key/i);
+  } finally {
+    process.removeListener("unhandledRejection", onUnhandledRejection);
+  }
+  assert.equal(unhandled.length, 0, "the corrupted key must never surface as an unhandled promise rejection");
+});
