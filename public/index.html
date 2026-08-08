@@ -1,13 +1,15 @@
 <!DOCTYPE html>
-<!-- SnapCon — index v0.4.6 -->
+<!-- SnapCon — index v0.5.0 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SnapCon</title>
+<link rel="preload" href="/fonts/JetBrainsMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to main content</a>
 <div class="splash" id="splash">
   <img src="/snapcon-icon-large.svg" alt="SnapCon">
   <div class="splash-sub" id="splashsub">connecting to printers…</div>
@@ -16,25 +18,25 @@
   <div class="login-box">
     <img src="/snapcon-icon-large.svg" alt="SnapCon" class="login-logo">
     <div id="loginStep1">
-      <label class="fl">Login name</label>
-      <input class="field" id="loginName" autocomplete="username">
-      <label class="fl" style="margin-top:10px">Password</label>
+      <label class="fl" for="loginName">Login name</label>
+      <input class="field" id="loginName" autocomplete="username" spellcheck="false">
+      <label class="fl" for="loginPassword" style="margin-top:10px">Password</label>
       <input class="field" id="loginPassword" type="password" autocomplete="current-password">
       <div class="login-actions">
         <button class="btn primary" id="loginSubmit">Log in</button>
         <button class="btn ghost" id="loginOtpBtn">Send me a code instead</button>
       </div>
-      <div class="pstatus" id="loginStatus"></div>
+      <div class="pstatus" aria-live="polite" id="loginStatus"></div>
     </div>
     <div id="loginStep2" style="display:none">
       <div class="hint" style="margin-bottom:10px">Enter the code sent to you.</div>
-      <label class="fl">Code</label>
-      <input class="field" id="otpCode" autocomplete="one-time-code" maxlength="8" style="text-transform:uppercase">
+      <label class="fl" for="otpCode">Code</label>
+      <input class="field" id="otpCode" autocomplete="one-time-code" maxlength="8" spellcheck="false" style="text-transform:uppercase">
       <div class="login-actions">
         <button class="btn primary" id="otpSubmit">Verify</button>
         <button class="btn ghost" id="otpBack">Back</button>
       </div>
-      <div class="pstatus" id="otpStatus"></div>
+      <div class="pstatus" aria-live="polite" id="otpStatus"></div>
     </div>
   </div>
 </div>
@@ -61,21 +63,23 @@
     <div class="folderline" id="folderline">…</div>
     <div class="multiselect-bar" id="multiselectBar" style="display:none">
       <span id="multiselectCount"></span>
+      <button class="btn ghost" id="sendToQueueBtn" style="display:none">Send to Queue</button>
       <button class="btn ghost" id="multiselectClear">Clear</button>
     </div>
-    <div class="pstatus" id="fileOpStatus" style="padding:0 14px"></div>
-    <div class="filter"><input id="filter" placeholder="Search files…" /></div>
+    <div class="pstatus" aria-live="polite" id="fileOpStatus" style="padding:0 14px"></div>
+    <div class="filter"><input id="filter" placeholder="Search files…" aria-label="Search files" /></div>
     <div class="list" id="list"></div>
     <input type="file" id="uploadFilesInput" multiple accept=".gcode,.gco,.g,.gx,.3mf" style="display:none">
   </aside>
-  <main class="main">
+  <main class="main" id="main" tabindex="-1">
     <div class="topbar">
       <div class="topbar-brand">
         <img src="/snapcon-icon-small.svg" alt="SnapCon">
-        <span class="topbar-brand-name">SnapCon</span>
+        <span class="topbar-brand-name">SnapCon<span class="topbar-view-label" id="topbarViewLabel"></span></span>
         <span class="vbadge" id="vbadge"></span>
       </div>
-      <input id="fleetSearch" class="fleet-search" placeholder="Search printers…" autocomplete="off">
+      <span class="topbar-sitename" id="topbarSiteName" style="display:none"></span>
+      <input id="fleetSearch" class="fleet-search" placeholder="Search printers…" aria-label="Search printers" autocomplete="off">
       <button class="gear" id="filesBtn" title="Show file list"><img src="/folder.svg" class="topbar-icon" alt="Files"></button>
       <div class="sort-wrap">
         <button class="gear" id="sortBtn" title="Sort printers"><img src="/sort.svg" class="topbar-icon" alt="Sort"></button>
@@ -89,7 +93,12 @@
       <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
       <button class="gear" id="bulkHeatBtn" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" alt="Heat"></button>
       <button class="gear" id="maintBtn" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" alt="Maintenance"></button>
+      <!-- Placeholder icon — a real one is coming later; shown only when Queue Management is enabled. -->
+      <button class="gear" id="queueBtn" title="Queue Management" style="display:none">
+        <svg width="22.1" height="22.1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topbar-icon"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="12" height="4" rx="1"/></svg>
+      </button>
       <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
+      <span class="topbar-clock" id="topbarClock"></span>
       <div class="user-badge" id="userBadge" style="display:none">
         <button class="gear" id="logoutBtn" title="Logout"><img src="/logout.svg" class="topbar-icon" alt="Logout"></button>
       </div>
@@ -105,6 +114,8 @@
         <button class="set-tab" data-tab="firmware">Firmware</button>
         <button class="set-tab" data-tab="users">Users</button>
         <button class="set-tab" data-tab="remote">Remote Access</button>
+        <button class="set-tab" data-tab="logs">Logs</button>
+        <button class="set-tab" data-tab="queue">Queue Management</button>
       </div>
 
       <div class="set-panel" id="tab-general">
@@ -190,14 +201,14 @@
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
               <button class="btn ghost" id="dockerRestartBtn">Restart App</button>
               <span class="settings-help">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
-              <span class="pstatus" id="dockerRestartStatus"></span>
+              <span class="pstatus" aria-live="polite" id="dockerRestartStatus"></span>
             </div>
           </div>
         </div>
 
         <div class="settings-dirty-bar" id="generalDirtyBar" style="display:none">
           <span class="dirty-text"></span>
-          <span class="pstatus" id="generalSaveStatus"></span>
+          <span class="pstatus" aria-live="polite" id="generalSaveStatus"></span>
           <div class="settings-dirty-actions">
             <button class="btn ghost" id="generalDiscard">Discard</button>
             <button class="btn primary" id="generalSaveBtn">Save</button>
@@ -211,17 +222,28 @@
       <div class="setcard">
         <label class="switch-row" for="setTNotation"><input type="checkbox" role="switch" id="setTNotation" class="switch-input"><span class="switch-text"><span class="switch-label">Use T0/T1/T2/T3 notation</span><span class="switch-desc">default: 1–4</span></span></label>
 
-        <label class="fl" style="margin-top:14px">Alternate Display <span class="hint">what the header's view button switches to and from Regular view</span></label>
+        <label class="fl" for="setAltDisplay" style="margin-top:14px">Alternate Display <span class="hint">what the header's view button switches to and from Regular view</span></label>
         <select class="field" id="setAltDisplay" style="max-width:220px">
           <option value="all">All (cycle through every view)</option>
           <option value="compact">Compact View</option>
           <option value="camera">Camera View</option>
           <option value="list">List View</option>
+          <option value="printfarm">Print Farm</option>
         </select>
 
-        <label class="switch-row" for="setOpenCompact" style="margin-top:14px"><input type="checkbox" role="switch" id="setOpenCompact" class="switch-input"><span class="switch-text"><span class="switch-label">Open in Compact Mode</span><span class="switch-desc">start the page in compact view</span></span></label>
+        <label class="fl" for="setDefaultView" style="margin-top:14px">Default View to Launch <span class="hint">which view the app opens to on load</span></label>
+        <select class="field" id="setDefaultView" style="max-width:220px">
+          <option value="regular">Full View</option>
+          <option value="compact">Compact View</option>
+          <option value="camera">Camera View</option>
+          <option value="list">List View</option>
+          <option value="printfarm">Print Farm</option>
+        </select>
 
-        <label class="fl" style="margin-top:14px">Camera View refresh interval <span class="hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
+        <label class="fl" for="setSiteName" style="margin-top:14px">Site Name <span class="hint">shown in the topbar next to the SnapCon logo — leave blank to show nothing</span></label>
+        <input class="field" id="setSiteName" placeholder="e.g. Shop Floor 2" maxlength="60" style="max-width:220px" />
+
+        <label class="fl" for="setCameraRefresh" style="margin-top:14px">Camera View refresh interval <span class="hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
         <input class="field" id="setCameraRefresh" type="number" min="3" max="60" placeholder="6" style="max-width:100px" />
 
         <label class="switch-row" for="setCameraStagger" style="margin-top:14px"><input type="checkbox" role="switch" id="setCameraStagger" class="switch-input" checked><span class="switch-text"><span class="switch-label">Stagger camera refresh across printers</span><span class="switch-desc">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></span></label>
@@ -288,7 +310,7 @@
                   </div>
                   <div class="ntf-provider-footer">
                     <button class="btn ghost" type="button" id="ntfTestNtfy">Send test to ntfy.sh</button>
-                    <span class="pstatus" id="ntfTestNtfyStatus"></span>
+                    <span class="pstatus" aria-live="polite" id="ntfTestNtfyStatus"></span>
                   </div>
                 </div>
               </div>
@@ -316,7 +338,7 @@
                   </div>
                   <div class="ntf-provider-footer">
                     <button class="btn ghost" type="button" id="ntfTestTelegram">Send test to Telegram</button>
-                    <span class="pstatus" id="ntfTestTelegramStatus"></span>
+                    <span class="pstatus" aria-live="polite" id="ntfTestTelegramStatus"></span>
                   </div>
                 </div>
               </div>
@@ -328,7 +350,7 @@
 
         <div class="settings-dirty-bar" id="notifDirtyBar" style="display:none">
           <span class="dirty-text"></span>
-          <span class="pstatus" id="notifSaveStatus"></span>
+          <span class="pstatus" aria-live="polite" id="notifSaveStatus"></span>
           <div class="settings-dirty-actions">
             <button class="btn ghost" id="notifDiscard">Discard</button>
             <button class="btn primary" id="notifSaveBtn">Save</button>
@@ -340,7 +362,7 @@
 
       <div class="set-panel" id="tab-printers" style="display:none">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-        <input class="field" id="printerSearch" placeholder="Search printers…" style="max-width:264px;flex:1;min-width:160px" />
+        <input class="field" id="printerSearch" placeholder="Search printers…" aria-label="Search printers" style="max-width:264px;flex:1;min-width:160px" />
         <button class="btn ghost" id="collapseAll" style="white-space:nowrap;flex:none">Collapse All</button>
         <button class="btn ghost" id="addPrinter" style="white-space:nowrap;flex:none">+ Add</button>
         <button class="btn ghost" id="discover" style="white-space:nowrap;flex:none;display:flex;align-items:center;gap:6px">
@@ -361,7 +383,7 @@
             <button class="btn ghost" id="fwSelect">Select Firmware</button>
             <button class="btn primary" id="fwDeploy">Deploy Firmware</button>
             <span class="hint">reads idle printers only</span>
-            <span class="pstatus" id="fwStatus"></span>
+            <span class="pstatus" aria-live="polite" id="fwStatus"></span>
           </div>
           <div id="fwResults" style="margin-top:14px"></div>
         </div>
@@ -380,7 +402,7 @@
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
               <button class="btn primary" id="bootSubmit">Create Admin</button>
-              <span class="pstatus" id="bootStatus"></span>
+              <span class="pstatus" aria-live="polite" id="bootStatus"></span>
             </div>
           </div>
         </div>
@@ -394,7 +416,7 @@
               <span class="pi-lbl">Resend API Key</span>
               <input class="field" id="setResendKey" type="password" placeholder="re_..." style="max-width:280px" autocomplete="off">
             </div>
-            <label class="fl" style="margin-top:10px">From address</label>
+            <label class="fl" for="setResendFrom" style="margin-top:10px">From address</label>
             <input class="field" id="setResendFrom" placeholder="snapcon@yourdomain.com" style="max-width:280px">
           </div>
           <label style="display:flex;align-items:center;gap:6px">
@@ -419,11 +441,11 @@
           </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
             <button class="btn ghost" type="button" id="otpTest">Test OTP</button>
-            <span class="pstatus" id="otpTestStatus"></span>
+            <span class="pstatus" aria-live="polite" id="otpTestStatus"></span>
           </div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;margin:14px 0 10px">
-          <input class="field" id="userSearch" placeholder="Search users…" style="max-width:220px" />
+          <input class="field" id="userSearch" placeholder="Search users…" aria-label="Search users" style="max-width:220px" />
         </div>
         <div id="setUsers"></div>
         <div class="row" style="margin-top:8px">
@@ -497,15 +519,98 @@
           <pre id="raLogView" class="ra-log" style="display:none"></pre>
         </div>
 
-        <span class="pstatus" id="raStatus" style="display:block;margin-top:4px"></span>
+        <span class="pstatus" aria-live="polite" id="raStatus" style="display:block;margin-top:4px"></span>
+      </div>
+      </div>
+
+      <div class="set-panel" id="tab-logs" style="display:none">
+      <div class="setcard">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input class="field" id="logSearch" placeholder="Search…" aria-label="Search audit log" style="max-width:200px;flex:1;min-width:140px">
+          <select class="field" id="logCategory" style="max-width:150px">
+            <option value="">All categories</option>
+            <option value="auth">Sign-ins</option>
+            <option value="job">Jobs</option>
+            <option value="admin">Admin</option>
+          </select>
+          <input class="field" id="logFrom" type="date" title="From" style="max-width:150px">
+          <input class="field" id="logTo" type="date" title="To" style="max-width:150px">
+          <button class="btn ghost" id="logFilterBtn">Filter</button>
+          <span class="pstatus" aria-live="polite" id="logStatus"></span>
+        </div>
+        <div class="maint-scroll" id="logTableWrap" style="max-height:420px">
+          <table class="maint-table" id="logTable">
+            <thead><tr><th>Time</th><th>Event</th><th>User</th><th>Printer</th><th>Detail</th></tr></thead>
+            <tbody id="logTableBody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn ghost" id="logLoadMore" style="display:none">Load more</button>
+        </div>
+      </div>
+      <div class="setcard" style="margin-top:10px">
+        <div class="settings-field">
+          <label class="settings-label" for="setAuditRetention">Keep logs for, days</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="field" id="setAuditRetention" type="number" min="1" placeholder="90" style="max-width:120px">
+            <button class="btn ghost" id="saveAuditRetention">Save</button>
+            <span class="pstatus" aria-live="polite" id="auditRetentionStatus"></span>
+          </div>
+        </div>
+      </div>
+      </div>
+
+      <div class="set-panel" id="tab-queue" style="display:none">
+      <div class="setcard">
+        <label class="switch-row" for="setQueueEnabled"><input type="checkbox" role="switch" id="setQueueEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">Enable Queue Management</span><span class="switch-desc">Ordered per-printer queues, with a defined way to handle the gap between prints</span></span></label>
+        <div id="queueModeRow" style="margin-top:12px;display:none">
+          <label class="fl" for="setQueueMode">Mode</label>
+          <select class="field" id="setQueueMode" style="max-width:240px">
+            <option value="per-printer">Per-Printer Queue</option>
+            <option value="shared-queue" disabled>Shared Queue (coming later)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="setcard" id="queueStoreWarningCard" style="margin-top:10px;display:none">
+        <div class="settings-warning" id="queueStoreWarning"></div>
+      </div>
+
+      <div class="setcard" id="printerPoolsCard" style="margin-top:10px;display:none">
+        <div class="fl" style="margin-bottom:8px">Printer Pools</div>
+        <div class="settings-help" style="margin-bottom:10px">Each printer belongs to one pool, which defines how the bed gets cleared between prints. "Unassigned" is built in and protected. G-code and API bed-clear are coming in a later update — every pool is Manual for now.</div>
+        <div id="printerPoolsList"></div>
+        <div class="row" style="margin-top:8px">
+          <input class="field" id="newPrinterPoolName" placeholder="New pool name" style="max-width:220px" maxlength="40">
+          <button class="btn ghost" id="addPrinterPoolBtn">+ Add Pool</button>
+        </div>
+        <span class="pstatus" aria-live="polite" id="printerPoolStatus"></span>
       </div>
       </div>
 
       <div class="row" style="margin-top:16px" id="globalSaveRow">
         <button class="btn primary" id="saveCfg">Save</button>
         <button class="btn primary" id="addAllSave" style="display:none">Add All &amp; Save</button>
-        <span class="pstatus" id="cfgStatus"></span>
+        <span class="pstatus" aria-live="polite" id="cfgStatus"></span>
       </div>
+    </div>
+
+    <!-- Full-page Queue Management view — same show/hide idiom as .setup
+         above (display:none / .show{display:block}), not a modal overlay,
+         so it's a real alternative to the Fleet view rather than something
+         layered on top of it. Content (sticky header, stat cards, Queue
+         Status, Fleet Status, per-printer controls) is rendered by
+         openQueueDashboard()/renderQueueDashboard() in app.js. -->
+    <div class="queue-dashboard" id="queueDashboard">
+      <div class="queue-stat-cards">
+        <div class="queue-stat-card queue-stat-util"><span class="queue-stat-value" id="queueUtilPct">0%</span><span class="queue-stat-label">Fleet Utilization</span><span class="queue-stat-frac" id="queueUtilFrac">(0/0)</span></div>
+        <div class="queue-stat-card queue-stat-printing"><span class="queue-stat-value" id="statPrinting">0</span><span class="queue-stat-label">Printing</span></div>
+        <div class="queue-stat-card queue-stat-idle"><span class="queue-stat-value" id="statIdle">0</span><span class="queue-stat-label">Idle</span></div>
+        <div class="queue-stat-card queue-stat-awaiting"><span class="queue-stat-value" id="statAwaiting">0</span><span class="queue-stat-label">Awaiting Sign-off</span></div>
+        <div class="queue-stat-card queue-stat-parts"><span class="queue-stat-value" id="statPartsToday">0</span><span class="queue-stat-label">Parts Today</span></div>
+      </div>
+      <div class="settings-warning" id="queueViewStoreWarning" style="display:none;margin-bottom:10px"></div>
+      <div id="queueDashboardBody"></div>
     </div>
 
     <div class="sechead" id="jobsechead" style="display:none"><h2>Selected Model</h2><span class="count" id="needcount"></span></div>
@@ -547,7 +652,7 @@
           <button id="camBulkResume" class="btn ghost" disabled>Resume</button>
           <button id="camBulkCancel" class="btn ghost" disabled>Cancel</button>
           <button id="camEditTags" class="btn ghost">Edit Tags</button>
-          <span id="camBulkMsg" class="pstatus"></span>
+          <span id="camBulkMsg" class="pstatus" aria-live="polite"></span>
         </div>
       </div>
       <div class="fleet" id="fleet"></div>
@@ -573,7 +678,7 @@
           <button class="btn-base plate-skip-btn" id="plateSkip" disabled>Exclude</button>
         </div>
       </div>
-      <span class="pstatus" id="plateStatus"></span>
+      <span class="pstatus" aria-live="polite" id="plateStatus"></span>
     </div>
   </div>
 
@@ -598,7 +703,7 @@
       <div id="unloadColorPicker" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-soft)">
         <div id="unloadColorGrid" class="color-grid" style="display:none"></div>
       </div>
-      <div class="pstatus" id="unloadStatus" style="margin-top:10px"></div>
+      <div class="pstatus" aria-live="polite" id="unloadStatus" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -656,6 +761,27 @@
     </div>
   </div>
 
+  <div class="modal" id="groupsModal">
+    <div class="modalbox" style="max-width:420px">
+      <div class="modalhdr"><span>Groups</span><button class="modalx" id="groupsModalX">✕</button></div>
+      <div class="settings-help" style="margin-bottom:10px">Which groups can <b id="groupsModalUserName"></b> see and use printers for? Nothing checked falls back to Everyone. Click Save here, then Save on the user's row to apply.</div>
+      <div id="groupsCheckList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
+      <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+        <div class="fl">Manage groups</div>
+        <div id="groupsManageList" style="display:flex;flex-direction:column;gap:6px;margin:8px 0"></div>
+        <div style="display:flex;gap:6px">
+          <input class="field" id="newGroupName" placeholder="New group name" style="flex:1" maxlength="40">
+          <button class="btn ghost" id="addGroupBtn">Add</button>
+        </div>
+        <span class="pstatus" aria-live="polite" id="groupsManageStatus"></span>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <button class="btn ghost" id="groupsModalCancel">Cancel</button>
+        <button class="btn primary" id="groupsModalSave">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="tagsmodal">
     <div class="modalbox" style="max-width:480px">
       <div class="modalhdr"><span>Edit tags</span><button class="modalx" id="tagsx">✕</button></div>
@@ -677,7 +803,7 @@
         <button class="btn ghost" id="bedmodaloff">Off</button>
         <button class="btn ghost" id="bedmodalcancel">Cancel</button>
       </div>
-      <div class="pstatus" id="bedmodalstatus" style="margin-top:10px"></div>
+      <div class="pstatus" aria-live="polite" id="bedmodalstatus" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -691,7 +817,7 @@
       </div>
       <div class="bulkheat-list" id="bulkheatList"></div>
 
-      <label class="fl" style="margin-top:14px">Bed temperature <span class="hint" id="bulkheatCapNote"></span></label>
+      <label class="fl" for="bulkheatSlider" style="margin-top:14px">Bed temperature <span class="hint" id="bulkheatCapNote"></span></label>
       <div class="bulkheat-presets" id="bulkheatPresets">
         <button type="button" class="btn-chip" data-preset="60">PLA <span>60°</span></button>
         <button type="button" class="btn-chip" data-preset="80">PETG <span>80°</span></button>
@@ -733,7 +859,7 @@
         <button class="btn purple" id="subnetModalScan">Scan</button>
         <button class="btn ghost" id="subnetModalCancel">Cancel</button>
       </div>
-      <div class="pstatus" id="subnetModalStatus" style="margin-top:10px"></div>
+      <div class="pstatus" aria-live="polite" id="subnetModalStatus" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -745,7 +871,7 @@
         <button class="btn purple" id="newFolderModalCreate">Create</button>
         <button class="btn ghost" id="newFolderModalCancel">Cancel</button>
       </div>
-      <div class="pstatus" id="newFolderModalStatus" style="margin-top:10px"></div>
+      <div class="pstatus" aria-live="polite" id="newFolderModalStatus" style="margin-top:10px"></div>
     </div>
   </div>
 
@@ -754,11 +880,11 @@
       <div class="modalhdr"><span>Maintenance</span><button class="modalx" id="maintReportX">✕</button></div>
       <div class="maint-toprow">
         <div class="maint-field" style="flex:1">
-          <label class="fl">Printer</label>
+          <label class="fl" for="maintPrinterSel">Printer</label>
           <select class="field" id="maintPrinterSel"></select>
         </div>
         <div class="maint-field" style="flex:none;width:150px">
-          <label class="fl">Date</label>
+          <label class="fl" for="maintDate">Date</label>
           <input class="field" id="maintDate" type="date">
         </div>
       </div>
@@ -771,13 +897,13 @@
 
         <div class="maint-form">
           <div class="maint-field">
-            <label class="fl">Component</label>
+            <label class="fl" for="maintComponentFilter">Component</label>
             <input class="field" id="maintComponentFilter" placeholder="Filter or type a new component…" autocomplete="off">
           </div>
 
           <div class="maint-row2">
             <div class="maint-field">
-              <label class="fl">Remind me</label>
+              <label class="fl" for="maintFrequency">Remind me</label>
               <select class="field" id="maintFrequency">
                 <option value="none">Don't remind</option>
                 <option value="weekly">Weekly</option>
@@ -796,21 +922,21 @@
 
           <div class="maint-row2">
             <div class="maint-field">
-              <label class="fl">Cost (<span id="maintCostCurrency">$</span>)</label>
+              <label class="fl" for="maintCost">Cost (<span id="maintCostCurrency">$</span>)</label>
               <input class="field" id="maintCost" type="number" min="0" step="0.01" value="0.00">
             </div>
             <div class="maint-field">
-              <label class="fl">Part or supplier <span class="hint">optional</span></label>
+              <label class="fl" for="maintPart">Part or supplier <span class="hint">optional</span></label>
               <input class="field" id="maintPart" placeholder="e.g. E3D, Amazon…">
             </div>
           </div>
 
           <div class="maint-field">
-            <label class="fl">Notes</label>
+            <label class="fl" for="maintComment">Notes</label>
             <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea>
           </div>
 
-          <div class="pstatus" id="maintStatus"></div>
+          <div class="pstatus" aria-live="polite" id="maintStatus"></div>
           <div class="maint-footer">
             <label class="maint-offline-check"><input type="checkbox" id="maintOfflineToggle"> Take printer offline</label>
             <div class="maint-footer-actions">
@@ -847,7 +973,7 @@
   <div class="modal" id="elecmodal">
     <div class="modalbox" style="max-width:380px">
       <div class="modalhdr"><span>Look up electricity rate</span><button class="modalx" id="elecmodalx">✕</button></div>
-      <label class="fl" style="margin-bottom:8px">US ZIP code</label>
+      <label class="fl" for="elecZip" style="margin-bottom:8px">US ZIP code</label>
       <div style="display:flex;gap:8px">
         <input class="field" id="elecZip" placeholder="e.g. 33301" maxlength="5" style="max-width:130px">
         <button class="btn primary" id="elecLookup">Look up</button>
@@ -879,7 +1005,7 @@
       <div class="modalhdr"><span id="pfiletitle">Print from printer</span><button class="modalx" id="pfilex">✕</button></div>
       <div class="pfile-body">
         <div class="pfile-left">
-          <input class="field" id="pfileSearch" placeholder="Search files…" style="width:100%;margin-bottom:8px">
+          <input class="field" id="pfileSearch" placeholder="Search files…" aria-label="Search files" style="width:100%;margin-bottom:8px">
           <div class="pfile-list" id="pfilelist"></div>
         </div>
         <div class="pfile-right">
@@ -916,6 +1042,32 @@
     </div>
   </div>
 
+  <div class="modal" id="sendQueueModal">
+    <div class="modalbox" style="max-width:560px">
+      <div class="modalhdr"><span>Send to Queue</span><button class="modalx" id="sendQueueX">✕</button></div>
+      <div id="sendQueueFiles" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px"></div>
+      <div class="maint-field" style="margin-bottom:10px">
+        <label class="fl" for="sendQueuePool">Printer Pool</label>
+        <select class="field" id="sendQueuePool" style="max-width:100%"></select>
+      </div>
+      <div class="maint-field" style="margin-bottom:10px" id="sendQueueModeWrap">
+        <label class="fl">How to send</label>
+        <div style="display:flex;gap:14px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="print-on-all" checked> Print on All</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="distribute"> Distribute</label>
+        </div>
+      </div>
+      <div class="settings-help" style="margin-bottom:8px">Preview</div>
+      <div class="maint-scroll" id="sendQueuePreview" style="max-height:160px;margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+        <span class="pstatus" aria-live="polite" id="sendQueueStatus" style="margin-right:auto"></span>
+        <button class="btn ghost" id="sendQueueCancel">Cancel</button>
+        <button class="btn ghost" id="sendQueueAdd" title="Starts eligible idle printers immediately. Jobs for busy printers remain queued.">Add to Queue</button>
+        <button class="btn primary" id="sendQueueAddStart" title="Starts eligible idle printers immediately. Jobs for busy printers remain queued.">Add &amp; Start Now</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Shown instead of printing immediately when a printer has "Force default
        behavior" turned off (Settings > printer > Behavior) — lets this one
        print override Auto-level/Flow Calibration/Time-lapse instead of
@@ -930,7 +1082,7 @@
         <div class="qp-extruder-row" id="qpExtruderRow"></div>
         <div class="qp-extruder-footer" id="qpExtruderFooter"></div>
       </div>
-      <div class="pstatus" id="qpStatus" style="margin-top:10px"></div>
+      <div class="pstatus" aria-live="polite" id="qpStatus" style="margin-top:10px"></div>
       <!-- Real upload progress (same {fillEl,statusEl} hookup pushTo/pollJob
            already drive for the send-modal's per-printer rows) — hidden
            until an upload actually starts (printing an already-queued file

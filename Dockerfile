@@ -18,9 +18,11 @@ RUN npm pkg delete devDependencies \
 # `Error: Cannot find module './auth'` the moment the container actually
 # runs. Keep this in sync with server.js's top-of-file require() list as new
 # top-level modules are added.
-COPY server.js parser.js auth.js ./
+COPY server.js parser.js auth.js groupAccess.js ./
 COPY connectors ./connectors
 COPY remote-access ./remote-access
+COPY audit ./audit
+COPY queue ./queue
 COPY public ./public
 
 # config.json and gcode/ are expected to be mounted as volumes (see

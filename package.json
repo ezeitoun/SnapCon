@@ -1,11 +1,11 @@
 {
   "name": "snapcon",
-  "version": "0.4.6",
+  "version": "0.5.0",
   "private": true,
   "type": "commonjs",
   "bin": "server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.5"
   },
   "scripts": {
     "start": "node server.js",

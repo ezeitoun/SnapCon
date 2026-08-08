@@ -6,6 +6,8 @@ config.json
 users.json
 queued-files.json
 remote-access-data
+audit-data
+data
 gcode/*.gcode
 gcode/*.mapped.gcode
 .github

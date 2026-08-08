@@ -8,3 +8,8 @@ config.json
 users.json
 queued-files.json
 remote-access-data/
+audit-data/
+data/
+.claude/
+.agents/
+skills-lock.json

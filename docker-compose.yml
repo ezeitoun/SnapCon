@@ -43,6 +43,15 @@ services:
       - ./gcode:/app/gcode                          # your Orca output folder
       - ./users.json:/app/users.json                # User Access Management accounts
       - ./remote-access-data:/app/remote-access-data # Remote Access tunnel identity/token
+      # The whole directory, not just audit-data/audit.db — SQLite's WAL mode
+      # writes -wal/-shm sidecar files alongside it, which a single-file mount
+      # would leave behind (and silently lose) on every container recreate.
+      - ./audit-data:/app/audit-data                 # Settings > Logs audit trail
+      # A directory mount, not a single file — Queue Management's
+      # queue-data.json is written via a temp-file-then-rename-with-backup
+      # sequence (crash-safe atomic replace), which only works reliably when
+      # the temp file and the real one share the same underlying mount.
+      - ./data:/app/data                              # Queue Management state (only used if the feature is enabled)
       # Optional — without it, a container recreate just forgets which
       # printers have a file sitting on them ready to print (nothing lost,
       # just re-upload/re-select). Same "pre-create as a FILE" caveat as

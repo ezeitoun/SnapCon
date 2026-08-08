@@ -6,7 +6,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||'Unknown Error'), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.4.6";
+const VERSION = "0.5.0";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -75,6 +75,180 @@ function connectorCaps(type){
 let USERS_ENABLED = false, CURRENT_USER = null;
 function isAdmin(){ return !USERS_ENABLED || (CURRENT_USER && CURRENT_USER.role==='admin'); }
 function canAct(){ return !USERS_ENABLED || (CURRENT_USER && (CURRENT_USER.role==='regular'||CURRENT_USER.role==='admin')); }
+
+// Groups (Audit feature): loaded fresh whenever Settings opens, since both
+// the Users tab's Groups modal and the Printers tab's Access checklist read
+// from this same cache rather than each fetching their own copy.
+let GROUPS = [];
+const GROUP_EVERYONE_ID = "grp_everyone";
+async function loadGroupsUI(){
+  try{ GROUPS = await getJSON("/api/groups"); }
+  catch{ GROUPS = []; }
+  // Every already-rendered Printers-tab row baked its Access checklist into
+  // static HTML at row-creation time — it has no way to notice the group
+  // list changed elsewhere (e.g. a group added from the Users tab's Groups
+  // modal) unless something explicitly re-renders it, so do that here on
+  // every refresh rather than only at initial page load.
+  refreshAllPrinterGroupChecklists();
+}
+function refreshAllPrinterGroupChecklists(){
+  document.querySelectorAll("#setPrinters .prow").forEach(row=>{
+    const list=row.querySelector(".pgroups-list");
+    if(!list) return;
+    const checked=[...list.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value);
+    list.innerHTML=groupsChecklistHtml(checked);
+    list.querySelectorAll(".pgroups-chk").forEach(el=>{
+      el.addEventListener("input", markPrintersDirty);
+      el.addEventListener("change", markPrintersDirty);
+    });
+  });
+}
+
+// ---- Queue Management: feature flag + Printer Pools cache, loaded
+// fresh whenever Settings opens (same convention as GROUPS). ----
+let QUEUE_MANAGEMENT_ENABLED = false;
+let PRINTER_POOLS = [];
+let QUEUE_STORE_STATUS = { storeDegraded: false, storeStoppedByAdmin: false, queueStoreRecoveryRequired: false };
+async function loadQueueManagementUI(){
+  try{
+    const status = await getJSON("/api/queue-management/status");
+    QUEUE_MANAGEMENT_ENABLED = !!status.enabled;
+    QUEUE_STORE_STATUS = status.store || QUEUE_STORE_STATUS;
+    $("setQueueEnabled").checked = QUEUE_MANAGEMENT_ENABLED;
+    $("queueModeRow").style.display = QUEUE_MANAGEMENT_ENABLED ? "" : "none";
+    $("printerPoolsCard").style.display = QUEUE_MANAGEMENT_ENABLED ? "" : "none";
+  }catch{ QUEUE_MANAGEMENT_ENABLED = false; }
+  try{ PRINTER_POOLS = await getJSON("/api/printer-pools"); }
+  catch{ PRINTER_POOLS = []; }
+  // Printer -> pool assignments can change server-side without this
+  // client's PRINTERS_CFG snapshot knowing — a bulk auto-assign to Default
+  // Manual the moment the feature gets enabled, or a reassignment saved
+  // from a different tab/session. Patch printerPoolId back in from a
+  // fresh /api/config read rather than trusting the stale array (same class
+  // of bug already fixed once for the Access-groups checklist).
+  if(QUEUE_MANAGEMENT_ENABLED && isAdmin()){
+    try{
+      const cfg = await getJSON("/api/config");
+      (cfg.printers||[]).forEach(p=>{
+        const entry=PRINTERS_CFG.find(x=>x.id===p.id);
+        if(entry) entry.printerPoolId=p.printerPoolId;
+      });
+    }catch{}
+  }
+  renderQueueStoreWarning();
+  renderPrinterPoolsList();
+  refreshAllPrinterPoolDropdowns();
+  document.querySelectorAll("[data-queue-section]").forEach(el=>{ el.style.display = QUEUE_MANAGEMENT_ENABLED ? "" : "none"; });
+  // applyRoleUI() is the authority for queueBtn's visibility (enablement +
+  // whether Settings/the Queue dashboard is currently open) — this runs
+  // async, resolving after Settings has already opened, so it must defer to
+  // that rather than unconditionally showing the button out from under it.
+  applyRoleUI();
+}
+function printerPoolOptionsHtml(selectedId){
+  if(!PRINTER_POOLS.length) return `<option value="">No pools yet</option>`;
+  return `<option value="">— none —</option>`+PRINTER_POOLS.map(p=>`<option value="${esc(p.id)}" ${p.id===selectedId?"selected":""}>${esc(p.name)}</option>`).join("");
+}
+// Reads the selected value from PRINTERS_CFG (the source of truth once
+// loadQueueManagementUI has resynced it), not from whatever the dropdown's
+// DOM happened to already show — this field self-saves immediately on
+// change, so there's never a legitimate "unsaved local edit" to preserve.
+function refreshAllPrinterPoolDropdowns(){
+  document.querySelectorAll("#setPrinters .prow").forEach(row=>{
+    const sel=row.querySelector(".pprinterpool");
+    if(!sel) return;
+    const entry=PRINTERS_CFG.find(p=>p.id===row.dataset.printerId);
+    sel.innerHTML=printerPoolOptionsHtml(entry?entry.printerPoolId:sel.value);
+  });
+}
+
+function renderQueueStoreWarning(){
+  const card=$("queueStoreWarningCard"), box=$("queueStoreWarning");
+  if(!card||!box) return;
+  const s=QUEUE_STORE_STATUS;
+  if(!QUEUE_MANAGEMENT_ENABLED || (!s.storeDegraded && !s.storeStoppedByAdmin && !s.queueStoreRecoveryRequired)){
+    card.style.display="none"; return;
+  }
+  card.style.display="";
+  if(s.queueStoreRecoveryRequired){
+    box.innerHTML=`<div class="settings-warning-title">Queue data could not be recovered</div>`+
+      `<div>Both the queue state file and its backup were unreadable. All queue automation is paused, and the damaged files have been kept for inspection rather than discarded. This can't be undone — resetting starts every printer's queue empty.</div>`+
+      `<div style="margin-top:10px;display:flex;gap:8px;align-items:center">`+
+      `<input class="field" id="queueResetConfirm" placeholder='Type RESET to confirm' style="max-width:200px">`+
+      `<button class="btn ghost danger" id="queueAckResetBtn">Reset Queue Data</button>`+
+      `<span class="pstatus" id="queueAckResetStatus"></span>`+
+      `</div>`;
+    $("queueAckResetBtn").addEventListener("click",async()=>{
+      const st=$("queueAckResetStatus");
+      st.className="pstatus work"; st.textContent="Resetting…";
+      try{
+        const r=checkAuthFailure(await postJSON("/api/queue-store/acknowledge-reset",{confirm:$("queueResetConfirm").value}));
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        await loadQueueManagementUI();
+      }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+    });
+    return;
+  }
+  const parts=[];
+  if(s.storeDegraded) parts.push(`<div>Queue state is not currently durable — automatic retry in progress.</div>`);
+  if(s.storeStoppedByAdmin) parts.push(`<div>Queue automation was manually stopped for every printer.</div>`);
+  box.innerHTML=`<div class="settings-warning-title">Queue Management needs attention</div>`+parts.join("")+
+    `<div style="margin-top:10px;display:flex;gap:8px">`+
+    (s.storeDegraded?`<button class="btn ghost" id="queueRetrySaveBtn">Retry Save</button>`:"")+
+    (s.storeStoppedByAdmin?`<button class="btn ghost" id="queueResumeAllBtn">Resume All Queues</button>`:`<button class="btn ghost" id="queueStopAllBtn">Stop All Queues</button>`)+
+    `<span class="pstatus" id="queueStoreActionStatus"></span>`+
+    `</div>`;
+  if($("queueRetrySaveBtn")) $("queueRetrySaveBtn").addEventListener("click",()=>queueStoreAction("/api/queue-store/retry-save"));
+  if($("queueResumeAllBtn")) $("queueResumeAllBtn").addEventListener("click",()=>queueStoreAction("/api/queue-store/resume-all"));
+  if($("queueStopAllBtn")) $("queueStopAllBtn").addEventListener("click",()=>queueStoreAction("/api/queue-store/stop-all"));
+}
+async function queueStoreAction(url){
+  const st=$("queueStoreActionStatus");
+  if(st){ st.className="pstatus work"; st.textContent="Working…"; }
+  try{
+    const r=checkAuthFailure(await postJSON(url,{}));
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    await loadQueueManagementUI();
+  }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
+}
+
+function renderPrinterPoolsList(){
+  const list=$("printerPoolsList");
+  if(!list) return;
+  list.innerHTML=PRINTER_POOLS.map(p=>{
+    const isDefault=p.isDefault;
+    return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px" data-printerpool="${esc(p.id)}">`+
+      `<input class="field printerpool-rename" value="${esc(p.name)}" maxlength="40" ${isDefault?"disabled":""} style="flex:1">`+
+      `<span class="pi-lbl" style="flex:none">${esc(p.type)}</span>`+
+      (isDefault?"":`<button type="button" class="btn ghost printerpool-delete" title="Delete pool">×</button>`)+
+      `</div>`;
+  }).join("");
+  list.querySelectorAll(".printerpool-rename").forEach(inp=>{
+    const orig=inp.value;
+    inp.addEventListener("change",async()=>{
+      const id=inp.closest("[data-printerpool]").dataset.printerpool;
+      const name=inp.value.trim();
+      if(!name||name===orig){ inp.value=name||orig; return; }
+      try{
+        const r=checkAuthFailure(await fetch("/api/printer-pools/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})}));
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        await loadQueueManagementUI();
+      }catch(e){ alert(e.message); inp.value=orig; }
+    });
+  });
+  list.querySelectorAll(".printerpool-delete").forEach(btn=>{
+    btn.addEventListener("click",async()=>{
+      const id=btn.closest("[data-printerpool]").dataset.printerpool;
+      const p=PRINTER_POOLS.find(x=>x.id===id);
+      if(!confirm('Delete pool "'+(p?p.name:"")+'"? Printers must be reassigned first if any are still using it.')) return;
+      try{
+        const r=checkAuthFailure(await fetch("/api/printer-pools/"+id,{method:"DELETE"}));
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        await loadQueueManagementUI();
+      }catch(e){ alert(e.message); }
+    });
+  });
+}
 
 // ---- /orca/<printer name> deep link — "_" = space, case-insensitive — shows
 // only that printer's fleet card. Read once at load; the path doesn't change
@@ -308,24 +482,40 @@ function applyFilesOpen(){
   // though the selection itself is remembered (reopening brings it right
   // back, no need to reselect). Orca mode already hides this permanently.
   if(!URL_PRINTER_FILTER){
-    const show=FILES_OPEN&&!!MAP;
+    // Also suppressed while the Queue dashboard is showing — it replaces
+    // the Fleet content area these two belong to, so they'd otherwise
+    // reappear stacked on top of it instead of the Fleet grid they expect.
+    const show=FILES_OPEN&&!!MAP&&!$("queueDashboard").classList.contains("show");
     $("jobsechead").style.display=show?"":"none";
     $("jobcard").classList.toggle("show",show);
   }
 }
 
-// ---- Regular / Compact / Camera / List view cycle ----
-// Launch state comes from the "Open in Compact Mode" setting (loadConfigUI);
+// ---- Regular / Compact / Camera / List / Print Farm view cycle ----
+// Launch state comes from the "Default View to Launch" setting (loadConfigUI);
 // the header button only switches the current session. The button's icon
 // always shows the NEXT mode a click will switch to (existing convention).
-let VIEW_MODE = 'regular'; // 'regular' | 'compact' | 'camera' | 'list'
+// 'printfarm' is Queue Management's own full-page dashboard, not a body-class
+// CSS mode like the other four — see openQueueDashboard()/closeQueueDashboard()
+// for how entering/leaving it is kept in sync with this same VIEW_MODE.
+let VIEW_MODE = 'regular'; // 'regular' | 'compact' | 'camera' | 'list' | 'printfarm'
 // Settings tab (View)'s "Alternate Display" — 'all' cycles through every
 // view (the original behavior); any specific mode instead makes the header
 // button a plain two-way toggle between Regular and that one view only.
-let ALT_DISPLAY = 'all'; // 'all' | 'compact' | 'camera' | 'list'
-const ALL_CYCLE = { regular:'compact', compact:'camera', camera:'list', list:'regular' };
-const VIEW_ICON  = { regular:'/view-regular.svg', compact:'/view-compact.svg', camera:'/view-camera.svg', list:'/view-list.svg' };
-const VIEW_TITLE = { regular:'Switch to full view', compact:'Switch to compact view', camera:'Switch to camera view', list:'Switch to list view' };
+let ALT_DISPLAY = 'all'; // 'all' | 'compact' | 'camera' | 'list' | 'printfarm'
+const ALL_CYCLE = { regular:'compact', compact:'camera', camera:'list', list:'printfarm', printfarm:'regular' };
+const VIEW_ICON  = { regular:'/view-regular.svg', compact:'/view-compact.svg', camera:'/view-camera.svg', list:'/view-list.svg', printfarm:'/view-printfarm.svg' };
+const VIEW_TITLE = { regular:'Switch to full view', compact:'Switch to compact view', camera:'Switch to camera view', list:'Switch to list view', printfarm:'Switch to Print Farm view' };
+// Extracted from applyViewMode() so the printfarm path (which bypasses the
+// body-class logic below — see cycleViewMode()) can still keep the header
+// button's icon/title showing the correct next mode.
+function syncViewModeButtonIcon(){
+  const btn=$('compactBtn');
+  if(btn){
+    const next=nextViewMode();
+    btn.querySelector('img').src=VIEW_ICON[next]; btn.title=VIEW_TITLE[next];
+  }
+}
 function nextViewMode(){
   if(ALT_DISPLAY==='all') return ALL_CYCLE[VIEW_MODE] || 'regular';
   // Two-state toggle regardless of how VIEW_MODE got here (e.g. left over
@@ -339,6 +529,17 @@ function nextViewMode(){
 // there's no reason for a printer's tag or selection state to reset just
 // because the user switched between two views that both show it.
 function gridToolbarActive(){ return VIEW_MODE==='camera' || VIEW_MODE==='list'; }
+// Shows which non-default view is active right next to the SnapCon name —
+// Queue Management takes priority over the four fleet display modes since
+// it's a separate page, not one of them; the standard fleet view shows
+// nothing extra. Called from applyViewMode() and the Queue dashboard's own
+// open/close, the only two things that change which view is current.
+function updateTopbarViewLabel(){
+  const el=$("topbarViewLabel");
+  if(!el) return;
+  const label=({camera:"Camera View", compact:"Compact View", list:"List View", printfarm:"Print Farm View"})[VIEW_MODE]||"";
+  el.textContent=label?"("+label+")":"";
+}
 function applyViewMode(){
   document.body.classList.toggle('compact', VIEW_MODE==='compact');
   document.body.classList.toggle('camview', VIEW_MODE==='camera');
@@ -348,11 +549,7 @@ function applyViewMode(){
   // silently carrying over a stale selection or filter from a previous
   // session; switching between camera and list preserves it.
   if(!gridToolbarActive()){ CAM_SELECTED.clear(); CAM_TAB='all'; CAM_TAG_FILTER=''; }
-  const btn = $('compactBtn');
-  if(btn){
-    const next=nextViewMode();
-    btn.querySelector('img').src = VIEW_ICON[next]; btn.title = VIEW_TITLE[next];
-  }
+  syncViewModeButtonIcon();
   // Camera view polls each printer's snapshot on every fast metadata tick —
   // the server (not the client poll interval) is what actually throttles
   // real camera hardware (see getSnapshotThrottled() in server.js), so
@@ -360,9 +557,23 @@ function applyViewMode(){
   // timer immediately on a mode switch rather than waiting for it to
   // naturally fire next.
   if($("setRefresh")) startFleetRefresh();
+  updateTopbarViewLabel();
 }
 function cycleViewMode(){
-  VIEW_MODE = nextViewMode();
+  const next=nextViewMode();
+  const wasPrintFarm=VIEW_MODE==='printfarm';
+  if(next==='printfarm'){
+    // Not reachable if the feature is off — fall back to Regular rather
+    // than try to open a dashboard that isn't available. QUEUE_MANAGEMENT_ENABLED
+    // is only known once Settings has loaded at least once (loadQueueManagementUI);
+    // treat "unknown yet" the same as "off" here, since this is a live user
+    // click, not a launch-time default that already waited on that load.
+    if(!QUEUE_MANAGEMENT_ENABLED){ VIEW_MODE='regular'; applyViewMode(); renderFleet(); return; }
+    openQueueDashboard(); // sets VIEW_MODE + syncs the button icon itself
+    return;
+  }
+  if(wasPrintFarm) closeQueueDashboard();
+  VIEW_MODE=next;
   applyViewMode();
   renderFleet();
 }
@@ -411,6 +622,7 @@ async function doLoginPassword(){
   const loginName=$("loginName").value.trim(), password=$("loginPassword").value;
   const st=$("loginStatus");
   if(!loginName||!password){ st.className="pstatus err"; st.textContent="Enter a login name and password"; return; }
+  const btn=$("loginSubmit"); btn.disabled=true;
   st.className="pstatus work"; st.textContent="Logging in…";
   try{
     const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loginName,password})});
@@ -418,11 +630,13 @@ async function doLoginPassword(){
     if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     onLoginSuccess(d.user);
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 }
 async function doRequestOtp(){
   const loginName=$("loginName").value.trim();
   const st=$("loginStatus");
   if(!loginName){ st.className="pstatus err"; st.textContent="Enter your login name first"; return; }
+  const btn=$("loginOtpBtn"); btn.disabled=true;
   st.className="pstatus work"; st.textContent="Sending code…";
   try{
     const r=await fetch("/api/login/otp/request",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loginName})});
@@ -435,11 +649,13 @@ async function doRequestOtp(){
     $("otpCode").value=""; $("otpStatus").textContent="";
     $("otpCode").focus();
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 }
 async function doVerifyOtp(){
   const code=$("otpCode").value.trim();
   const st=$("otpStatus");
   if(!code){ st.className="pstatus err"; st.textContent="Enter the code"; return; }
+  const btn=$("otpSubmit"); btn.disabled=true;
   st.className="pstatus work"; st.textContent="Verifying…";
   try{
     const r=await fetch("/api/login/otp/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loginName:OTP_LOGIN_NAME,code})});
@@ -447,6 +663,7 @@ async function doVerifyOtp(){
     if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     onLoginSuccess(d.user);
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 }
 function wireLoginOverlay(){
   $("loginSubmit").addEventListener("click", doLoginPassword);
@@ -494,8 +711,16 @@ function applyRoleUI(){
   const settingsOpen = $("setup").classList.contains("show");
   $("gear").style.display = admin ? "" : "none";
   if($("maintBtn")) $("maintBtn").disabled = !act;
+  // The Queue dashboard is a normal part of the working UI, not an
+  // exclusive full-page takeover like Settings — every other topbar
+  // control (folder, sort, compact view, bulk heat, maintenance, Settings
+  // itself) stays available while it's open, so only Settings gates these.
   if($("filesBtn")) $("filesBtn").style.display = (act && !settingsOpen) ? "" : "none";
   if($("jobSend")) $("jobSend").style.display = act ? "" : "none";
+  // queueBtn must never hide itself while the Queue dashboard it opened is
+  // still showing — it's the only way back to Fleet (mirrors #gear staying
+  // visible/clickable the whole time Settings is open).
+  if($("queueBtn")) $("queueBtn").style.display = (QUEUE_MANAGEMENT_ENABLED && !settingsOpen) ? "" : "none";
   if(USERS_ENABLED && CURRENT_USER){
     // First name if set, else fall back to the login name.
     const uname=CURRENT_USER.firstName||CURRENT_USER.loginName;
@@ -507,6 +732,20 @@ function applyRoleUI(){
   renderVbadge();
   renderFleet();
 }
+
+// Always-on topbar clock — lives in the persistent topbar (near Settings),
+// not any one view, so it ticks regardless of which screen is open. Full
+// date is a title tooltip rather than permanent text, to keep it out of the
+// way of the icon row it sits in.
+function tickTopbarClock(){
+  const el=$("topbarClock");
+  if(!el) return;
+  const now=new Date();
+  el.textContent=now.toLocaleTimeString([], { hour12:false });
+  el.title=now.toLocaleDateString([], { weekday:"long", month:"long", day:"numeric", year:"numeric" });
+}
+tickTopbarClock();
+setInterval(tickTopbarClock, 1000);
 
 init();
 async function init(){
@@ -527,6 +766,7 @@ async function init(){
     if(topSort) topSort.style.display="none";
     if($("compactBtn")) $("compactBtn").style.display="none";
     if($("gear")) $("gear").style.display="none";
+    if($("topbarClock")) $("topbarClock").style.display="none";
     if($("jobsechead")) $("jobsechead").style.display="none";
     if($("jobloading")) $("jobloading").style.display="none";
     if($("jobcard")) $("jobcard").style.display="none";
@@ -576,9 +816,43 @@ function wireUI(){
   $("sccApply").addEventListener("click", doApplySpoolColor);
   wireModal("quickPrintModal", closeQuickPrintModal, ["qpX","qpCancel"]);
   $("qpPrint").addEventListener("click", doQuickPrint);
+  // Single-button toggle, same convention as #gear: click opens the
+  // dashboard, clicking it again while open closes it — there's no separate
+  // close/X button now that this is a full-page view, not a modal.
+  $("queueBtn").addEventListener("click", ()=>{
+    if($("queueDashboard").classList.contains("show")) closeQueueDashboard();
+    else openQueueDashboard();
+  });
+  wireModal("sendQueueModal", closeSendQueueModal, ["sendQueueX","sendQueueCancel"]);
+  $("sendToQueueBtn").addEventListener("click", openSendQueueModal);
+  $("sendQueuePool").addEventListener("change", renderSendQueuePreview);
+  document.querySelectorAll('input[name="sendQueueMode"]').forEach(r=>r.addEventListener("change", renderSendQueuePreview));
+  $("sendQueueAdd").addEventListener("click", ()=>doSendQueue(false));
+  $("sendQueueAddStart").addEventListener("click", ()=>doSendQueue(true));
   wireModal("tagsmodal", closeTagsModal, ["tagsx","tagsCancel"]);
   $("tagsSave").addEventListener("click", saveTagsEditor);
   $("camEditTags").addEventListener("click", openTagsEditor);
+  wireModal("groupsModal", closeGroupsModal, ["groupsModalX","groupsModalCancel"]);
+  $("groupsModalSave").addEventListener("click", ()=>{
+    if(GROUPS_MODAL_ROW) GROUPS_MODAL_ROW.dataset.groupIds=JSON.stringify(checkedGroupIds());
+    closeGroupsModal();
+  });
+  $("addGroupBtn").addEventListener("click", async ()=>{
+    const name=$("newGroupName").value.trim();
+    const st=$("groupsManageStatus");
+    if(!name){ st.className="pstatus err"; st.textContent="Enter a name"; return; }
+    st.className="pstatus work"; st.textContent="Adding…";
+    try{
+      const r=await fetch("/api/groups",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      const kept=checkedGroupIds();
+      await loadGroupsUI();
+      $("newGroupName").value="";
+      renderGroupsCheckList(kept);
+      renderGroupsManageList();
+      st.className="pstatus ok"; st.textContent="Added";
+    }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  });
   document.querySelectorAll("#camTabs button[data-camtab]").forEach(b=>{
     b.addEventListener("click",()=>{ CAM_TAB=b.dataset.camtab; renderFleet(); });
   });
@@ -768,6 +1042,41 @@ function wireUI(){
     btn.addEventListener("click", ()=>showSetTab(btn.dataset.tab));
   });
 
+  $("logFilterBtn").addEventListener("click", ()=>loadAuditLogUI(true));
+  $("logLoadMore").addEventListener("click", ()=>{ LOG_OFFSET+=LOG_LIMIT; loadAuditLogUI(false); });
+  $("saveAuditRetention").addEventListener("click", async ()=>{
+    const st=$("auditRetentionStatus");
+    const days=parseInt($("setAuditRetention").value,10);
+    if(!days||days<1){ st.className="pstatus err"; st.textContent="Enter a positive number of days"; return; }
+    st.className="pstatus work"; st.textContent="Saving…";
+    try{
+      const r=checkAuthFailure(await postJSON("/api/config",{auditRetentionDays:days}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      st.className="pstatus ok"; st.textContent="Saved";
+    }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  });
+
+  $("setQueueEnabled").addEventListener("change", async function(){
+    const wantOn=this.checked;
+    try{
+      await postJSON(wantOn?"/api/queue-management/enable":"/api/queue-management/disable",{});
+      await loadQueueManagementUI();
+    }catch(e){ this.checked=!wantOn; alert(e.message); }
+  });
+  $("addPrinterPoolBtn").addEventListener("click", async ()=>{
+    const st=$("printerPoolStatus");
+    const name=$("newPrinterPoolName").value.trim();
+    if(!name){ st.className="pstatus err"; st.textContent="Enter a name"; return; }
+    st.className="pstatus work"; st.textContent="Adding…";
+    try{
+      const r=checkAuthFailure(await postJSON("/api/printer-pools",{name}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      $("newPrinterPoolName").value="";
+      st.className="pstatus ok"; st.textContent="Added";
+      await loadQueueManagementUI();
+    }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  });
+
   $("fwGet").addEventListener("click", loadFirmware);
   $("fwSelect").addEventListener("click", ()=>{ const st=$("fwStatus"); st.className="pstatus"; st.textContent="Select Firmware — not implemented yet"; });
   $("fwDeploy").addEventListener("click", ()=>{ const st=$("fwStatus"); st.className="pstatus"; st.textContent="Deploy Firmware — not implemented yet"; });
@@ -942,10 +1251,12 @@ function renderList(){
     const b=document.createElement("div");
     b.className="job"+(SELECTED===filePath?" active":"")+(SELECTED_FILES.has(filePath)?" multi-selected":"");
     b.draggable=true; b.dataset.file=filePath;
+    b.tabIndex=0; b.setAttribute("role","button");
     const fsBadge=(SELECTED===filePath&&MAP&&MAP.isFS)?` <img src="/fs-badge.svg" class="fs-badge" title="Full Spectrum">`:``;
     b.innerHTML=`<div class="jn">${esc(stripExt(f.name))}${fsBadge}</div>`+
       `<div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
     b.addEventListener("click",e=>fileRowClick(e,filePath,shownPaths));
+    b.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); fileRowClick(e,filePath,shownPaths); } });
     list.appendChild(b);
   });
 }
@@ -1001,7 +1312,8 @@ function updateMultiSelectUI(){
   const n=SELECTED_FILES.size, bar=$("multiselectBar");
   if(n>0){
     bar.style.display="";
-    $("multiselectCount").textContent=n+(n===1?" file":" files")+" selected — drag onto a folder to move";
+    $("multiselectCount").textContent=n+(n===1?" file":" files")+" selected";
+    if($("sendToQueueBtn")) $("sendToQueueBtn").style.display=QUEUE_MANAGEMENT_ENABLED?"":"none";
     $("jobcard").classList.remove("show");
     $("jobloading").classList.remove("show");
     if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none";
@@ -1013,6 +1325,709 @@ function updateMultiSelectUI(){
     }
   }
 }
+
+// ---- Send to Queue modal — multi-file version of the "Send to printers"
+// flow, targeting one Printer Pool instead of individually-checked
+// printers. `SELECTED_FILES` holds full relative paths (the same string
+// /api/print already accepts as `file` directly); the queue routes want
+// {name, sub} split apart instead, so that split happens once here. ----
+let SEND_QUEUE_ITEMS=[];
+function splitFilePath(fp){
+  const idx=fp.lastIndexOf("/");
+  return idx===-1 ? {sub:"",name:fp} : {sub:fp.slice(0,idx), name:fp.slice(idx+1)};
+}
+function openSendQueueModal(){
+  SEND_QUEUE_ITEMS=[...SELECTED_FILES].map(fp=>{ const {sub,name}=splitFilePath(fp); return {path:fp, name, sub, quantity:1}; });
+  renderSendQueueFiles();
+  $("sendQueuePool").innerHTML=PRINTER_POOLS.length
+    ? PRINTER_POOLS.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")
+    : `<option value="">No pools yet — add one in Settings</option>`;
+  $("sendQueueModeWrap").style.display=SEND_QUEUE_ITEMS.length>1?"":"none";
+  const modeInput=document.querySelector('input[name="sendQueueMode"][value="print-on-all"]');
+  if(modeInput) modeInput.checked=true;
+  $("sendQueueStatus").className="pstatus"; $("sendQueueStatus").textContent="";
+  renderSendQueuePreview();
+  $("sendQueueModal").classList.add("show");
+}
+function closeSendQueueModal(){ $("sendQueueModal").classList.remove("show"); }
+function renderSendQueueFiles(){
+  $("sendQueueFiles").innerHTML=SEND_QUEUE_ITEMS.map((it,i)=>
+    `<div style="display:flex;align-items:center;gap:8px">`+
+    `<span style="flex:1;font-size:12px;font-family:var(--mono);color:var(--ink-dim);word-break:break-all">${esc(it.name)}</span>`+
+    `<span class="pi-lbl">×</span>`+
+    `<input type="number" class="field sendq-qty" data-idx="${i}" min="1" max="50" value="${it.quantity}" style="max-width:90px">`+
+    `</div>`
+  ).join("");
+  $("sendQueueFiles").querySelectorAll(".sendq-qty").forEach(inp=>{
+    inp.addEventListener("input",()=>{
+      const idx=parseInt(inp.dataset.idx,10);
+      SEND_QUEUE_ITEMS[idx].quantity=Math.max(1,Math.min(50,parseInt(inp.value,10)||1));
+      renderSendQueuePreview();
+    });
+  });
+}
+// Purely client-side, deterministic given files×quantities×mode×the target
+// pool's printer list — no server round-trip needed just to preview.
+function renderSendQueuePreview(){
+  const box=$("sendQueuePreview");
+  const poolId=$("sendQueuePool").value;
+  const modeInput=document.querySelector('input[name="sendQueueMode"]:checked');
+  const mode=modeInput?modeInput.value:"print-on-all";
+  const printers=PRINTERS_CFG.filter(p=>p.printerPoolId===poolId);
+  if(!printers.length){ box.innerHTML=`<div class="settings-help">No printers are assigned to this pool yet.</div>`; return; }
+  const expanded=[];
+  SEND_QUEUE_ITEMS.forEach(it=>{ for(let i=0;i<it.quantity;i++) expanded.push(it); });
+  const perPrinter=printers.map(()=>[]);
+  if(mode==="print-on-all"){
+    printers.forEach((p,pi)=>{ perPrinter[pi]=expanded.slice(); });
+  } else {
+    expanded.forEach((it,i)=>{ perPrinter[i%printers.length].push(it); });
+  }
+  box.innerHTML=printers.map((p,pi)=>{
+    const counts=new Map();
+    perPrinter[pi].forEach(it=>counts.set(it.name,(counts.get(it.name)||0)+1));
+    const line=[...counts.entries()].map(([n,c])=>esc(n)+" ×"+c).join(", ")||"(nothing)";
+    return `<div style="font-size:12px;padding:3px 0"><b>${esc(p.name)}</b>: ${line}</div>`;
+  }).join("");
+}
+async function doSendQueue(startImmediately){
+  const st=$("sendQueueStatus");
+  const poolId=$("sendQueuePool").value;
+  if(!poolId){ st.className="pstatus err"; st.textContent="Choose a Printer Pool"; return; }
+  if(!SEND_QUEUE_ITEMS.length){ st.className="pstatus err"; st.textContent="No files selected"; return; }
+  const modeInput=document.querySelector('input[name="sendQueueMode"]:checked');
+  const mode=modeInput?modeInput.value:"print-on-all";
+  st.className="pstatus work"; st.textContent="Sending…";
+  try{
+    const r=checkAuthFailure(await postJSON("/api/queue/send",{
+      files: SEND_QUEUE_ITEMS.map(it=>({name:it.name, sub:it.sub, quantity:it.quantity})),
+      poolId, mode, startImmediately
+    }));
+    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    closeSendQueueModal();
+    SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); renderList();
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+
+// ---- Queue Management view — the operational control panel, not just a
+// status viewer: reordering isn't implemented yet in this first pass, but
+// every failure-resolution/pause/stop/confirm action lives here, grouped by
+// Printer Pool (design doc §A7). Implemented as a modal, same convention
+// as Maintenance/Bulk-heat, rather than a dedicated full-page view. ----
+let QUEUE_VIEW_DATA={}, QUEUE_VIEW_TIMER=null;
+const QUEUE_ATTENTION_RESOLUTIONS={
+  "print-failed": [["resume","Resume"],["retry","Retry Job"],["skip","Skip Job"],["stop","Stop Queue"]],
+  "dispatch-failed": [["retry","Retry Job"],["skip","Skip Job"],["stop","Stop Queue"]],
+  "bed-clear-failed": [["retry-bed-clear","Retry Bed-Clear"],["skip-bed-clear","Skip Bed-Clear & Proceed"],["stop","Stop Queue"]],
+  "file-missing": [["skip","Skip Job"],["stop","Stop Queue"]],
+  "file-changed": [["accept-file-change","Use Current File"],["skip","Skip Job"],["stop","Stop Queue"]],
+  "pool-invalid": [["stop","Stop Queue"]],
+  "recovery-mismatch": [["acknowledge","Acknowledge & Resume"],["stop","Stop Queue"]],
+  "recovery-interrupted": [["retry","Retry Job"],["skip","Skip Job"],["stop","Stop Queue"]],
+  "recovery-unknown-outcome": [["resume","Resume"],["retry","Retry Job"],["skip","Skip Job"],["stop","Stop Queue"]]
+};
+// Fleet, Settings, and Queue Management are mutually exclusive full-page
+// views (same show/hide idiom as .setup) — openQueueDashboard()/
+// closeQueueDashboard() are the ONLY path in or out, so timer creation and
+// teardown can never be duplicated or skipped regardless of which of the
+// several entry points (queueBtn click, gear opening Settings on top of an
+// open dashboard) triggered it.
+function openQueueDashboard(){
+  if($("queueDashboard").classList.contains("show")) return;
+  $("queueDashboard").classList.add("show");
+  // Only the Fleet-specific CONTENT is swapped out for the dashboard (can't
+  // show the printer grid and the dashboard at once) — every topbar
+  // control (folder, sort, compact view, bulk heat, maintenance, Settings)
+  // stays visible and usable, unlike Settings' own exclusive takeover.
+  document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none");
+  $("queueBtn").title="Back to Fleet";
+  // Kept in sync with VIEW_MODE regardless of which button opened this
+  // (the dedicated queueBtn, or the alternate-display cycle button when
+  // configured to include Print Farm) — this is the one place both paths
+  // funnel through, so the cycle button's own icon/title always reflects
+  // reality no matter how the dashboard got opened.
+  VIEW_MODE='printfarm';
+  syncViewModeButtonIcon();
+  updateTopbarViewLabel();
+  refreshQueueDashboard();
+  if(!QUEUE_VIEW_TIMER) QUEUE_VIEW_TIMER=setInterval(refreshQueueDashboard, 5000);
+}
+function closeQueueDashboard(){
+  if(!$("queueDashboard").classList.contains("show")) return;
+  if(QUEUE_VIEW_TIMER){ clearInterval(QUEUE_VIEW_TIMER); QUEUE_VIEW_TIMER=null; }
+  $("queueDashboard").classList.remove("show");
+  document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="");
+  $("queueBtn").title="Queue Management";
+  if(VIEW_MODE==='printfarm'){ VIEW_MODE='regular'; syncViewModeButtonIcon(); }
+  updateTopbarViewLabel();
+  // applyRoleUI() is the authority for filesBtn/gear/queueBtn/jobSend (role +
+  // canAct() + whether Settings is open + Queue Management's own enablement)
+  // — restoring those by hand here would regress a View-role user or a
+  // Queue-disabled install into seeing controls they shouldn't, exactly the
+  // "show everything unconditionally" bug this replaces.
+  applyRoleUI();
+}
+function fleetRowForPrinterId(pid){
+  const idx=PRINTERS_CFG.findIndex(p=>p.id===pid);
+  return idx===-1?null:FLEET.find(f=>f.id===idx);
+}
+async function refreshQueueDashboard(){
+  try{
+    const status=await getJSON("/api/queue-management/status");
+    QUEUE_STORE_STATUS=status.store||QUEUE_STORE_STATUS;
+  }catch{}
+  const managedIds=PRINTERS_CFG.filter(p=>p.printerPoolId).map(p=>p.id);
+  const results=await Promise.all(managedIds.map(id=>getJSON("/api/queue/"+id).catch(()=>null)));
+  QUEUE_VIEW_DATA={};
+  managedIds.forEach((id,i)=>{ if(results[i]) QUEUE_VIEW_DATA[id]=results[i]; });
+  renderQueueDashboard();
+}
+
+// ---- Fleet Status / stat-card categorization — ONE precedence chain shared
+// by both, so a printer is never shown as "printing" in one place and "idle"
+// in the other. Highest-wins order: offline > error > awaiting sign-off >
+// stopped > printing > idle (queuePaused with no other condition just folds
+// into idle — the reference legend has no separate "paused" category). ----
+// Paused reuses --violet, the same hue the Fleet card's own Pause/Resume
+// buttons already use elsewhere in this app (.btn-pause/.btn-resume) — one
+// consistent color for "paused" everywhere rather than inventing a second
+// one just for this chip. Offline gets its own --offline token (a warm
+// gray) instead of reusing --idle's cool gray — the two used to be visually
+// indistinguishable at chip size, icon or no icon.
+const QUEUE_STATUS_CATEGORY_COLOR = { offline:"var(--offline)", error:"var(--bad)", awaiting:"var(--ok)", stopped:"var(--signal)", paused:"var(--violet)", printing:"var(--busy)", idle:"var(--idle)" };
+const QUEUE_STATUS_CATEGORY_LABEL = { offline:"Offline", error:"Error", awaiting:"Awaiting sign-off", stopped:"Stopped", paused:"Paused", printing:"Printing", idle:"Idle" };
+function printerQueueCategory(p){
+  const fleetRow=fleetRowForPrinterId(p.id);
+  if(!fleetRow||!fleetRow.online) return "offline";
+  const qs=QUEUE_VIEW_DATA[p.id];
+  if((qs&&qs.queueState==="queue_attention_required")||fleetRow.state==="error") return "error";
+  // A printer can be physically printing without the QUEUE knowing anything
+  // about it — Queue Management only intercepts an upload while the printer
+  // is already busy; a print started while idle (direct upload, or from the
+  // printer's own screen) goes through the legacy path entirely, leaving
+  // qs.queueState at "idle" the whole time. Fleet Status is describing the
+  // fleet's real physical state, so the live probe's state is the primary
+  // signal here — the queue's own busy states (dispatching/bed_clear_running)
+  // only matter for the moments the probe alone wouldn't yet show "printing"
+  // (e.g. mid-upload, before the printer has actually started).
+  if(fleetRow.state==="printing"||(qs&&["dispatching","printing","bed_clear_running"].includes(qs.queueState))) return "printing";
+  if(qs&&qs.queueState==="awaiting_bed_clear") return "awaiting";
+  // queuePaused/queueStopped are orthogonal booleans (see QueueEngine) — a
+  // printer can technically carry both; Stopped wins since it's the more
+  // deliberate, longer-lived action of the two.
+  if(qs&&qs.queueStopped) return "stopped";
+  if(qs&&qs.queuePaused) return "paused";
+  return "idle";
+}
+function queueLocalDateKey(ts){ const d=new Date(ts); return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
+function isToday(ts){ return ts!=null && queueLocalDateKey(ts)===queueLocalDateKey(Date.now()); }
+function fmtElapsedSince(ts){
+  const secs=Math.max(0, Math.round((Date.now()-ts)/1000));
+  const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/60);
+  if(h>0) return h+"h "+m+"m";
+  if(m>0) return m+"m";
+  return secs+"s";
+}
+
+function computeQueueStats(){
+  const managed=PRINTERS_CFG.filter(p=>p.printerPoolId);
+  const counts={printing:0, idle:0, awaiting:0, stopped:0, paused:0, error:0, offline:0};
+  managed.forEach(p=>{ counts[printerQueueCategory(p)]++; });
+  let partsToday=0;
+  managed.forEach(p=>{
+    const qs=QUEUE_VIEW_DATA[p.id]; if(!qs) return;
+    (qs.recentHistory||[]).forEach(it=>{ if(it.status==="completed" && isToday(it.finishedAt)) partsToday++; });
+  });
+  return { counts, active:counts.printing, total:managed.length, partsToday };
+}
+
+// ---- Queue Status ("Active Projects") — one card per Printer Pool, one
+// progress row per distinct filename currently active in it. Discrete item
+// counts (completed/printing/queued) are the denominator; only the
+// "effective completed" numerator carries a live progress fraction, so the
+// percentage moves smoothly but the denominator never does (design doc
+// correction round). No QueueEngine/QueueStore changes — purely a client-
+// side aggregation over data already served today. ----
+function computeActiveProjectsForPool(pool){
+  const printers=PRINTERS_CFG.filter(p=>p.printerPoolId===pool.id);
+  const byName=new Map();
+  const entryFor=name=>{ let e=byName.get(name); if(!e){ e={ activeCreatedAts:[], printingProgress:[], queuedCount:0, historyCompleted:[], brands:new Set() }; byName.set(name,e); } return e; };
+  printers.forEach(p=>{
+    const qs=QUEUE_VIEW_DATA[p.id]; if(!qs) return;
+    const fleetRow=fleetRowForPrinterId(p.id);
+    if(qs.currentItem && qs.queueState==="printing"){
+      const e=entryFor(qs.currentItem.file.name);
+      e.activeCreatedAts.push(qs.currentItem.createdAt);
+      e.printingProgress.push((fleetRow&&typeof fleetRow.progress==="number")?fleetRow.progress:0);
+      if(fleetRow&&fleetRow.brand) e.brands.add(fleetRow.brand);
+    }
+    (qs.queue||[]).forEach(it=>{
+      const e=entryFor(it.file.name);
+      e.activeCreatedAts.push(it.createdAt);
+      e.queuedCount++;
+      if(fleetRow&&fleetRow.brand) e.brands.add(fleetRow.brand);
+    });
+    (qs.recentHistory||[]).forEach(it=>{
+      if(it.status!=="completed") return;
+      const e=entryFor(it.file.name);
+      e.historyCompleted.push(it.finishedAt);
+      if(fleetRow&&fleetRow.brand) e.brands.add(fleetRow.brand);
+    });
+  });
+  const rows=[];
+  byName.forEach((e,name)=>{
+    if(e.activeCreatedAts.length){
+      const windowStart=Math.min(...e.activeCreatedAts);
+      const completedCount=e.historyCompleted.filter(ts=>ts>=windowStart).length;
+      const printingCount=e.printingProgress.length;
+      const queuedCount=e.queuedCount;
+      const totalCount=completedCount+printingCount+queuedCount;
+      const effectiveCompleted=completedCount+e.printingProgress.reduce((a,b)=>a+b,0);
+      const pct=totalCount?Math.round(effectiveCompleted/totalCount*100):0;
+      rows.push({ kind:"active", name, completedCount, printingCount, queuedCount, totalCount, pct, windowStart, brands:[...e.brands] });
+    } else {
+      const completedToday=e.historyCompleted.filter(isToday).length;
+      if(completedToday>0) rows.push({ kind:"completed-today", name, completedCount:completedToday, brands:[...e.brands] });
+    }
+  });
+  return rows;
+}
+function renderActiveProjectRow(r){
+  if(r.kind==="completed-today"){
+    return `<div class="queue-project-row">`+
+      `<div class="queue-project-name">${esc(r.name)}</div>`+
+      `<div class="queue-project-meta"><span class="queue-status-badge" style="color:var(--ok)">Completed</span> ${r.completedCount} today</div>`+
+      `</div>`;
+  }
+  const brands=r.brands.length?esc(r.brands.join(", ")):"";
+  return `<div class="queue-project-row">`+
+    `<div class="queue-project-name">${esc(r.name)}</div>`+
+    `<div class="queue-project-bar"><div class="queue-project-fill" style="width:${r.pct}%"></div></div>`+
+    `<div class="queue-project-meta">${r.completedCount} completed · ${r.printingCount} printing · ${r.queuedCount} queued — ${r.pct}%</div>`+
+    `<div class="queue-project-footer">So far: ${fmtElapsedSince(r.windowStart)}${brands?" · "+brands:""}</div>`+
+    `</div>`;
+}
+function renderActiveProjectsSection(pools){
+  return `<div class="fl" style="margin:16px 0 8px">Queue Status</div>`+
+    pools.map(g=>{
+      const rows=computeActiveProjectsForPool(g.pool);
+      const body=rows.length ? rows.map(renderActiveProjectRow).join("") : `<div class="settings-help">Nothing active right now.</div>`;
+      return `<div class="setcard" style="margin-bottom:12px">`+
+        `<div class="fl" style="margin-bottom:8px">${esc(g.pool.name)}</div>`+
+        body+
+        `</div>`;
+    }).join("");
+}
+
+// ---- Fleet Status — per-pool rows of colored, labeled printer chips + a
+// legend. Every chip carries a text tooltip (name + status word) and the
+// badges/legend already spell status out in text, so nothing here is ever
+// conveyed by color alone. ----
+// Multi-select legend filter over the chip strips — empty means "show
+// everything" (the default); survives re-renders the same way
+// QUEUE_EXPANDED_ROWS does, since renderQueueDashboard() rebuilds this
+// section's innerHTML on every 5s poll.
+let QUEUE_FLEET_STATUS_FILTER=new Set();
+// Offline reads as a glyph, not a color — a plain dot can't be told apart
+// from "idle" by anyone who can't distinguish the two dim grays, and this
+// state specifically means "someone needs to walk over," which is a bigger
+// deal than idle. currentColor so it always matches --status-color like the
+// dot it replaces.
+const QUEUE_OFFLINE_ICON=`<svg class="qchip-icon" viewBox="0 0 8 8" width="8" height="8" aria-hidden="true"><circle cx="4" cy="4" r="3" fill="none" stroke="currentColor" stroke-width="1"></circle><line x1="1.8" y1="1.8" x2="6.2" y2="6.2" stroke="currentColor" stroke-width="1"></line></svg>`;
+// Per-chip fill percent (printing only) + the extra tooltip fact each state
+// contributes beyond "name — state": current file/percent, offline-since,
+// or the actual fault, so nothing is ever titled with just a state word.
+function fleetChipDetail(p, cat, fleetRow, qs){
+  if(cat==="printing"){
+    const file=(qs&&qs.currentItem)?qs.currentItem.file.name:((fleetRow&&fleetRow.filename)||"");
+    const pct=(fleetRow&&typeof fleetRow.progress==="number")?Math.round(fleetRow.progress*100):null;
+    return { fillPct:pct||0, extra:[file, pct!=null?pct+"%":""].filter(Boolean).join(", ") };
+  }
+  if(cat==="offline") return { fillPct:0, extra:offlineSinceLabel(p.id, false) };
+  if(cat==="error"){
+    const msg=(qs&&qs.attentionDetail&&qs.attentionDetail.message)||(qs&&qs.attentionReason)||(fleetRow&&fleetRow.error)||"";
+    // Only a real hardware error (the printer itself reporting state:error)
+    // is something "eject the loaded file" can fix — a queue_attention_required
+    // caused by e.g. a missing/changed file has nothing physically loaded to
+    // release, and already has its own Retry/Skip/Stop resolution controls
+    // in the Printers section below, so no click hint is added for that case.
+    const hw=fleetRow&&fleetRow.state==="error";
+    return { fillPct:0, extra:[msg, hw?"click to release":""].filter(Boolean).join(" — ") };
+  }
+  if(cat==="awaiting") return { fillPct:0, extra:"Waiting for bed clear" };
+  if(cat==="stopped") return { fillPct:0, extra:"Queue stopped — click to release" };
+  if(cat==="paused") return { fillPct:0, extra:"Queue paused — click to resume" };
+  return { fillPct:0, extra:"" };
+}
+function renderFleetStatusSection(pools){
+  const rows=pools.map(g=>{
+    const cats=g.printers.map(printerQueueCategory);
+    const counts={};
+    cats.forEach(c=>{ counts[c]=(counts[c]||0)+1; });
+    const chips=g.printers.map((p,i)=>{
+      const cat=cats[i], color=QUEUE_STATUS_CATEGORY_COLOR[cat], label=QUEUE_STATUS_CATEGORY_LABEL[cat];
+      const fleetRow=fleetRowForPrinterId(p.id), qs=QUEUE_VIEW_DATA[p.id];
+      const { fillPct, extra }=fleetChipDetail(p, cat, fleetRow, qs);
+      const title=[p.name+" — "+label, extra].filter(Boolean).join(": ");
+      const hidden=QUEUE_FLEET_STATUS_FILTER.size && !QUEUE_FLEET_STATUS_FILTER.has(cat);
+      // Stopped/Paused never clear themselves (nothing in the queue-management
+      // lifecycle un-sets either flag except an explicit Resume) and a real
+      // hardware error (the printer itself reporting state:error, not just a
+      // queue-side attention item) can be released the same way the Fleet
+      // card's own Eject button would — by ejecting whatever's loaded. Every
+      // other state either resolves on its own (printing/idle/awaiting) or
+      // needs a real decision the chip can't make for you (queue attention).
+      const hwError=cat==="error" && fleetRow && fleetRow.state==="error";
+      const actionable=cat==="stopped"||cat==="paused"||hwError;
+      const tag=actionable?"button":"span";
+      const attrs=actionable?` type="button" data-printer="${esc(p.id)}" data-cat="${esc(cat)}"`:"";
+      return `<${tag} class="queue-chip${actionable?" qchip-actionable":""}${hidden?" qchip-hidden":""}"${attrs} style="--status-color:${color}" title="${esc(title)}">`+
+        (cat==="printing"?`<span class="qchip-fill" style="width:${fillPct}%"></span>`:"")+
+        (cat==="offline"?QUEUE_OFFLINE_ICON:`<span class="qchip-dot" aria-hidden="true"></span>`)+
+        `<span class="qchip-label">${esc(p.name)}</span>`+
+        `</${tag}>`;
+    }).join("");
+    const badges=Object.keys(QUEUE_STATUS_CATEGORY_LABEL).filter(c=>counts[c]).map(c=>
+      `<span class="queue-status-badge" style="color:${QUEUE_STATUS_CATEGORY_COLOR[c]}">${counts[c]} ${esc(QUEUE_STATUS_CATEGORY_LABEL[c])}</span>`
+    ).join("");
+    return `<div class="queue-fleet-row">`+
+      `<div class="queue-fleet-name">`+
+      `<div class="queue-fleet-name-row"><b title="${esc(g.pool.name)}">${esc(g.pool.name)}</b><span class="queue-mode-badge">${esc(g.pool.type)}</span></div>`+
+      `<span class="queue-fleet-count">${g.printers.length} printer${g.printers.length===1?"":"s"}</span>`+
+      `</div>`+
+      `<div class="queue-fleet-chips">${chips}</div>`+
+      `<div class="queue-fleet-badges">${badges}</div>`+
+      `</div>`;
+  }).join("");
+  const legend=Object.keys(QUEUE_STATUS_CATEGORY_LABEL).map(c=>
+    `<button type="button" class="queue-legend-btn" data-cat="${esc(c)}" aria-pressed="${QUEUE_FLEET_STATUS_FILTER.has(c)}" style="--status-color:${QUEUE_STATUS_CATEGORY_COLOR[c]}">`+
+    `<span class="queue-legend-swatch"></span>${esc(QUEUE_STATUS_CATEGORY_LABEL[c])}</button>`
+  ).join("");
+  return `<div class="fl" style="margin:16px 0 8px">Fleet Status</div>`+
+    `<div class="setcard">${rows}<div class="queue-legend">${legend}</div></div>`;
+}
+
+function renderQueueDashboard(){
+  const warnBox=$("queueViewStoreWarning");
+  const s=QUEUE_STORE_STATUS;
+  if(s.queueStoreRecoveryRequired||s.storeDegraded||s.storeStoppedByAdmin){
+    warnBox.style.display="";
+    warnBox.textContent = s.queueStoreRecoveryRequired ? "Queue data needs recovery — go to Settings → Queue Management to review it." :
+      s.storeDegraded ? "Queue state is not currently durable — automatic retry in progress. New dispatches are paused until this clears." :
+      "Queue automation was manually stopped for every printer — resume it from Settings → Queue Management.";
+  } else { warnBox.style.display="none"; }
+
+  // Sticky header values are updated in place (textContent only) rather than
+  // rebuilt via innerHTML, so this 5s data refresh never disturbs the
+  // separately-ticking 1s clock in the same header.
+  const stats=computeQueueStats();
+  $("statPrinting").textContent=stats.counts.printing||0;
+  $("statIdle").textContent=stats.counts.idle||0;
+  $("statAwaiting").textContent=stats.counts.awaiting||0;
+  $("statPartsToday").textContent=stats.partsToday;
+  $("queueUtilPct").textContent=(stats.total?Math.round(stats.active/stats.total*100):0)+"%";
+  $("queueUtilFrac").textContent="("+stats.active+"/"+stats.total+")";
+
+  const body=$("queueDashboardBody");
+  const pools=PRINTER_POOLS.map(pool=>({ pool, printers: PRINTERS_CFG.filter(p=>p.printerPoolId===pool.id) })).filter(g=>g.printers.length);
+  // Unassigned (isDefault) is where printers land by default, not a real
+  // queue group anyone set up — always shown last, after every actual
+  // Printer Pool, regardless of its position in the underlying config.
+  pools.sort((a,b)=>(!!a.pool.isDefault)-(!!b.pool.isDefault));
+  if(!pools.length){
+    body.innerHTML=`<div class="settings-help" style="padding:20px">No printers are assigned to a Printer Pool yet — assign one from Settings → Printers.</div>`;
+    return;
+  }
+  body.innerHTML=
+    renderActiveProjectsSection(pools)+
+    renderFleetStatusSection(pools)+
+    `<div class="fl" style="margin:16px 0 8px">Printers</div>`+
+    pools.map(g=>`<div class="qgroup">`+renderQueueGroup(g.pool,g.printers)+`</div>`).join("");
+
+  wireQueueRows(body);
+}
+
+// ---- Per-printer queue rows ----
+// A different, narrower categorization than printerQueueCategory() (used by
+// Fleet Status above): this component has no separate "Stopped" row state —
+// queueStopped only affects the Pause/Resume button label inside the
+// expanded panel — and adds "attention" as its own state, since a queue
+// failure needing resolution is materially different from "waiting for a
+// bed clear" and deserves its own treatment, not to be folded into either.
+const QUEUE_ROW_STATE_COLOR={offline:"var(--bad)", attention:"var(--bad)", blocked:"var(--signal)", printing:"var(--busy)", idle:"var(--idle)"};
+function queueRowCategory(qs, fleetRow){
+  if(!fleetRow||!fleetRow.online) return "offline";
+  if(qs&&qs.queueState==="queue_attention_required") return "attention";
+  if(qs&&qs.queueState==="awaiting_bed_clear") return "blocked";
+  if((fleetRow&&fleetRow.state==="printing")||(qs&&["dispatching","printing","bed_clear_running"].includes(qs.queueState))) return "printing";
+  return "idle";
+}
+function stripExt(name){ return String(name||"").replace(/\.[^./\\]+$/,""); }
+// n is 0-based position within qs.queue AFTER the "Next" one (n=0 -> "3rd",
+// n=1 -> "4th", ...) — kept separate from the "+N" queue-depth badge so a
+// row's position label is never confused with how many are behind it.
+function ordinalTag(n){
+  const pos=n+3, mod100=pos%100;
+  const suf=(mod100>=11&&mod100<=13)?"th":({1:"st",2:"nd",3:"rd"}[pos%10]||"th");
+  return pos+suf;
+}
+// Client-side only — first tick a printer is seen offline, remember when.
+// No server-side tracking exists for this; resets the moment it's back online.
+const QUEUE_OFFLINE_SINCE=new Map();
+function offlineSinceLabel(printerId, online){
+  if(online){ QUEUE_OFFLINE_SINCE.delete(printerId); return "Offline"; }
+  if(!QUEUE_OFFLINE_SINCE.has(printerId)) QUEUE_OFFLINE_SINCE.set(printerId, Date.now());
+  return "Offline since "+new Date(QUEUE_OFFLINE_SINCE.get(printerId)).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+}
+
+let QUEUE_EXPANDED_ROWS=new Set(); // printerId -> expanded, survives re-renders (renderQueueDashboard() rebuilds innerHTML every 5s)
+
+function renderQueueGroup(pool, printers){
+  const catByP={};
+  printers.forEach(p=>{ catByP[p.id]=queueRowCategory(QUEUE_VIEW_DATA[p.id], fleetRowForPrinterId(p.id)); });
+  const counts={printing:0, waiting:0, idle:0};
+  let totalJobs=0;
+  printers.forEach(p=>{
+    const cat=catByP[p.id];
+    if(cat==="printing") counts.printing++;
+    else if(cat==="blocked"||cat==="attention") counts.waiting++;
+    else counts.idle++; // idle + offline folded together for this one summary line only
+    const qs=QUEUE_VIEW_DATA[p.id];
+    if(qs) totalJobs += (qs.currentItem?1:0)+((qs.queue&&qs.queue.length)||0);
+  });
+  const allExpanded=printers.length>0 && printers.every(p=>QUEUE_EXPANDED_ROWS.has(p.id));
+  // The Unassigned pool isn't a pool anyone opted into queue orchestration
+  // for — no Auto-balance or Pause All Queues, mirroring the same omission
+  // of Pause/Stop on its individual rows below.
+  return `<div class="qgroup-header">`+
+    `<div class="qgroup-title"><span class="qgroup-name">${esc(pool.name)}</span><span class="queue-mode-badge">${esc(pool.type)}</span></div>`+
+    `<div class="qgroup-summary">${counts.printing} printing · ${counts.waiting} waiting · ${counts.idle} idle · ${totalJobs} job${totalJobs===1?"":"s"} queued</div>`+
+    `<div class="qgroup-actions">`+
+    (pool.isDefault?"":switchHtml("autobalance-"+pool.id, !!pool.autoBalance, "Auto-balance"))+
+    `<button type="button" class="btn ghost qexpand-all" data-pool="${esc(pool.id)}">${allExpanded?"Collapse all":"Expand all"}</button>`+
+    (pool.isDefault?"":`<button type="button" class="btn ghost queue-pause-all" data-pool="${esc(pool.id)}">Pause All Queues</button>`)+
+    `</div></div>`+
+    printers.map(p=>renderQueueRow(p, QUEUE_VIEW_DATA[p.id], fleetRowForPrinterId(p.id), catByP[p.id])).join("");
+}
+
+function renderQueueRow(p, qs, fleetRow, cat){
+  const color=QUEUE_ROW_STATE_COLOR[cat];
+  const expanded=QUEUE_EXPANDED_ROWS.has(p.id);
+  const queueLen=(qs&&qs.queue&&qs.queue.length)||0;
+  const hasExpandable=cat!=="idle"||queueLen>0;
+  let fillPct=0, jobHtml, pctHtml="<span></span>", etaHtml="<span></span>";
+
+  if(cat==="printing"){
+    const full=qs&&qs.currentItem?qs.currentItem.file.name:((fleetRow&&fleetRow.filename)||"");
+    const name=stripExt(full)||"—";
+    fillPct=(fleetRow&&typeof fleetRow.progress==="number")?Math.round(fleetRow.progress*100):0;
+    const outsideNote=(qs&&qs.currentItem)?"":` <span class="pi-lbl">(started outside the queue)</span>`;
+    jobHtml=`<b title="${esc(full)}">${esc(name)}</b>${outsideNote}`;
+    pctHtml=`<span class="qc-pct">${fillPct}%</span>`;
+    etaHtml=`<span class="qc-eta">${esc(fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress))}</span>`;
+  } else if(cat==="blocked"){
+    jobHtml=`Waiting for bed clear <button type="button" class="btn primary qbedclear-btn queue-confirm-bedclear" data-printer="${esc(p.id)}">Bed Clear — Print Next</button>`;
+  } else if(cat==="attention"){
+    const reason=(qs&&qs.attentionReason)||"attention needed";
+    const msg=(qs&&qs.attentionDetail&&qs.attentionDetail.message)||reason;
+    jobHtml=`<span title="${esc(msg)}">Needs attention — ${esc(reason)}</span>`;
+  } else if(cat==="offline"){
+    jobHtml=esc(offlineSinceLabel(p.id, false));
+  } else { // idle
+    if(queueLen>0) jobHtml=`Idle — ${queueLen} queued${qs&&qs.queueStopped?" · stopped":""}`;
+    else jobHtml="Idle, queue empty";
+    if(fleetRow&&fleetRow.online) QUEUE_OFFLINE_SINCE.delete(p.id);
+  }
+
+  const badgeHtml=queueLen>0?`<span class="qc-badge">+${queueLen}</span>`:`<span></span>`;
+  const chevronHtml=hasExpandable?`<span class="qc-chevron">▶</span>`:`<span></span>`;
+
+  const expandAttrs=hasExpandable?` tabindex="0" role="button" aria-expanded="${expanded}"`:"";
+  return `<div class="qrow ${cat}${expanded?" expanded":""}" data-printer="${esc(p.id)}"${hasExpandable?"":" data-noexpand"}${expandAttrs} style="--status-color:${color}">`+
+    (cat==="printing"?`<div class="qrow-fill" style="width:${fillPct}%"></div>`:"")+
+    `<span class="qc-dot" aria-hidden="true"></span>`+
+    `<span class="qc-name" title="${esc(p.name)}">${esc(p.name)}</span>`+
+    `<span class="qc-job">${jobHtml}</span>`+
+    pctHtml+etaHtml+badgeHtml+chevronHtml+
+    `<span class="qc-menu"><button type="button" class="qc-menu-btn" title="More" data-printer-menu="${esc(p.id)}">⋮</button></span>`+
+    `</div>`+
+    (expanded&&hasExpandable?renderQueueExpandedPanel(p, qs, cat):"");
+}
+
+function renderQueueExpandedPanel(p, qs, cat){
+  const items=[];
+  if(cat==="printing"){
+    const full=qs&&qs.currentItem?qs.currentItem.file.name:"";
+    const fleetRow=fleetRowForPrinterId(p.id);
+    items.push({ tag:"Printing now", now:true,
+      name:full?stripExt(full):stripExt((fleetRow&&fleetRow.filename)||"")||"—", full:full||(fleetRow&&fleetRow.filename)||"",
+      pct:(fleetRow&&typeof fleetRow.progress==="number")?Math.round(fleetRow.progress*100)+"%":"",
+      eta:fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress) });
+  } else if(cat==="blocked"){
+    items.push({ tag:"Blocked", now:true, name:"Waiting for bed clear", full:"" });
+  } else if(cat==="attention"){
+    const reason=(qs&&qs.attentionReason)||"attention needed";
+    items.push({ tag:"Attention", now:true, name:reason, full:(qs&&qs.attentionDetail&&qs.attentionDetail.message)||"" });
+  }
+  (qs&&qs.queue||[]).forEach((it,i)=>{
+    items.push({ tag:i===0?"Next":ordinalTag(i-1), name:stripExt(it.file.name), full:it.file.name, itemId:it.id });
+  });
+
+  const rows=items.map(it=>
+    `<div class="qitem${it.now?" now":""}">`+
+    `<span></span>`+
+    `<span class="qc-name qitem-tag">${esc(it.tag)}</span>`+
+    `<span class="qc-job"><b title="${esc(it.full)}">${esc(it.name)}</b></span>`+
+    `<span class="qc-pct">${esc(it.pct||"")}</span>`+
+    `<span class="qc-eta">${esc(it.eta||(it.itemId?"—":""))}</span>`+
+    `<span></span><span></span>`+
+    `<span class="qc-menu">${it.itemId?`<button type="button" class="qitem-remove queue-remove-item" data-printer="${esc(p.id)}" data-item="${esc(it.itemId)}" title="Remove">×</button>`:""}</span>`+
+    `</div>`
+  ).join("")||`<div class="settings-help" style="padding:4px 0">Nothing queued.</div>`;
+
+  // Clear Queue is the actual "abort everything" action — it cancels
+  // whatever's physically printing (if anything) and wipes the rest of the
+  // queue in one step. Offered anywhere there's something to abort: mid
+  // attention-resolution too, as a "give up on all of it" escape hatch
+  // rather than resolving one blocked item at a time.
+  const hasWorkToClear=!!((qs&&qs.currentItem)||(qs&&qs.queue&&qs.queue.length));
+  const clearBtn=hasWorkToClear?`<button type="button" class="btn ghost danger queue-clear" data-printer="${esc(p.id)}">Clear Queue</button>`:"";
+  // The Unassigned pool (isDefault) is where printers land by default, not a
+  // pool anyone opted into queue orchestration for — Pause/Resume/Stop only
+  // make sense once dispatch is actually being automated.
+  const pool=PRINTER_POOLS.find(x=>x.id===p.printerPoolId);
+  const isUnmanaged=!!(pool&&pool.isDefault);
+
+  let actionsHtml;
+  if(cat==="attention"){
+    const actions=QUEUE_ATTENTION_RESOLUTIONS[(qs&&qs.attentionReason)]||[["stop","Stop Queue"]];
+    actionsHtml=actions.map(([action,label])=>`<button type="button" class="btn ghost queue-resolve" data-printer="${esc(p.id)}" data-action="${esc(action)}">${esc(label)}</button>`).join("")+clearBtn;
+  } else {
+    // Cancel Print is deliberately separate from Stop Queue — Stop only
+    // prevents the NEXT item from auto-dispatching (the current print, if
+    // any, keeps running), it never touches what's on the printer right
+    // now. Cancel Print is the only control here that does; it's the same
+    // /api/printctl action the printer's own Fleet card exposes, wired in
+    // here too since there was previously no way to reach it from the
+    // Queue view at all.
+    const cancelBtn=cat==="printing"?`<button type="button" class="btn ghost danger queue-cancel-print" data-printer="${esc(p.id)}">Cancel Print</button>`:"";
+    const pauseStopHtml=isUnmanaged?"":(qs&&(qs.queueStopped||qs.queuePaused)
+      ? `<button type="button" class="btn ghost queue-resume" data-printer="${esc(p.id)}">Resume Queue</button>`
+      : `<button type="button" class="btn ghost queue-pause" data-printer="${esc(p.id)}">Pause Queue</button>`)+
+      `<button type="button" class="btn danger queue-stop" data-printer="${esc(p.id)}">Stop Queue</button>`;
+    actionsHtml=cancelBtn+pauseStopHtml+clearBtn;
+  }
+
+  return `<div class="qexpand"><div class="qexpand-actions">${actionsHtml}</div>${rows}</div>`;
+}
+
+function wireQueueRows(root){
+  root.querySelectorAll(".queue-legend-btn").forEach(btn=>btn.addEventListener("click", ()=>{
+    const cat=btn.dataset.cat;
+    if(QUEUE_FLEET_STATUS_FILTER.has(cat)) QUEUE_FLEET_STATUS_FILTER.delete(cat); else QUEUE_FLEET_STATUS_FILTER.add(cat);
+    renderQueueDashboard();
+  }));
+  root.querySelectorAll(".qrow[data-printer]:not([data-noexpand])").forEach(row=>{
+    const toggle=()=>{
+      const pid=row.dataset.printer;
+      if(QUEUE_EXPANDED_ROWS.has(pid)) QUEUE_EXPANDED_ROWS.delete(pid); else QUEUE_EXPANDED_ROWS.add(pid);
+      renderQueueDashboard();
+    };
+    row.addEventListener("click", e=>{
+      if(e.target.closest("button")) return;
+      toggle();
+    });
+    row.addEventListener("keydown", e=>{
+      if((e.key==="Enter"||e.key===" ") && !e.target.closest("button")){ e.preventDefault(); toggle(); }
+    });
+  });
+  root.querySelectorAll('input[id^="autobalance-"]').forEach(input=>{
+    input.addEventListener("change", async e=>{
+      e.stopPropagation();
+      const poolId=input.id.slice("autobalance-".length);
+      const checked=input.checked;
+      try{
+        const r=checkAuthFailure(await fetch("/api/printer-pools/"+poolId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({autoBalance:checked})}));
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        const cached=PRINTER_POOLS.find(p=>p.id===poolId); if(cached) cached.autoBalance=checked;
+      }catch(err){ alert(err.message); input.checked=!checked; }
+    });
+  });
+  root.querySelectorAll(".qexpand-all").forEach(btn=>btn.addEventListener("click", e=>{
+    e.stopPropagation();
+    const poolPrinters=PRINTERS_CFG.filter(p=>p.printerPoolId===btn.dataset.pool);
+    const allExpanded=poolPrinters.length>0 && poolPrinters.every(p=>QUEUE_EXPANDED_ROWS.has(p.id));
+    poolPrinters.forEach(p=>{ if(allExpanded) QUEUE_EXPANDED_ROWS.delete(p.id); else QUEUE_EXPANDED_ROWS.add(p.id); });
+    renderQueueDashboard();
+  }));
+  root.querySelectorAll(".queue-pause-all").forEach(btn=>btn.addEventListener("click", async e=>{
+    e.stopPropagation();
+    const printers=PRINTERS_CFG.filter(p=>p.printerPoolId===btn.dataset.pool);
+    await Promise.allSettled(printers.map(p=>postJSON("/api/queue/"+p.id+"/pause",{})));
+    refreshQueueDashboard();
+  }));
+  const simple=async(printerId,action)=>{ try{ await postJSON("/api/queue/"+printerId+"/"+action,{}); refreshQueueDashboard(); }catch(e){ alert(e.message); } };
+  root.querySelectorAll(".qchip-actionable").forEach(b=>b.addEventListener("click", async e=>{
+    e.stopPropagation();
+    const cat=b.dataset.cat;
+    if(cat==="stopped"||cat==="paused"){ simple(b.dataset.printer,"resume"); return; }
+    if(cat==="error"){
+      if(!confirm("Release this printer from its error state? This ejects the currently loaded file.")) return;
+      // Hardware error is a Fleet-card-level concern, not a queue one —
+      // /api/printctl (the same eject action the Fleet card's own Eject
+      // button uses) addresses printers by array index, not persistent id.
+      const idx=PRINTERS_CFG.findIndex(x=>x.id===b.dataset.printer);
+      if(idx<0){ alert("Unknown printer"); return; }
+      try{
+        const r=checkAuthFailure(await postJSON("/api/printctl",{printer:idx,action:"eject"}));
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        refreshQueueDashboard();
+      }catch(err){ alert(err.message); }
+    }
+  }));
+  root.querySelectorAll(".queue-pause").forEach(b=>b.addEventListener("click", e=>{ e.stopPropagation(); simple(b.dataset.printer,"pause"); }));
+  root.querySelectorAll(".queue-resume").forEach(b=>b.addEventListener("click", e=>{ e.stopPropagation(); simple(b.dataset.printer,"resume"); }));
+  root.querySelectorAll(".queue-stop").forEach(b=>b.addEventListener("click", e=>{
+    e.stopPropagation();
+    if(confirm("Stop this printer's queue? Nothing further will start automatically until you resume it — the current print, if any, keeps running.")) simple(b.dataset.printer,"stop");
+  }));
+  root.querySelectorAll(".queue-clear").forEach(b=>b.addEventListener("click", e=>{
+    e.stopPropagation();
+    if(confirm("Clear this printer's entire queue? If it's currently printing, that print is cancelled immediately and any progress is lost. Every other queued item is removed too. This can't be undone.")) simple(b.dataset.printer,"clear");
+  }));
+  root.querySelectorAll(".queue-confirm-bedclear").forEach(b=>b.addEventListener("click", e=>{ e.stopPropagation(); simple(b.dataset.printer,"confirm-bed-clear"); }));
+  root.querySelectorAll(".queue-cancel-print").forEach(b=>b.addEventListener("click", async e=>{
+    e.stopPropagation();
+    if(!confirm("Cancel the current print on this printer? This stops it immediately — any progress is lost.")) return;
+    // /api/printctl (the same action the printer's own Fleet card cancel
+    // button uses) addresses printers by array index, not persistent id —
+    // a legacy convention predating Queue Management's id-based routes.
+    const idx=PRINTERS_CFG.findIndex(x=>x.id===b.dataset.printer);
+    if(idx<0){ alert("Unknown printer"); return; }
+    try{
+      const r=checkAuthFailure(await postJSON("/api/printctl",{printer:idx,action:"cancel"}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      refreshQueueDashboard();
+    }catch(e){ alert(e.message); }
+  }));
+  root.querySelectorAll(".queue-remove-item").forEach(b=>b.addEventListener("click", async e=>{
+    e.stopPropagation();
+    try{ const r=checkAuthFailure(await fetch("/api/queue/"+b.dataset.printer+"/items/"+b.dataset.item,{method:"DELETE"})); const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status); refreshQueueDashboard(); }
+    catch(e){ alert(e.message); }
+  }));
+  root.querySelectorAll(".queue-resolve").forEach(b=>b.addEventListener("click", async e=>{
+    e.stopPropagation();
+    try{
+      const action=b.dataset.action;
+      const r=checkAuthFailure(action==="accept-file-change"
+        ? await fetch("/api/queue/"+b.dataset.printer+"/accept-file-change",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
+        : await postJSON("/api/queue/"+b.dataset.printer+"/resolve",{action}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+      refreshQueueDashboard();
+    }catch(e){ alert(e.message); }
+  }));
+}
+
 function wireFileDrag(){
   const list=$("list");
   list.addEventListener("dragstart", e=>{
@@ -1075,6 +2090,7 @@ async function doCreateFolder(){
   const name=$("newFolderModalInput").value.trim();
   const st=$("newFolderModalStatus");
   if(!name){ st.className="pstatus err"; st.textContent="Enter a folder name"; return; }
+  const btn=$("newFolderModalCreate"); btn.disabled=true;
   st.className="pstatus work"; st.textContent="Creating…";
   try{
     const r=await postJSON("/api/files/mkdir",{sub:CURRENT_SUB,name});
@@ -1082,6 +2098,7 @@ async function doCreateFolder(){
     closeNewFolderModal();
     loadFiles(CURRENT_SUB);
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 }
 
 async function uploadLocalFiles(fileList){
@@ -1541,7 +2558,7 @@ function renderFleet(){
         const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
         const stem=queuedReady?queuedReady.name:(p.filename||"");
         const thumbCell=stem
-          ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
+          ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" tabindex="0" role="button" title="Click to enlarge"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
           `<div class="stats-cell"><div class="stats-cell-label">HOTEND</div><div class="stats-cell-val">${extA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':extT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'hot-fill'}" style="width:${extPct}%"></div></div></div>`+
@@ -1587,7 +2604,7 @@ function renderFleet(){
           ? progRowHtml
           : camView
             ? `<div class="cam-prog-file">`+
-                `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" title="Click to enlarge"`:''}>${stem?`<img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)">`:''}</div>`+
+                `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" tabindex="0" role="button" title="Click to enlarge"`:''}>${stem?`<img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)">`:''}</div>`+
                 `<span class="prog-file-name">${esc(stem||'—')}</span>`+
                 progRowHtml+
               `</div>`
@@ -1662,6 +2679,9 @@ function renderFleet(){
   });
   wrap.querySelectorAll("[data-thumb]").forEach(el=>{
     el.addEventListener("click",()=>openThumb(parseInt(el.dataset.thumb,10)));
+    el.addEventListener("keydown",e=>{
+      if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openThumb(parseInt(el.dataset.thumb,10)); }
+    });
   });
   wrap.querySelectorAll("[data-snap]").forEach(el=>{
     el.addEventListener("click",()=>openSnapshot(parseInt(el.dataset.snap,10)));
@@ -1842,7 +2862,7 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
     const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
     const stem=queuedReady?queuedReady.name:(p.filename||"");
     const fileCell=stem
-      ? `<div class="list-file-cell" data-thumb="${p.id}" title="Click to enlarge"><img class="list-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"><span class="list-file-name">${esc(stem)}</span></div>`
+      ? `<div class="list-file-cell" data-thumb="${p.id}" tabindex="0" role="button" title="Click to enlarge"><img class="list-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"><span class="list-file-name">${esc(stem)}</span></div>`
       : `<span class="list-file-empty">—</span>`;
     const pct=p.online&&p.progress!=null?p.progress*100:null;
     const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
@@ -2420,11 +3440,11 @@ function renderPfileList(){
   if(!shown.length){ $("pfilelist").innerHTML='<div class="browse-empty">No files match.</div>'; return; }
   $("pfilelist").innerHTML=shown.map(f=>{
     const bare=stripExt(f.path);
-    const disp=bare.length>40?bare.slice(0,37)+"...":bare;
+    const disp=bare.length>40?bare.slice(0,37)+"…":bare;
     const isSel=PFILE_SELECTED===f.path;
     const fsBadge=isSel&&PFILE_META&&PFILE_META.isFS?`<img src="/fs-badge.svg" class="fs-badge" title="Full Spectrum">`:``;
     return `<button class="plate-item${isSel?" sel":""}" data-f="${esc(f.path)}" title="${esc(f.path)}">`+
-      `<span class="pi-check">${isSel?"✓":""}</span><span class="pi-name">${esc(disp)}${fsBadge}</span>`+
+      `<span class="pi-check" aria-hidden="true">${isSel?"✓":""}</span><span class="pi-name">${esc(disp)}${fsBadge}</span>`+
       `<span class="pi-tag">${fmtSize(f.size)} · ${fmtTime(f.modified*1000)}</span></button>`;
   }).join("");
   $("pfilelist").querySelectorAll("[data-f]").forEach(el=>{
@@ -3114,6 +4134,7 @@ async function doElecLookup(){
   if(!/^\d{5}$/.test(zip)){ $("elecResult").innerHTML='<span style="color:var(--bad)">Enter a valid 5-digit ZIP code.</span>'; return; }
   const res=$("elecResult"); res.innerHTML='<span style="color:var(--ink-dim)">Looking up…</span>';
   $("elecApply").style.display="none";
+  const btn=$("elecLookup"); btn.disabled=true;
   try{
     const d=await getJSON("/api/electricity-rate?zip="+zip);
     if(d.error){ res.innerHTML=`<span style="color:var(--bad)">${esc(d.error)}</span>`+(d.location?`<br><span style="color:var(--ink-dim)">${esc(d.location)}</span>`:``); return; }
@@ -3121,6 +4142,7 @@ async function doElecLookup(){
     $("elecApply").style.display="";
     $("elecApply").onclick=()=>{ $("setElectricityRate").value=d.rate; closeElecModal(); };
   }catch(e){ res.innerHTML=`<span style="color:var(--bad)">${esc(e.message)}</span>`; }
+  finally{ btn.disabled=false; }
 }
 async function doBedSet(printerId,temp){
   const st=$("bedmodalstatus");
@@ -3385,6 +4407,16 @@ function renderPlate(){
     el.addEventListener("mouseenter",()=>setPlateHover(el.dataset.obj,true));
     el.addEventListener("mouseleave",()=>setPlateHover(el.dataset.obj,false));
   });
+  // #platelist renders real <button>s (keyboard-operable natively — adding a
+  // second keydown handler there would double-toggle on Enter/Space). Only
+  // the SVG <g> shapes in #platewrap need a manual keyboard equivalent, since
+  // SVG groups aren't focusable/activatable by default.
+  document.querySelectorAll("#platewrap [data-obj]").forEach(el=>{
+    el.tabIndex=0; el.setAttribute("role","button");
+    el.addEventListener("keydown",e=>{
+      if(e.key==="Enter"||e.key===" "){ e.preventDefault(); togglePlateSel(el.dataset.obj); }
+    });
+  });
   const sel=[...PLATE_SELECTED].filter(n=>remaining.includes(n));
   const n=sel.length, left=remaining.length-n;
   $("plateSelStatus").textContent=n
@@ -3466,6 +4498,10 @@ function plateSVG(d,numberOf){
 
 // ---- settings / discovery ----
 $("gear").addEventListener("click",()=>{
+  // Fleet, Settings, and Queue Management are mutually exclusive — opening
+  // Settings on top of an open Queue dashboard closes it first (clearing its
+  // refresh timer), never leaves it running hidden underneath.
+  closeQueueDashboard();
   const open=$("setup").classList.toggle("show");
   document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display=open?"none":"");
   $("gear").querySelector("img").src = open ? "/back.svg" : "/gear.svg";
@@ -3476,8 +4512,9 @@ $("gear").addEventListener("click",()=>{
   $("filesBtn").style.display = open ? "none" : "";
   if($("bulkHeatBtn")) $("bulkHeatBtn").style.display = open ? "none" : "";
   if($("maintBtn")) $("maintBtn").style.display = open ? "none" : "";
+  if($("queueBtn")) $("queueBtn").style.display = "none"; // re-shown by applyRoleUI() below once Settings' own state is settled
   if(open){
-    document.body.classList.remove("showfiles"); loadUsersUI();
+    document.body.classList.remove("showfiles"); loadGroupsUI().then(loadUsersUI); loadQueueManagementUI();
     // showSetTab() is what actually hides #globalSaveRow for a registered
     // tab (General) in favor of its sticky dirty footer — that only ever
     // ran on a tab-button click, never on Settings simply opening onto
@@ -3491,6 +4528,7 @@ $("gear").addEventListener("click",()=>{
   else {
     applyFilesOpen(); $("sortMenu").classList.remove("open");
     if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; } // Settings closed — stop polling even if "remote" was the last-open tab
+    applyRoleUI(); // correctly restores queueBtn (enablement-gated) instead of showing it unconditionally
   }
 });
 $("raEnabled").addEventListener("change",async function(){
@@ -3557,6 +4595,7 @@ $("bootSubmit").addEventListener("click", async ()=>{
   const st=$("bootStatus");
   const loginName=$("bootLogin").value.trim(), password=$("bootPassword").value;
   if(!loginName||!password){ st.className="pstatus err"; st.textContent="Login name and password required"; return; }
+  const btn=$("bootSubmit"); btn.disabled=true;
   st.className="pstatus work"; st.textContent="Creating…";
   try{
     const r=await postJSON("/api/users",{firstName:$("bootFirst").value.trim(),lastName:$("bootLast").value.trim(),loginName,password,role:"admin",otpEnabled:false});
@@ -3565,6 +4604,7 @@ $("bootSubmit").addEventListener("click", async ()=>{
     BOOTSTRAPPED_ADMIN=true;
     $("bootstrapAdmin").style.display="none";
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ btn.disabled=false; }
 });
 if($("dockerRestartBtn")) $("dockerRestartBtn").addEventListener("click", async ()=>{
   if(!confirm("Restart SnapCon now?\n\nThe dashboard will be briefly unreachable while the container restarts.")) return;
@@ -3798,15 +4838,16 @@ function showSetTab(name){
   document.querySelectorAll(".set-tab").forEach(b=>b.classList.toggle("active", b.dataset.tab===name));
   document.querySelectorAll(".set-panel").forEach(p=>{ p.style.display = p.id==="tab-"+name ? "" : "none"; });
   // A registered tab (currently just General) shows its own sticky dirty
-  // footer instead of the shared always-visible Save row. Remote Access has
-  // no saved values at all — enabling/disabling/restarting are immediate
-  // actions — so it never shows a Save row either.
-  if($("globalSaveRow")) $("globalSaveRow").style.display=(SETTINGS_TAB_TRACKERS[name]||name==="remote")?"none":"";
+  // footer instead of the shared always-visible Save row. Remote Access and
+  // Logs have no batched form to save — enabling/disabling/restarting and
+  // viewing logs are both immediate actions — so neither shows a Save row.
+  if($("globalSaveRow")) $("globalSaveRow").style.display=(SETTINGS_TAB_TRACKERS[name]||name==="remote"||name==="logs"||name==="queue")?"none":"";
   // Remote Access has its own live status poller — only run it while its tab
   // is actually visible, same reasoning as the fleet poller not running
   // forever in the background for no reason.
   if(name==="remote"){ loadRemoteAccessStatus(); if(!RA_POLL_TIMER) RA_POLL_TIMER=setInterval(loadRemoteAccessStatus, 4000); }
   else if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; }
+  if(name==="logs") loadAuditLogUI(true);
 }
 
 // ---- Remote Access (Cloudflare Tunnel, managed) — Development Preview ----
@@ -4076,6 +5117,12 @@ registerSettingsTab("notif",notifTabValues,setNotifTabValues);
 
 async function loadConfigUI(){
   await loadConnectorTypes();
+  // Awaited before any printer row is built below — the Access checklist and
+  // the Printer Pool dropdown in each row's Behavior section both read
+  // GROUPS/PRINTER_POOLS synchronously at render time, so both must already
+  // be populated (or a real failure, not a race) by then.
+  await loadGroupsUI();
+  await loadQueueManagementUI();
   try{
     const c=await getJSON("/api/config");
     $("setFolder").value=c.gcodeFolder||"";
@@ -4095,16 +5142,20 @@ async function loadConfigUI(){
     $("setElectricityRate").value=c.electricityRate||"";
     FILAMENT_COST=c.filamentCost||0; ELECTRICITY_RATE=c.electricityRate||0;
     $("setTNotation").checked=!!c.tNotation; USE_T_NOTATION=!!c.tNotation;
-    $("setOpenCompact").checked=!!c.openCompact;
+    $("setDefaultView").value=["regular","compact","camera","list","printfarm"].includes(c.defaultView)?c.defaultView:"regular";
+    const siteName=(c.siteName||"").trim();
+    $("setSiteName").value=siteName;
+    if($("topbarSiteName")){ $("topbarSiteName").textContent=siteName; $("topbarSiteName").style.display=siteName?"":"none"; }
     $("setCameraRefresh").value=c.cameraViewRefreshInterval||6;
     CAM_STAGGER=c.cameraViewStagger!==false; $("setCameraStagger").checked=CAM_STAGGER;
-    ALT_DISPLAY=["all","compact","camera","list"].includes(c.alternateDisplay)?c.alternateDisplay:"all";
+    ALT_DISPLAY=["all","compact","camera","list","printfarm"].includes(c.alternateDisplay)?c.alternateDisplay:"all";
     $("setAltDisplay").value=ALT_DISPLAY;
     ALLOW_MAPPING=c.allowMapping!==false; $("setAllowMapping").checked=ALLOW_MAPPING;
     SUGGEST_MATCHING=c.suggestMatching!==false; $("setSuggestMatching").checked=SUGGEST_MATCHING;
     $("setUsersEnabled").checked=!!c.usersEnabled;
     $("bootstrapAdmin").style.display="none";
     if($("dockerRestartRow")) $("dockerRestartRow").style.display=c.isDocker?"flex":"none";
+    $("setAuditRetention").value=c.auditRetentionDays||90;
     const rs=c.resend||{};
     $("setResendKey").value="";
     $("setResendKey").placeholder=rs.hasApiKey?"•••••••• (saved — leave blank to keep)":"re_...";
@@ -4122,7 +5173,12 @@ async function loadConfigUI(){
       ? "Uses the Telegram bot configured on the Notifications tab."
       : "No Telegram bot configured yet — set one up on the Notifications tab first.";
     applyOtpServiceUI();
-    VIEW_MODE=c.openCompact?'compact':'regular'; applyViewMode();
+    // QUEUE_MANAGEMENT_ENABLED is already known here — loadQueueManagementUI()
+    // ran earlier in this same function — so launching straight into Print
+    // Farm can be trusted; falls back to Regular if the feature's since been
+    // turned off without the saved default being updated to match.
+    if($("setDefaultView").value==="printfarm" && QUEUE_MANAGEMENT_ENABLED){ openQueueDashboard(); }
+    else { VIEW_MODE=($("setDefaultView").value==="printfarm")?"regular":$("setDefaultView").value; applyViewMode(); }
     const nf=c.notifications||{};
     $("ntfEnabled").checked=!!nf.enabled;
     $("ntfEvStart").checked=!!nf.onStart;
@@ -4149,7 +5205,7 @@ async function loadConfigUI(){
     baselineSettingsTab("notif");
     $("setPrinters").innerHTML="";
     PRINTERS_CFG=c.printers||[];
-    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags}));
+    PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
     baselinePrintersDirty();
     updateRefreshHelper(); // depends on PRINTERS_CFG.length, so runs after the printer rows above
     syncAutoMatchNesting();
@@ -4321,7 +5377,8 @@ function serializeRowForDiff(row){
     pushNotify:row.querySelector('[id^="ppushnotify-"]').checked,
     forceDefaults:row.querySelector('[id^="pforcedefaults-"]').checked,
     filamentMode:row.querySelector(".pfilmode").value,
-    tags:row.querySelector(".ptags").value.trim()
+    tags:row.querySelector(".ptags").value.trim(),
+    allowedGroups:[...row.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value).sort().join(",")
   });
 }
 // Called once right after printer rows are (re)built from a fresh load or a
@@ -4362,6 +5419,16 @@ function updatePrintersDirtyFooter(){
   bar.querySelector(".dirty-text").textContent=`${total} unsaved change${total===1?'':'s'} on ${shown}`;
 }
 function markPrintersDirty(){ updatePrintersDirtyFooter(); }
+
+// Warn on tab close/reload/navigate-away if either dirty-tracking system
+// (Settings' registered tabs, or the Printers tab's own row-level tracker)
+// has anything unsaved — reuses the existing diff logic rather than a
+// separate dirty flag, so this stays correct without its own upkeep.
+window.addEventListener("beforeunload", e=>{
+  const settingsDirty=Object.keys(SETTINGS_TAB_TRACKERS).some(name=>settingsTabChanges(name)>0);
+  const printersDirty=computePrintersDirty().total>0;
+  if(settingsDirty||printersDirty){ e.preventDefault(); e.returnValue=""; }
+});
 
 let PROW_UID=0;
 function addPrinterRow(name,url,opts,autoOpen){
@@ -4463,6 +5530,18 @@ function addPrinterRow(name,url,opts,autoOpen){
     switchHtml("ppushnotify-"+uid,!!opts.pushNotify,"Push notifications","Include this printer in start / pause / error / complete alerts")+
     `</div>`+
 
+    `<div class="prow-section"><div class="prow-section-title">Access</div>`+
+    `<div class="settings-help" style="margin-bottom:8px">Which groups can see and use this printer — default: Everyone.</div>`+
+    `<div class="pgroups-list">`+groupsChecklistHtml(opts.allowedGroups)+`</div>`+
+    `</div>`+
+
+    `<div class="prow-section" style="display:${QUEUE_MANAGEMENT_ENABLED?"":"none"}" data-queue-section>`+
+    `<div class="prow-section-title">Queue</div>`+
+    `<div class="settings-help" style="margin-bottom:8px">Which Printer Pool this printer belongs to — controls how the bed gets cleared between queued prints.</div>`+
+    `<select class="field pprinterpool" style="max-width:240px">`+printerPoolOptionsHtml(opts.printerPoolId)+`</select>`+
+    `<span class="pstatus pqueue-status" style="margin-left:8px"></span>`+
+    `</div>`+
+
     `</div></details>`;
 
   // Capability-gated per-printer defaults: same three options as the print-
@@ -4495,13 +5574,31 @@ function addPrinterRow(name,url,opts,autoOpen){
     if(!isCreality) filModeEl.value="single";
   };
   const brandEl=row.querySelector(".pbrand");
+  // The Simulator connector has no real hardware address — gatherPrinters()
+  // and the server's own /api/config both drop any printer with a blank url
+  // from the saved list entirely (silently, no error), so a Dummy printer
+  // left with an empty URL field never actually persists no matter how many
+  // times Save is clicked. Auto-fill a synthetic, stable one instead of
+  // asking the user to invent something meaningless to type in.
+  const syncSimulatorUrlField=()=>{
+    const urlField=row.querySelector(".purl");
+    const isSim=connectorEl.value==="simulator";
+    urlField.readOnly=isSim;
+    urlField.placeholder=isSim?"Auto-generated — Simulator has no real address":"e.g. http://192.168.1.50";
+    if(isSim && !urlField.value.trim()){
+      urlField.value="sim://"+Math.random().toString(36).slice(2,10);
+      urlField.dispatchEvent(new Event("input",{bubbles:true}));
+    }
+  };
   connectorEl.addEventListener("change", ()=>{
     syncPrintPrefVisibility();
     const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
     modelBadgeEl.textContent=ct.label||connectorEl.value;
     brandEl.value=ct.brand||ct.label||connectorEl.value;
+    syncSimulatorUrlField();
   });
   syncPrintPrefVisibility();
+  syncSimulatorUrlField();
   // Live-update the summary header as user types
   const nameEl=row.querySelector(".pname"), urlEl=row.querySelector(".purl");
   const sumName=row.querySelector(".prow-sumname"), sumIp=row.querySelector(".prow-sumip");
@@ -4576,6 +5673,30 @@ function addPrinterRow(name,url,opts,autoOpen){
     }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
   });
 
+  // Printer Pool self-saves immediately (like printer-tags' own dedicated
+  // endpoint) rather than waiting for the batched Save button — it has real
+  // server-side validation (the printer's queue must be idle and empty) and
+  // touches QueueStore state, not just config.json.
+  const printerPoolEl=row.querySelector(".pprinterpool");
+  if(printerPoolEl){
+    printerPoolEl.addEventListener("change",async()=>{
+      const st=row.querySelector(".pqueue-status");
+      if(!row.dataset.printerId){ st.className="pstatus pqueue-status err"; st.textContent="Save this printer first"; return; }
+      st.className="pstatus pqueue-status work"; st.textContent="Saving…";
+      try{
+        const r=checkAuthFailure(await postJSON("/api/printer-pool",{printerId:row.dataset.printerId,printerPoolId:printerPoolEl.value||null}));
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        // The server saved it, but PRINTERS_CFG is a snapshot fetched once at
+        // page-load/gear-open — anything else that reads it (the Queue
+        // Management view's per-pool grouping, chiefly) would otherwise
+        // keep showing the pre-assignment state until a full reload.
+        const cfgEntry=PRINTERS_CFG.find(p=>p.id===row.dataset.printerId);
+        if(cfgEntry) cfgEntry.printerPoolId=d.printerPoolId||undefined;
+        st.className="pstatus pqueue-status ok"; st.textContent="Saved";
+      }catch(e){ st.className="pstatus pqueue-status err"; st.textContent=e.message; }
+    });
+  }
+
   row.querySelectorAll(".prow-body input, .prow-body select").forEach(el=>{
     el.addEventListener("input", markPrintersDirty);
     el.addEventListener("change", markPrintersDirty);
@@ -4583,6 +5704,76 @@ function addPrinterRow(name,url,opts,autoOpen){
 
   $("setPrinters").appendChild(row);
 }
+
+// ---- Logs tab: read-only, paged, admin-only (the whole Settings screen
+// already is). LOG_OFFSET/LOG_TOTAL track the current filter's paging —
+// reset to 0 by Filter, advanced by Load more. ----
+let LOG_OFFSET=0, LOG_TOTAL=0;
+const LOG_LIMIT=50;
+// h/m duration formatting for the Logs tab — same shape as server.js's own
+// fmtDur() (used in notification text), just duplicated client-side since
+// there's no shared module between the two.
+function fmtLogHM(sec){
+  if(typeof sec!=="number"||!isFinite(sec)||sec<0) return null;
+  sec=Math.round(sec);
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60);
+  return h?h+"h "+String(m).padStart(2,"0")+"m":m+"m";
+}
+// Known numeric fields from print-completed get readable formatting (time
+// as h/m, filament as an estimated gram figure — see server.js's comment on
+// why it's only ever an estimate — cost with the configured currency
+// symbol); anything else in a detail blob (extruder index, hex color,
+// target temp, a settings diff, etc.) falls back to plain "key: value".
+const LOG_DETAIL_KNOWN_KEYS=new Set(["file","elapsedSec","filamentUsedMm","filamentGramsEst","costEst"]);
+function fmtLogDetail(row){
+  if(!row.detail) return "";
+  let d;
+  try{ d=JSON.parse(row.detail); }catch{ return String(row.detail); }
+  const parts=[];
+  if(d.file) parts.push(d.file);
+  const hm=fmtLogHM(d.elapsedSec);
+  if(hm) parts.push("time: "+hm);
+  if(typeof d.filamentGramsEst==="number") parts.push("filament: ~"+d.filamentGramsEst.toFixed(1)+"g");
+  else if(typeof d.filamentUsedMm==="number") parts.push("filament: "+(d.filamentUsedMm/1000).toFixed(2)+"m");
+  if(typeof d.costEst==="number") parts.push("est. cost: "+CURRENCY+d.costEst.toFixed(2));
+  for(const [k,v] of Object.entries(d)){
+    if(LOG_DETAIL_KNOWN_KEYS.has(k)) continue;
+    parts.push(k+": "+(v&&typeof v==="object"?JSON.stringify(v):v));
+  }
+  return parts.join(", ");
+}
+function renderLogRows(rows, append){
+  const body=$("logTableBody");
+  const html=rows.map(r=>`<tr><td>${esc(new Date(r.ts).toLocaleString())}</td><td>${esc(r.category)}/${esc(r.event)}</td><td>${esc(r.userLabel||"—")}</td><td>${esc(r.printerName||"—")}</td><td>${esc(fmtLogDetail(r))}</td></tr>`).join("");
+  if(append) body.insertAdjacentHTML("beforeend", html);
+  else body.innerHTML=html||`<tr><td colspan="5" style="text-align:center;color:var(--ink-faint)">No log entries yet</td></tr>`;
+}
+async function loadAuditLogUI(reset){
+  if(reset) LOG_OFFSET=0;
+  const st=$("logStatus");
+  st.className="pstatus work"; st.textContent="Loading…";
+  const params=new URLSearchParams();
+  const q=$("logSearch").value.trim(); if(q) params.set("q",q);
+  const cat=$("logCategory").value; if(cat) params.set("category",cat);
+  const from=$("logFrom").value; if(from) params.set("from", String(new Date(from+"T00:00:00").getTime()));
+  const to=$("logTo").value; if(to) params.set("to", String(new Date(to+"T23:59:59").getTime()));
+  params.set("limit", String(LOG_LIMIT));
+  params.set("offset", String(LOG_OFFSET));
+  try{
+    const d=await getJSON("/api/audit-log?"+params.toString());
+    if(d.unavailable){
+      st.className="pstatus err"; st.textContent="Audit logging isn't available on this server (needs Node 22.5+)";
+      $("logTableBody").innerHTML=""; $("logLoadMore").style.display="none";
+      return;
+    }
+    LOG_TOTAL=d.total||0;
+    const rows=d.rows||[];
+    renderLogRows(rows, !reset);
+    st.className="pstatus"; st.textContent=LOG_TOTAL+" entr"+(LOG_TOTAL===1?"y":"ies");
+    $("logLoadMore").style.display=(LOG_OFFSET+rows.length<LOG_TOTAL)?"":"none";
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+
 // ---- Users tab: each row saves itself immediately, independent of #saveCfg ----
 async function loadUsersUI(){
   $("setUsers").innerHTML="";
@@ -4597,6 +5788,10 @@ function addUserRow(u,autoOpen){
   const uid=++UROW_UID;
   const row=document.createElement("div"); row.className="prow";
   row.dataset.userId=u&&u.id?u.id:"";
+  // Source of truth for this row's group membership between saves — the
+  // Groups modal is one shared modal/DOM, not baked per-row, so it reads
+  // this back out on open and writes it back here on Save.
+  row.dataset.groupIds=JSON.stringify((u&&u.groupIds)||[]);
   row.innerHTML=
     `<details class="prow-details"${autoOpen?" open":""}>`+
     `<summary><span class="prow-chevron">▶</span>`+
@@ -4621,6 +5816,7 @@ function addUserRow(u,autoOpen){
     `<div class="prow-extra">`+
     switchHtml("uotp-"+uid,!!(u&&u.otpEnabled),"OTP Login")+
     `<label title="Password" class="upwrap"><span class="pi-lbl">Password</span> <input class="field upassword" type="password" maxlength="64" placeholder="${u?"leave blank to keep":"required"}" style="max-width:180px" autocomplete="new-password"></label>`+
+    `<button type="button" class="btn ghost ugroups">Groups</button>`+
     `<button class="btn primary usave">Save</button>`+
     `<span class="pstatus usave-status"></span>`+
     `</div></div></div></details>`;
@@ -4651,6 +5847,9 @@ function addUserRow(u,autoOpen){
   row.querySelector(".dup").addEventListener("click",()=>{
     addUserRow({ role: roleSel.value, otpEnabled: otpEl.checked }, true);
   });
+  row.querySelector(".ugroups").addEventListener("click",()=>{
+    openGroupsModal(row, loginEl.value.trim()||"this user");
+  });
   row.querySelector(".usave").addEventListener("click",async()=>{
     const st=row.querySelector(".usave-status");
     const body={
@@ -4660,7 +5859,8 @@ function addUserRow(u,autoOpen){
       email: row.querySelector(".uemail").value.trim(),
       phone: row.querySelector(".uphone").value.trim(),
       role: roleSel.value,
-      otpEnabled: otpEl.checked
+      otpEnabled: otpEl.checked,
+      groupIds: JSON.parse(row.dataset.groupIds||"[]")
     };
     if(pwEl.value) body.password=pwEl.value;
     // "usave-status" must stay in className every time — it's how this element
@@ -4676,6 +5876,7 @@ function addUserRow(u,autoOpen){
         : await fetch("/api/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}));
       const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
       row.dataset.userId=d.user.id;
+      row.dataset.groupIds=JSON.stringify(d.user.groupIds||[]);
       pwEl.value="";
       st.className="pstatus usave-status ok"; st.textContent="Saved";
       sumName.textContent=d.user.loginName; sumRole.textContent=roleLabel(d.user.role);
@@ -4683,6 +5884,82 @@ function addUserRow(u,autoOpen){
     }catch(e){ st.className="pstatus usave-status err"; st.textContent=e.message; }
   });
   $("setUsers").appendChild(row);
+}
+
+// ---- Groups modal: shared between every user row (assign membership) and
+// its own inline group CRUD — one DOM instance, opened against whichever
+// row's Groups button was clicked. Saving here only stages the selection
+// onto that row's dataset; it's not persisted until the row's own Save
+// button runs, same as every other field on a user row. ----
+let GROUPS_MODAL_ROW=null;
+function openGroupsModal(row, displayName){
+  GROUPS_MODAL_ROW=row;
+  $("groupsModalUserName").textContent=displayName;
+  renderGroupsCheckList(JSON.parse(row.dataset.groupIds||"[]"));
+  renderGroupsManageList();
+  $("newGroupName").value="";
+  $("groupsManageStatus").className="pstatus"; $("groupsManageStatus").textContent="";
+  $("groupsModal").classList.add("show");
+}
+function closeGroupsModal(){ $("groupsModal").classList.remove("show"); GROUPS_MODAL_ROW=null; }
+function checkedGroupIds(){
+  return [...document.querySelectorAll("#groupsCheckList .groups-chk:checked")].map(c=>c.value);
+}
+function renderGroupsCheckList(selected){
+  const sel=new Set(selected||[]);
+  $("groupsCheckList").innerHTML = GROUPS.length
+    ? GROUPS.map(g=>`<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="groups-chk" value="${esc(g.id)}" ${sel.has(g.id)?"checked":""}> ${esc(g.name)}</label>`).join("")
+    : `<div class="settings-help">No groups yet — add one below.</div>`;
+}
+function renderGroupsManageList(){
+  $("groupsManageList").innerHTML=GROUPS.map(g=>{
+    const isEveryone=g.id===GROUP_EVERYONE_ID;
+    return `<div style="display:flex;align-items:center;gap:6px" data-groupid="${esc(g.id)}">`+
+      `<input class="field group-rename" value="${esc(g.name)}" maxlength="40" ${isEveryone?"disabled":""} style="flex:1">`+
+      (isEveryone?"":`<button type="button" class="btn ghost group-delete" title="Delete group">×</button>`)+
+      `</div>`;
+  }).join("");
+  $("groupsManageList").querySelectorAll(".group-rename").forEach(inp=>{
+    const orig=inp.value;
+    inp.addEventListener("change", async ()=>{
+      const id=inp.closest("[data-groupid]").dataset.groupid;
+      const name=inp.value.trim();
+      if(!name || name===orig) { inp.value=name||orig; return; }
+      try{
+        const r=await fetch("/api/groups/"+id,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        const kept=checkedGroupIds();
+        await loadGroupsUI();
+        renderGroupsCheckList(kept);
+        renderGroupsManageList();
+      }catch(e){ alert(e.message); inp.value=orig; }
+    });
+  });
+  $("groupsManageList").querySelectorAll(".group-delete").forEach(btn=>{
+    btn.addEventListener("click", async ()=>{
+      const id=btn.closest("[data-groupid]").dataset.groupid;
+      const g=GROUPS.find(x=>x.id===id);
+      if(!confirm('Delete group "'+(g?g.name:"")+'"? Any user or printer scoped only to this group falls back to Everyone.')) return;
+      try{
+        const r=await fetch("/api/groups/"+id,{method:"DELETE"});
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+        const kept=checkedGroupIds().filter(gid=>gid!==id);
+        await loadGroupsUI();
+        renderGroupsCheckList(kept);
+        renderGroupsManageList();
+      }catch(e){ alert(e.message); }
+    });
+  });
+}
+
+// Printer Access checklist: which groups can see/use this printer — same
+// GROUPS cache the Users tab's Groups modal reads, rendered inline (not a
+// popup) since a printer only ever needs this one thing set, not a whole
+// modal's worth of controls.
+function groupsChecklistHtml(selected){
+  const sel=new Set((selected&&selected.length)?selected:[GROUP_EVERYONE_ID]);
+  if(!GROUPS.length) return `<div class="settings-help">No groups yet — add one from the Users tab.</div>`;
+  return GROUPS.map(g=>`<label style="display:inline-flex;align-items:center;gap:5px;margin:2px 14px 2px 0;cursor:pointer"><input type="checkbox" class="pgroups-chk" value="${esc(g.id)}" ${sel.has(g.id)?"checked":""}> ${esc(g.name)}</label>`).join("");
 }
 
 function gatherPrinters(){
@@ -4707,7 +5984,8 @@ function gatherPrinters(){
     serial:r.querySelector(".pserial").value.trim()||undefined,
     verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
     token:secretFieldValue(r.querySelector(".secret-field")),
-    tags:r.querySelector(".ptags").value.split(",").map(t=>t.trim()).filter(Boolean)
+    tags:r.querySelector(".ptags").value.split(",").map(t=>t.trim()).filter(Boolean),
+    allowedGroups:[...r.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value)
   })).filter(p=>p.url);
 }
 async function runDiscover(subnet){
@@ -4771,11 +6049,14 @@ function setSaveStatus(cls,text){
   });
 }
 async function saveConfig(){
+  const saveBtn=$("saveCfg");
+  if(saveBtn) saveBtn.disabled=true;
   setSaveStatus("work","Saving…");
   // Refuse to send usersEnabled:true until the inline bootstrap-admin form
   // has succeeded — no default/throwaway admin is ever created as a fallback.
   if($("setUsersEnabled").checked && $("bootstrapAdmin").style.display!=="none" && !BOOTSTRAPPED_ADMIN){
     setSaveStatus("err","Create the first Admin account before enabling User Access Management");
+    if(saveBtn) saveBtn.disabled=false;
     return;
   }
   // auto-fill empty name/serial from printer before saving
@@ -4808,7 +6089,7 @@ async function saveConfig(){
   CAM_STAGGER=$("setCameraStagger").checked;
   ALT_DISPLAY=$("setAltDisplay").value;
   CURRENCY=$("setCurrency").value.trim()||"$";
-  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, openCompact:$("setOpenCompact").checked||undefined, allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
+  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, defaultView:$("setDefaultView").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     otp:{
@@ -4835,8 +6116,27 @@ async function saveConfig(){
   try{
     const c=await (await postJSON("/api/config",body)).json();
     if(c.error) throw new Error(c.error);
+    // A brand-new printer's row has no id yet at save time (gatherPrinters()
+    // sends id:undefined for it, matched server-side by URL) — the response
+    // carries the real assigned id back, but nothing previously wrote it onto
+    // the row or into PRINTERS_CFG. Any self-saving per-row control that
+    // gates on row.dataset.printerId (Printer Pool assignment chief among
+    // them) kept claiming the printer still needed saving even immediately
+    // after a successful save. Patch both from this response, matched by
+    // URL for rows still missing an id.
+    (c.printers||[]).forEach(cp=>{
+      const idx=PRINTERS_CFG.findIndex(p=>p.id===cp.id);
+      if(idx===-1) PRINTERS_CFG.push(cp); else PRINTERS_CFG[idx]=cp;
+    });
+    prows.forEach(r=>{
+      if(r.dataset.printerId) return;
+      const url=r.querySelector(".purl").value.trim();
+      const matched=(c.printers||[]).find(p=>p.url===url);
+      if(matched) r.dataset.printerId=matched.id;
+    });
     setSaveStatus("ok","Saved");
     $("setupmsg").textContent="";
+    if($("topbarSiteName")){ const sn=(c.siteName||"").trim(); $("topbarSiteName").textContent=sn; $("topbarSiteName").style.display=sn?"":"none"; }
     FILAMENT_COST=fc>0?fc:0; ELECTRICITY_RATE=er>0?er:0;
     updateCurrencyLabels();
     if(MAP) renderJob(); // refresh cost line immediately
@@ -4852,4 +6152,5 @@ async function saveConfig(){
     baselineSettingsTab("general");
     baselineSettingsTab("notif");
   }catch(e){ setSaveStatus("err",e.message); }
+  finally{ if(saveBtn) saveBtn.disabled=false; }
 }

@@ -108,4 +108,39 @@ manager.
 A security and reliability pass (upload/path validation, crash-safety fixes in Remote Access, safer
 Docker packaging), plus build-process fixes so macOS binaries built on Windows actually launch.
 
+0.5.0
+### Queue Management
+Printers can now be grouped into **Printer Pools** and given an ordered queue instead of printing one
+file at a time by hand. Add files to a pool's queue, and SnapCon dispatches them one after another —
+pausing for a manual bed-clear confirmation between prints where that's how the pool is set up, or
+picking straight up with the next job otherwise. A new full-page **Print Farm** view (its own entry in
+the header's view cycle) shows queue status per pool, a Fleet Status strip with color-coded, clickable
+printer chips (release a stopped/paused queue or a hardware error straight from the chip), and every
+printer's own queue with pause/resume/stop and a real **Clear Queue** abort action. An **Auto-balance**
+toggle per pool spreads queued jobs onto whichever sibling printer goes idle first. A new **Simulator**
+connector type ("Dummy" printers) lets you build and test queue behavior without risking a real print.
+
+### Audit Trail
+Settings → Logs now keeps a real, persistent audit log of who did what — logins, print actions, queue
+events, config changes — independent of whatever printers currently exist in config, so removing a
+printer doesn't erase its history. Filterable by date, category, and free-text search.
+
+### Printer Groups & Access Control
+Users can be scoped to specific printer groups instead of seeing the whole fleet, managed from
+Settings → Users.
+
+### Header & View Redesign
+The topbar picked up a live clock, an optional Site Name, and a clearer "(view name)" label next to the
+SnapCon logo when you're in a non-default view. The Fleet Status legend now doubles as a multi-select
+filter, and the default "Printer Profile" pool was renamed to **Unassigned** to make clear it's where
+printers land by default, not a queue you set up on purpose (it's excluded from queue-orchestration
+controls like Auto-balance and Pause All for the same reason).
+
+### Accessibility Pass
+A dedicated pass against the Web Interface Guidelines: real keyboard support for every previously
+mouse-only interaction (file list, queue rows, thumbnail previews, the exclude-object plate map),
+`aria-live` on every status message, correctly associated form labels throughout Settings, a skip link,
+an unsaved-changes warning before closing/reloading with edits pending, visible focus states, and
+reduced-motion support for every ambient animation.
+
 

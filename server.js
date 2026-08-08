@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.4.6
+// server.js — SnapCon  ·  v0.5.0
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.4.6";
+const VERSION = "0.5.0";
 
 const express = require("express");
 const fs = require("fs");
@@ -17,6 +17,7 @@ const auth = require("./auth");
 const { getConnector, listConnectorTypes, getCapabilities, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
 const connHttp = require("./connectors/http-utils");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
+const { createAuditLog } = require("./audit/AuditLog");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -109,6 +110,80 @@ function ensureNotificationSchema() {
   if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensureNotificationSchema();
+
+// One-time migration: the old openCompact boolean (just compact-or-not) is
+// superseded by defaultView (a full view-mode choice, including Print Farm)
+// — preserves whatever behavior an existing install already had, then the
+// old field just goes unused (never deleted, harmless leftover, same "don't
+// bother stripping it" posture as other superseded fields in this file).
+function ensureDefaultViewSchema() {
+  if (CFG.defaultView === undefined) {
+    CFG.defaultView = CFG.openCompact ? "compact" : "regular";
+    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
+  }
+}
+ensureDefaultViewSchema();
+
+// One-time migration guaranteeing CFG.groups always exists and always
+// contains the permanent, protected "Everyone" group. A user or printer with
+// no explicit group assignment falls back to this id at READ time only (see
+// printerVisibleTo() in groupAccess.js) — never force-written onto that
+// user/printer — but the group itself must exist unconditionally from
+// process start, the same guarantee ensurePrinterIds() gives every printer's
+// own id.
+const { GROUP_EVERYONE_ID, printerVisibleTo, removeGroupReferences } = require("./groupAccess");
+const newGroupId = () => "grp_" + crypto.randomBytes(6).toString("hex");
+// One-time migration from the pre-rename "Printer Profile" config schema to
+// "Printer Pool" (see queue/migratePrinterPool.js for the pure logic) — runs
+// unconditionally at every startup like the other ensure*Schema migrations
+// above, and persists immediately if anything actually changed so an
+// existing install only ever pays this cost once. Existing pool/printer ids
+// are preserved verbatim by the migration — only field/key names move.
+const { migratePrinterPoolConfig } = require("./queue/migratePrinterPool");
+(function migratePrinterPoolOnStartup() {
+  const { cfg, changed } = migratePrinterPoolConfig(CFG);
+  CFG = cfg;
+  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+})();
+function ensureGroupsSchema() {
+  if (!Array.isArray(CFG.groups)) CFG.groups = [];
+  let changed = false;
+  if (!CFG.groups.some(g => g.id === GROUP_EVERYONE_ID)) {
+    const now = new Date().toISOString();
+    CFG.groups.unshift({ id: GROUP_EVERYONE_ID, name: "Everyone", createdAt: now, updatedAt: now });
+    changed = true;
+  }
+  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+}
+ensureGroupsSchema();
+
+// Queue Management (Phase 1: per-printer manual queues only — no automated
+// G-code/API bed-clear yet). Re-runs unconditionally on every startup, not
+// as a true one-shot migration, since it also has to cover a printer added
+// later while the feature was already on, not just an old config.json
+// predating the feature entirely.
+const QueueEngine = require("./queue/QueueEngine");
+const { createQueueStore, defaultPrinterState: defaultQueuePrinterState } = require("./queue/QueueStore");
+const newPrinterPoolId = () => "pp_" + crypto.randomBytes(6).toString("hex");
+// Id kept as its original literal value across the Printer Pool rename —
+// see queue/migratePrinterPool.js: existing pool ids are preserved verbatim,
+// only field/key names ("queueProfiles"/"printerPoolId") were renamed.
+const PRINTER_POOL_DEFAULT_MANUAL_ID = "qp_default_manual";
+function ensurePrinterPoolSchema() {
+  if (!CFG.queueManagement || typeof CFG.queueManagement !== "object") CFG.queueManagement = { enabled: false, mode: "per-printer" };
+  if (!Array.isArray(CFG.printerPools)) CFG.printerPools = [];
+  let changed = false;
+  if (CFG.queueManagement.enabled && !CFG.printerPools.some(p => p.id === PRINTER_POOL_DEFAULT_MANUAL_ID)) {
+    const now = new Date().toISOString();
+    CFG.printerPools.unshift({ id: PRINTER_POOL_DEFAULT_MANUAL_ID, name: "Unassigned", type: "manual", isDefault: true, bedClearOnDispatchFailure: false, createdAt: now, updatedAt: now });
+    changed = true;
+  }
+  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+}
+ensurePrinterPoolSchema();
+const queueStore = createQueueStore({ baseDir: BASE_DIR });
+queueStore.load();
 
 // Users for the optional User Access Management feature. No file exists until
 // the first user is actually created — CFG.usersEnabled being true with zero
@@ -222,6 +297,26 @@ const { requireAuth, requireRegular, requireAdmin } = auth;
 // a process — happens later, inside app.listen's callback, not here (see
 // that callback for why: the server must be accepting requests first).
 const remoteAccess = createRemoteAccessService({ baseDir: BASE_DIR, getConfig: () => CFG, getUsers: () => USERS, port: PORT });
+
+// Audit log — the only module the routes below talk to for it. Degrades to a
+// silent no-op on a Node runtime too old for node:sqlite (see AuditLog.js);
+// never blocks or crashes any request either way.
+const auditLog = createAuditLog({ baseDir: BASE_DIR, retentionDaysFn: () => CFG.auditRetentionDays });
+setInterval(() => auditLog.prune(CFG.auditRetentionDays), 24 * 60 * 60 * 1000).unref();
+auditLog.prune(CFG.auditRetentionDays);
+
+// Never attributes an action to the implicit admin (usersEnabled:false) —
+// there's no real account behind it, just the historical "everyone's an
+// admin" back-compat behavior. A route firing while usersEnabled is off logs
+// userId:null/userLabel:null, same shape as a print started from a printer's
+// own screen.
+function actorFromReq(req) {
+  const u = req && req.user;
+  if (!u || u.implicit) return { userId: null, userLabel: null };
+  const name = [u.firstName, u.lastName].filter(Boolean).join(" ").trim();
+  return { userId: u.id, userLabel: name || u.loginName };
+}
+
 // Explicit index route so the UI is served even when running from a packaged
 // binary (where express.static from the snapshot can be unreliable).
 app.get("/", (req, res) => {
@@ -497,6 +592,7 @@ app.post("/api/print", requireRegular, async (req, res) => {
   const { file, printer, start, map, prefs } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
   const fp = safePath(file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
@@ -526,11 +622,35 @@ app.post("/api/print", requireRegular, async (req, res) => {
 
   // Upload-only click (Upload button, not Print) while this printer is
   // actively busy: queue it instead of racing an upload against whatever's
-  // already printing — the same pendingLoad/queuedFile mechanism the --load
-  // CLI hook already uses, so it uploads automatically the moment this
-  // printer goes idle and shows the same "ready to print" banner either way.
+  // already printing. When Queue Management is enabled and this printer has
+  // a pool, the new per-printer queue subsumes the old single-slot
+  // mechanism entirely (round-3 issue #7) — otherwise falls back to the
+  // original pendingLoad/queuedFile mechanism, unchanged.
   if (!start && !(await isPrinterIdle(p))) {
-    pendingLoad.set(printer, { file: fp, name, ts: Date.now(), tools, map, prefs });
+    if (CFG.queueManagement && CFG.queueManagement.enabled && p.printerPoolId) {
+      const actor = actorFromReq(req);
+      let hash;
+      try { hash = queueStore.computeFileHash(fp); } catch { hash = null; }
+      if (hash) {
+        const result = queueStore.applyIntent(p.id, (state) => ({
+          ...state,
+          queue: [...state.queue, {
+            id: QueueEngine.newQueueItemId(), status: "queued", alreadyUploaded: false,
+            file: { name, sub: "", sizeBytes: hash.sizeBytes, sha256: hash.sha256 },
+            map, prefs, createdAt: Date.now(), dispatchedAt: null, finishedAt: null,
+            queuedBy: actor, retryOfItemId: null, dispatchSnapshot: null
+          }],
+          updatedAt: Date.now()
+        }));
+        if (result.ok) {
+          auditLog.log({ category: "job", event: "queue-item-added", ...actor, printerId: p.id, printerName: p.name, detail: { count: 1, viaLegacyUpload: true } });
+          return res.json({ ok: true, mode: "queued", printer: p.name });
+        }
+      }
+      // Persistence/hash unavailable — fall through to the legacy mechanism
+      // rather than silently dropping the upload the user asked for.
+    }
+    pendingLoad.set(printer, { file: fp, name, ts: Date.now(), tools, map, prefs, actor: actorFromReq(req) });
     return res.json({ ok: true, mode: "pending", printer: p.name });
   }
 
@@ -539,6 +659,7 @@ app.post("/api/print", requireRegular, async (req, res) => {
   const job = { phase: "upload", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now() };
   JOBS.set(jobId, job);
   res.json({ jobId });
+  const actor = actorFromReq(req);
 
   (async () => {
     try {
@@ -565,6 +686,8 @@ app.post("/api/print", requireRegular, async (req, res) => {
       }
       job.result = { printer: p.name, started: !!start, mapped: tools.length };
       job.phase = "done"; job.done = true;
+      if (start) ROUTE_STARTED_PRINT.add(p.url);
+      auditLog.log({ category: "job", event: start ? "print-started" : "file-uploaded", ...actor, printerId: p.id, printerName: p.name, detail: { file: name } });
     } catch (e) {
       job.error = e.message; job.done = true; job.phase = "error";
     }
@@ -612,6 +735,7 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
   const { printer, filename, map, prefs } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
   if (!filename || /["\r\n]/.test(filename)) return res.status(400).json({ error: "Bad filename" });
 
@@ -629,6 +753,8 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
     await c.startPrintFile(p, filename);
     // Printing it is what "ready to print" was waiting for — clear the badge.
     if (queuedFile.get(printer)?.name === filename) { queuedFile.delete(printer); saveQueuedFiles(); }
+    ROUTE_STARTED_PRINT.add(p.url);
+    auditLog.log({ category: "job", event: "print-started", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file: filename } });
     res.json({ ok: true, printer: p.name, filename, mapped: tools.length });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -640,11 +766,13 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
   const { printer, action } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   const c = getConnector(p.connector);
   const method = { pause: c.pause, resume: c.resume, cancel: c.cancel, eject: c.eject, estop: c.estop }[action];
   if (!method) return res.status(400).json({ error: "Bad action" });
   try {
     await method.call(c, p);
+    auditLog.log({ category: "job", event: "printctl-" + action, ...actorFromReq(req), printerId: p.id, printerName: p.name });
     res.json({ ok: true, action });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -668,11 +796,13 @@ app.post("/api/exclude", requireRegular, async (req, res) => {
   const { printer, name } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (!name || /["\r\n]/.test(name)) return res.status(400).json({ error: "Bad object name" });
   const c = getConnector(p.connector);
   if (!c.excludeObject) return res.status(400).json({ error: p.name + " does not support excluding objects" });
   try {
     await c.excludeObject(p, name);
+    auditLog.log({ category: "job", event: "exclude-object", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { name } });
     res.json({ ok: true, excluded: name });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -743,6 +873,14 @@ async function probeCached(p) {
 const pendingLoad = new Map();
 const queuedFile = new Map();
 
+// Printer url -> true, set right after /api/print or /api/printfile actually
+// starts a print. notifyTick()'s own job-start detection (its only way to
+// notice a print started directly on a printer's own screen) checks and
+// consumes this flag so a SnapCon-initiated start — already audit-logged by
+// the route itself, with the real user attached — isn't logged a second
+// time, anonymously, whenever the next poll notices the same transition.
+const ROUTE_STARTED_PRINT = new Set();
+
 // A file that's actually "ready" is a real, permanent fact — it's sitting on
 // the printer's own storage until it's printed or ejected — but Klipper
 // itself has no concept of "loaded but not started" separate from actually
@@ -799,6 +937,12 @@ async function uploadNotifiedFile(idx, pl) {
     if (c.applyHeadMapping && ((pl.tools && pl.tools.length) || printerHasAnyDefaultPref(p) || wantsAnyPref(pl.prefs))) await c.applyHeadMapping(p, pl.tools || [], pl.map, pl.prefs);
     queuedFile.set(idx, { name: pl.name, status: "ready", ts: Date.now() });
     saveQueuedFiles();
+    // pl.actor is attached by whichever caller queued this (a web request's
+    // actorFromReq(req), or userLabel:"CLI" for the --load/--snapcon hook) —
+    // by the time a busy printer finally goes idle and this runs, the
+    // original HTTP request is long gone, so the actor has to travel with
+    // the payload rather than being read from req here.
+    auditLog.log({ category: "job", event: "file-uploaded", ...(pl.actor || { userId: null, userLabel: null }), printerId: p.id, printerName: p.name, detail: { file: pl.name } });
   } catch (e) {
     queuedFile.set(idx, { name: pl.name, status: "error", error: e.message, ts: Date.now() });
     saveQueuedFiles();
@@ -822,17 +966,140 @@ setInterval(async () => {
   }
 }, PENDING_RETRY_MS).unref();
 
+function printerById(id) { return PRINTERS.find(p => p.id === id); }
+// The executable bed-clear payload (real URL/headers/body/secrets — see
+// QueueItem.dispatchSnapshot) must never reach a GET response or an audit
+// entry, even defensively — Phase 1 never actually populates it (Manual
+// pools have no payload at all), but every route response is still
+// scrubbed through this so it stays true once G-code/API pools exist.
+function redactQueueStateForResponse(state) {
+  const stripItem = (item) => (item && item.dispatchSnapshot) ? { ...item, dispatchSnapshot: { ...item.dispatchSnapshot, bedClearExecutable: undefined } } : item;
+  return { ...state, currentItem: stripItem(state.currentItem), queue: state.queue.map(stripItem), recentHistory: state.recentHistory.map(stripItem) };
+}
+
+// ---- Queue Management dispatch execution ----
+// claimNextForDispatch() only ever decides WHO gets claimed and persists
+// that decision — actually touching the connector (upload/mapping/start)
+// happens here, exactly once per claim, and records the real-world outcome
+// back through QueueEngine's Category-B functions (onDispatchSuccess/
+// Failure) via queueStore.applyObserved.
+async function attemptQueueDispatch(printerId) {
+  const p = PRINTERS.find(pr => pr.id === printerId);
+  if (!p || !p.printerPoolId) return;
+  // Interlock with the OLD single-slot mechanism (round-3 issue #7): a
+  // printer the legacy pendingLoad/queuedFile flow still owns must finish
+  // resolving under that flow first — both mechanisms racing to claim the
+  // same printer the instant it goes idle is exactly the overlap the
+  // interlock exists to prevent.
+  const idx = PRINTERS.indexOf(p);
+  if (pendingLoad.has(idx)) return;
+  if (!(await isPrinterIdle(p))) return;
+
+  const claim = queueStore.claimNextForDispatch(printerId);
+  if (!claim.claimed) return;
+  const item = claim.item;
+  const c = getConnector(p.connector);
+  const fp = safePath((item.file.sub ? item.file.sub + "/" : "") + item.file.name);
+
+  // Mandatory pre-dispatch file-identity check (design doc Part B/D6,
+  // round-3 issue #4, round-4 issue #7) — forced, uncached hash, since this
+  // IS the moment identity is being decided, not the routine case the cache
+  // exists for.
+  let verified = false;
+  try {
+    if (!fp || !fs.existsSync(fp)) {
+      queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-missing", message: "File no longer exists: " + item.file.name });
+    } else {
+      const hash = queueStore.computeFileHash(fp, { force: true });
+      if (hash.sha256 !== item.file.sha256) {
+        queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "changed", { code: "file-changed", message: "File content changed since it was queued: " + item.file.name });
+      } else {
+        verified = true;
+      }
+    }
+  } catch (e) {
+    queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-check-error", message: e.message });
+  }
+  if (!verified) return;
+
+  const name = item.file.name;
+  try {
+    if (!item.alreadyUploaded) await c.uploadFile(p, fp, name, { sent: 0, total: 0 });
+    const tools = Object.keys(item.map || {}).map(Number).sort((a, b) => a - b);
+    if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(item.prefs))) {
+      await c.applyHeadMapping(p, tools, item.map, item.prefs);
+    }
+    await c.startPrintFile(p, name);
+    queueStore.applyObserved(printerId, QueueEngine.onDispatchSuccess, item.id);
+    // Same dedup convention /api/print already uses — notifyTick's own
+    // newJob detection would otherwise double-log this print's start.
+    ROUTE_STARTED_PRINT.add(p.url);
+    auditLog.log({ category: "job", event: "queue-print-started", printerId: p.id, printerName: p.name, detail: { file: name, retryOf: item.retryOfItemId || undefined } });
+  } catch (e) {
+    queueStore.applyObserved(printerId, QueueEngine.onDispatchFailure, item.id, { code: "dispatch-error", message: e.message });
+    auditLog.log({ category: "job", event: "queue-dispatch-failed", printerId: p.id, printerName: p.name, detail: { file: name, error: e.message } });
+  }
+}
+
+// Idle-sweep: the only OTHER trigger for a claim besides an explicit
+// immediate attempt right after an action that might have freed a printer up
+// (enqueue-with-start-now, confirm-bed-clear, resolving an attention state).
+// Both paths funnel through the same claimNextForDispatch/attemptQueueDispatch
+// — there is no second decision-making code path.
+const QUEUE_SWEEP_MS = 5000;
+setInterval(() => {
+  if (!CFG.queueManagement || !CFG.queueManagement.enabled) return;
+
+  // Auto-balance (opt-in per Printer Pool, see Settings -> Queue Management):
+  // before the normal claim sweep below, let a printer about to sit idle
+  // with an empty queue borrow work from a same-connector sibling in the
+  // same pool that still has a backlog, rather than sit idle while others
+  // are stacked up. QueueEngine.computeAutoBalanceMoves is pure — it just
+  // computes the moves against a snapshot; applyBulkIntent is what actually
+  // persists them as ONE transaction, so two printers going idle in the same
+  // tick can't race each other for the same donor (see that function's own
+  // comment for why processing them together, not one claim call each,
+  // matters here).
+  const balancePools = (CFG.printerPools || []).filter(pool => pool.autoBalance);
+  if (balancePools.length) {
+    const groups = balancePools
+      .map(pool => ({ printers: PRINTERS.filter(p => p.printerPoolId === pool.id).map(p => ({ id: p.id, connector: p.connector })) }))
+      .filter(g => g.printers.length > 1);
+    if (groups.length) {
+      const result = queueStore.applyBulkIntent(current => QueueEngine.computeAutoBalanceMoves(current, groups));
+      if (result.ok && result.updates) {
+        for (const printerId of Object.keys(result.updates)) {
+          const p = printerById(printerId);
+          if (p) auditLog.log({ category: "job", event: "queue-auto-balance-move", printerId: p.id, printerName: p.name });
+        }
+      }
+    }
+  }
+
+  for (const p of PRINTERS) {
+    if (!p.printerPoolId) continue;
+    const qs = queueStore.getPrinterState(p.id);
+    if (qs.queueState === "idle" && !qs.queuePaused && !qs.queueStopped && qs.queue.length) {
+      attemptQueueDispatch(p.id).catch(e => console.error("[queue] dispatch sweep error:", e.message));
+    }
+  }
+}, QUEUE_SWEEP_MS).unref();
+
 app.get("/api/fleet", requireAuth, async (req, res) => {
   // ?printer=N probes just that printer — the splash screen uses this to show
   // per-printer connect progress. No param = the whole fleet (normal polling).
   if (req.query.printer !== undefined) {
     const i = parseInt(req.query.printer, 10);
     const p = PRINTERS[i];
-    if (!p) return res.status(400).json({ error: "Unknown printer" });
+    // A printer outside the caller's groups reports the exact same "Unknown
+    // printer" shape as a genuinely-missing index — its existence isn't
+    // leaked to a user who can't see it.
+    if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
     const conn = getConnector(p.connector);
     return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) });
   }
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
+    if (!printerVisibleTo(req.user, p)) return null;
     const conn = getConnector(p.connector);
     // autoLevel/flowCalibrate/timelapse: not secrets (unlike token/
     // verificationCode) — exposed here so the per-print options checkboxes
@@ -850,9 +1117,16 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // keep re-showing the queue prompt on every poll.
     if (qf) row.queuedFile = qf;
     else if (pl) row.queuedFile = { name: pl.name, status: "queued", ts: pl.ts };
+    // Lightweight enough for every fleet-card poll — the full queue (files,
+    // history, dispatch snapshots) is only ever fetched on demand via
+    // GET /api/queue/:printerId, not repeated here on every 2s tick.
+    if (p.printerPoolId) {
+      const qs = queueStore.getPrinterState(p.id);
+      row.queueSummary = { queueState: qs.queueState, pendingCount: qs.queue.length, requiresAttention: qs.queueState === "queue_attention_required", paused: qs.queuePaused, stopped: qs.queueStopped };
+    }
     return row;
   }));
-  res.json(out);
+  res.json(out.filter(Boolean));
 });
 
 // Only the local machine may stage arbitrary filesystem paths onto a printer —
@@ -885,11 +1159,12 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
     const tmpFile = path.join(NOTIFY_TMP_DIR, "push-" + Date.now() + "-" + Math.random().toString(16).slice(2) + "-" + safeName);
     fs.writeFileSync(tmpFile, req.body);
 
+    const actor = actorFromReq(req);
     if (!(await isPrinterIdle(p))) {
-      pendingLoad.set(idx, { file: tmpFile, name, ts: Date.now(), cleanup: true });
+      pendingLoad.set(idx, { file: tmpFile, name, ts: Date.now(), cleanup: true, actor });
       return res.json({ ok: true, mode: "pending", printer: p.name });
     }
-    uploadNotifiedFile(idx, { file: tmpFile, name, cleanup: true });
+    uploadNotifiedFile(idx, { file: tmpFile, name, cleanup: true, actor });
     return res.json({ ok: true, mode: "queued", printer: p.name });
   }
 
@@ -907,12 +1182,15 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
   // displayed as. The file actually read off disk is always absFile.
   const name = outputname ? outputname.trim() : path.basename(absFile);
 
+  // Same-machine CLI call (--load, no --snapcon) — no browser session exists
+  // to attribute this to, so it's labeled as coming from the CLI itself.
+  const actor = { userId: null, userLabel: "CLI" };
   if (!(await isPrinterIdle(p))) {
-    pendingLoad.set(idx, { file: absFile, name, ts: Date.now() });
+    pendingLoad.set(idx, { file: absFile, name, ts: Date.now(), actor });
     return res.json({ ok: true, mode: "pending", printer: p.name });
   }
 
-  uploadNotifiedFile(idx, { file: absFile, name });
+  uploadNotifiedFile(idx, { file: absFile, name, actor });
   res.json({ ok: true, mode: "queued", printer: p.name });
 });
 
@@ -1003,11 +1281,13 @@ app.post("/api/unload", requireRegular, async (req, res) => {
   const { printer, extruders } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (!Array.isArray(extruders) || !extruders.length) return res.status(400).json({ error: "No extruders specified" });
   const c = getConnector(p.connector);
   if (!c.unloadFilament) return res.status(400).json({ error: p.name + " does not support filament unload" });
   try {
     await c.unloadFilament(p, extruders);
+    auditLog.log({ category: "job", event: "unload-filament", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { extruders } });
     res.json({ ok: true, printer: p.name, extruders });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -1019,6 +1299,7 @@ app.post("/api/filament-color", requireRegular, async (req, res) => {
   const { printer, extruder, hex } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (typeof extruder !== "number" || extruder < 0) return res.status(400).json({ error: "Invalid extruder" });
   if (!/^#[0-9a-fA-F]{6}$/.test(String(hex || ""))) return res.status(400).json({ error: "Invalid color" });
   const c = getConnector(p.connector);
@@ -1028,6 +1309,7 @@ app.post("/api/filament-color", requireRegular, async (req, res) => {
     // fixed color palette) — the client shows this back to the user rather
     // than assuming its own request was applied verbatim.
     const applied = await c.setFilamentColor(p, extruder, hex);
+    auditLog.log({ category: "job", event: "filament-color-set", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { extruder, hex: applied || hex } });
     res.json({ ok: true, printer: p.name, extruder, hex: applied || hex });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -1039,10 +1321,12 @@ app.post("/api/bedtemp", requireRegular, async (req, res) => {
   const { printer, temp } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   const t = Number(temp);
   if (!Number.isFinite(t) || t < 0 || t > 120) return res.status(400).json({ error: "Temp must be 0–120 °C" });
   try {
     await getConnector(p.connector).bedTemp(p, t);
+    auditLog.log({ category: "job", event: "bedtemp-set", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { target: Math.round(t) } });
     res.json({ ok: true, printer: p.name, target: Math.round(t) });
   } catch (e) {
     res.status(502).json({ error: e.message });
@@ -1288,7 +1572,8 @@ function publicCfg(role) {
     electricityRate: CFG.electricityRate || null,
     currency: CFG.currency || "$",
     tNotation: CFG.tNotation || false,
-    openCompact: CFG.openCompact || false,
+    defaultView: CFG.defaultView || "regular",
+    siteName: CFG.siteName || "",
     allowMapping: CFG.allowMapping !== false,
     suggestMatching: CFG.suggestMatching !== false,
     usersEnabled: !!CFG.usersEnabled,
@@ -1324,7 +1609,9 @@ function publicCfg(role) {
       // not a per-purpose secret, so there's no reason to make an admin
       // stand up a second bot just for login codes.
       telegramBotConfigured: !!(CFG.notifications && CFG.notifications.telegramBotToken)
-    }
+    },
+    auditRetentionDays: CFG.auditRetentionDays || 90,
+    auditAvailable: auditLog.isAvailable()
   };
 }
 app.get("/api/config", requireAuth, (req, res) => res.json(publicCfg(req.user.role)));
@@ -1359,15 +1646,24 @@ app.post("/api/remote-access/enable", requireAdmin, (req, res) => {
   // The rest (provisioning, download, process start) can take a while — the
   // client polls /api/remote-access/status rather than this request hanging.
   res.json({ ok: true, pending: true });
-  remoteAccess.enable().catch(e => console.error("[remote-access] enable failed:", e.message));
+  const actor = actorFromReq(req);
+  remoteAccess.enable()
+    .then(() => auditLog.log({ category: "admin", event: "remote-access-enabled", ...actor }))
+    .catch(e => console.error("[remote-access] enable failed:", e.message));
 });
 app.post("/api/remote-access/disable", requireAdmin, (req, res) => {
   res.json({ ok: true, pending: true });
-  remoteAccess.disable().catch(e => console.error("[remote-access] disable failed:", e.message));
+  const actor = actorFromReq(req);
+  remoteAccess.disable()
+    .then(() => auditLog.log({ category: "admin", event: "remote-access-disabled", ...actor }))
+    .catch(e => console.error("[remote-access] disable failed:", e.message));
 });
 app.post("/api/remote-access/remove", requireAdmin, (req, res) => {
   res.json({ ok: true, pending: true });
-  remoteAccess.removeRemoteAccess().catch(e => console.error("[remote-access] remove failed:", e.message));
+  const actor = actorFromReq(req);
+  remoteAccess.removeRemoteAccess()
+    .then(() => auditLog.log({ category: "admin", event: "remote-access-removed", ...actor }))
+    .catch(e => console.error("[remote-access] remove failed:", e.message));
 });
 // Diagnostics: re-runs the connection chain from the top. requireAdmin, same
 // as every other action on this feature — errors surface via the normal
@@ -1375,6 +1671,7 @@ app.post("/api/remote-access/remove", requireAdmin, (req, res) => {
 app.post("/api/remote-access/restart", requireAdmin, async (req, res) => {
   const r = await remoteAccess.restart();
   if (!r.ok) return res.status(400).json(r);
+  auditLog.log({ category: "admin", event: "remote-access-restarted", ...actorFromReq(req) });
   res.json(r);
 });
 app.get("/api/remote-access/log", requireAdmin, (req, res) => res.json({ lines: remoteAccess.getLog() }));
@@ -1424,6 +1721,11 @@ async function buildPrinterRecord(p, existing) {
   // for FlashForge's checkCode, documented as 4-5 digits.
   if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 8);
   o.id = (existing && existing.id) || newPrinterId();
+  // Printer Pool assignment is changed only via the dedicated
+  // /api/printer-pool route (it also has to update QueueStore's
+  // own state, not just this config field) — a general settings save just
+  // carries it forward untouched, same convention as `id` on this same line.
+  if (existing && existing.printerPoolId) o.printerPoolId = existing.printerPoolId;
   // Same "blank means keep the existing secret" convention as
   // notifications.telegramBotToken — except the token never round-
   // trips to the client at all now, so blank/omitted is the NORMAL
@@ -1446,6 +1748,17 @@ async function buildPrinterRecord(p, existing) {
   } else if (existing && Array.isArray(existing.tags) && existing.tags.length) {
     o.tags = existing.tags;
   }
+  // Same "array present (even empty) means authoritative, absent means carry
+  // existing forward" convention as tags above — an empty array here is a
+  // deliberate "no groups checked", which falls back to Everyone at read
+  // time (see printerVisibleTo()), not stored as an empty array forever.
+  if (Array.isArray(p.allowedGroups)) {
+    const known = new Set((CFG.groups || []).map(g => g.id));
+    const allowed = p.allowedGroups.filter(gId => known.has(gId));
+    if (allowed.length) o.allowedGroups = allowed;
+  } else if (existing && Array.isArray(existing.allowedGroups) && existing.allowedGroups.length) {
+    o.allowedGroups = existing.allowedGroups;
+  }
 
   if (o.connector === "creality-klipper") {
     const urlChanged = !existing || existing.url !== o.url;
@@ -1463,6 +1776,28 @@ async function buildPrinterRecord(p, existing) {
   return o;
 }
 
+// Fields whose value is (or embeds) a real secret — printers[] carries each
+// printer's Moonraker token, notifications/otp carry bot tokens and API
+// keys. Everything else is plain settings, safe to log verbatim so the audit
+// entry is actually useful ("refreshInterval 2 -> 5") rather than opaque.
+const CONFIG_SECRET_FIELDS = new Set(["resend", "otp", "notifications", "printers"]);
+// Internal bookkeeping the client never edits directly — comparing these
+// would just report noise (e.g. maintenanceHistory growing from an unrelated
+// maintenance-log save) rather than an actual admin decision.
+const CONFIG_IGNORED_FIELDS = new Set(["port", "maintenanceHistory", "maintenanceComponents", "groups"]);
+function diffConfigForAudit(before, after) {
+  const changed = [];
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  for (const k of keys) {
+    if (CONFIG_IGNORED_FIELDS.has(k)) continue;
+    const bv = before ? before[k] : undefined;
+    const av = after ? after[k] : undefined;
+    if (JSON.stringify(bv) === JSON.stringify(av)) continue;
+    changed.push(CONFIG_SECRET_FIELDS.has(k) ? { field: k } : { field: k, from: bv, to: av });
+  }
+  return changed;
+}
+
 app.post("/api/config", requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (b.usersEnabled && !USERS.some(u => u.role === "admin")) {
@@ -1476,10 +1811,23 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     return res.status(400).json({ error: "Remote Access is on and needs a login requirement. Turn off Remote Access first (Settings → Remote Access), then disable User Access Management." });
   }
   const printersOut = Array.isArray(b.printers)
-    ? await Promise.all(b.printers.filter(p => p && p.url).map(p => {
-        const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === String(p.url));
-        return buildPrinterRecord(p, existing);
-      }))
+    ? await Promise.all(
+        b.printers
+          // Simulator printers have no real hardware address — the client
+          // auto-fills a synthetic one, but this is the actual boundary
+          // where a blank url would otherwise silently drop the printer
+          // from the saved list entirely (see the `.filter(p && p.url)`
+          // below), so the same fallback is applied here too rather than
+          // trusting the client.
+          .map(p => (p && p.connector === "simulator" && !String(p.url || "").trim())
+            ? { ...p, url: "sim://" + crypto.randomBytes(4).toString("hex") }
+            : p)
+          .filter(p => p && p.url)
+          .map(p => {
+            const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === String(p.url));
+            return buildPrinterRecord(p, existing);
+          })
+      )
     : (CFG.printers || []);
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
@@ -1488,14 +1836,17 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     // Defaults ON like allowMapping/suggestMatching below — absence must
     // fall back to the previous stored value, not to false.
     cameraViewStagger: (typeof b.cameraViewStagger === "boolean") ? b.cameraViewStagger : (CFG.cameraViewStagger !== false),
-    alternateDisplay: ["all","compact","camera","list"].includes(b.alternateDisplay) ? b.alternateDisplay : (CFG.alternateDisplay || "all"),
+    alternateDisplay: ["all","compact","camera","list","printfarm"].includes(b.alternateDisplay) ? b.alternateDisplay : (CFG.alternateDisplay || "all"),
     filamentCost: (typeof b.filamentCost === "number" && b.filamentCost > 0) ? b.filamentCost : undefined,
     electricityRate: (typeof b.electricityRate === "number" && b.electricityRate > 0) ? b.electricityRate : undefined,
     currency: (typeof b.currency === "string" && b.currency.trim()) ? b.currency.trim().slice(0, 6) : "$",
     tNotation: b.tNotation ? true : undefined,
-    openCompact: b.openCompact ? true : undefined,
-    // Unlike tNotation/openCompact (default off, "omit means false" is safe),
-    // these default ON — so absence must fall back to the previous stored
+    defaultView: ["regular","compact","camera","list","printfarm"].includes(b.defaultView) ? b.defaultView : (CFG.defaultView || "regular"),
+    // Empty means "don't show it" (see the topbar) — never persisted as a
+    // stray leftover string once cleared.
+    siteName: (typeof b.siteName === "string" && b.siteName.trim()) ? b.siteName.trim().slice(0, 60) : undefined,
+    // Unlike tNotation (default off, "omit means false" is safe), these
+    // default ON — so absence must fall back to the previous stored
     // value, not to false, or unchecking them would never persist.
     allowMapping: (typeof b.allowMapping === "boolean") ? b.allowMapping : (CFG.allowMapping !== false),
     suggestMatching: (typeof b.suggestMatching === "boolean") ? b.suggestMatching : (CFG.suggestMatching !== false),
@@ -1544,6 +1895,22 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     // explicitly copied here is lost the moment this file is rewritten).
     maintenanceHistory: CFG.maintenanceHistory || undefined,
     maintenanceComponents: CFG.maintenanceComponents || undefined,
+    // Groups are managed entirely through their own /api/groups CRUD routes,
+    // never through this endpoint — carried forward untouched for the same
+    // "full rebuild, not a merge" reason as maintenanceHistory above.
+    groups: CFG.groups || undefined,
+    // Queue Management is managed entirely through its own
+    // /api/queue-management/* and /api/printer-pools/* routes, never through
+    // this endpoint — carried forward untouched for the same "full rebuild,
+    // not a merge" reason as maintenanceHistory/groups above. Omitting this
+    // was the root cause of a report where a newly-created Printer Pool
+    // vanished after an unrelated Settings save: this `next` rebuild would
+    // silently drop it, and the loadConfig() reload below never re-runs
+    // ensurePrinterPoolSchema() to restore even the defaults.
+    queueManagement: CFG.queueManagement || undefined,
+    printerPools: (CFG.printerPools && CFG.printerPools.length) ? CFG.printerPools : undefined,
+    // Editable from the Settings > Logs tab's "keep logs for ___ days" field.
+    auditRetentionDays: (typeof b.auditRetentionDays === "number" && b.auditRetentionDays > 0) ? b.auditRetentionDays : (CFG.auditRetentionDays || undefined),
     // Persistent identity, independent of name/url — matched by id first
     // (round-tripped from the client) so renaming or re-IP'ing a printer
     // doesn't detach it from its own maintenance history (CFG.maintenanceHistory,
@@ -1552,9 +1919,14 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     // Creality printers may need a live camera-detection round-trip).
     printers: printersOut
   };
+  // Computed right before the write, against the CFG that's still live at
+  // this point — never against `next` after loadConfig() below has already
+  // replaced it.
+  const configDiff = diffConfigForAudit(CFG, next);
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
     loadConfig();
+    if (configDiff.length) auditLog.log({ category: "admin", event: "settings-updated", ...actorFromReq(req), detail: { changed: configDiff } });
     res.json({ ok: true, ...publicCfg(req.user.role) });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1569,7 +1941,7 @@ const LOGIN_NAME_RE = /^[a-zA-Z0-9_.-]{2,32}$/;
 const ROLES = ["view", "regular", "admin"];
 
 function publicUser(u) {
-  return { id: u.id, firstName: u.firstName || "", lastName: u.lastName || "", loginName: u.loginName, email: u.email || "", phone: u.phone || "", role: u.role, otpEnabled: !!u.otpEnabled, createdAt: u.createdAt, updatedAt: u.updatedAt };
+  return { id: u.id, firstName: u.firstName || "", lastName: u.lastName || "", loginName: u.loginName, email: u.email || "", phone: u.phone || "", role: u.role, otpEnabled: !!u.otpEnabled, groupIds: Array.isArray(u.groupIds) ? u.groupIds : [], createdAt: u.createdAt, updatedAt: u.updatedAt };
 }
 function findUserByLoginName(loginName) {
   const norm = String(loginName || "").trim().toLowerCase();
@@ -1591,11 +1963,18 @@ app.post("/api/login", async (req, res) => {
   if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
   const { loginName, password } = req.body || {};
   const u = findUserByLoginName(loginName);
-  if (!u) return res.status(401).json({ error: "Invalid login name or password" });
+  if (!u) {
+    auditLog.log({ category: "auth", event: "login-failed", userLabel: String(loginName || ""), detail: { reason: "unknown login name" } });
+    return res.status(401).json({ error: "Invalid login name or password" });
+  }
   if (u.otpEnabled) return res.status(400).json({ error: 'This account signs in with a one-time code — use "Send me a code instead"' });
-  if (!(await auth.verifyPassword(String(password || ""), u.passwordHash))) return res.status(401).json({ error: "Invalid login name or password" });
+  if (!(await auth.verifyPassword(String(password || ""), u.passwordHash))) {
+    auditLog.log({ category: "auth", event: "login-failed", userId: u.id, userLabel: u.loginName, detail: { reason: "bad password" } });
+    return res.status(401).json({ error: "Invalid login name or password" });
+  }
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
+  auditLog.log({ category: "auth", event: "login", userId: u.id, userLabel: u.loginName });
   res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role } });
 });
 
@@ -1640,15 +2019,23 @@ app.post("/api/login/otp/verify", (req, res) => {
   if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
   const { loginName, code } = req.body || {};
   const u = findUserByLoginName(loginName);
-  if (!u || !u.otpEnabled) return res.status(401).json({ error: "Incorrect code" });
+  if (!u || !u.otpEnabled) {
+    auditLog.log({ category: "auth", event: "login-failed", userLabel: String(loginName || ""), detail: { reason: "unknown/non-OTP login name" } });
+    return res.status(401).json({ error: "Incorrect code" });
+  }
   const result = auth.verifyOtpCode(u.loginNameLower, code);
-  if (!result.ok) return res.status(401).json({ error: result.error });
+  if (!result.ok) {
+    auditLog.log({ category: "auth", event: "login-failed", userId: u.id, userLabel: u.loginName, detail: { reason: result.error } });
+    return res.status(401).json({ error: result.error });
+  }
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
+  auditLog.log({ category: "auth", event: "login", userId: u.id, userLabel: u.loginName, detail: { via: "otp" } });
   res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role } });
 });
 
 app.post("/api/logout", (req, res) => {
+  if (req.user) auditLog.log({ category: "auth", event: "logout", ...actorFromReq(req) });
   if (req.sessionToken) auth.destroySession(req.sessionToken);
   res.clearCookie(auth.SESSION_COOKIE);
   res.json({ ok: true });
@@ -1673,16 +2060,19 @@ app.post("/api/users", requireAdmin, async (req, res) => {
     passwordHash = await auth.hashPassword(password);
   }
   const now = new Date().toISOString();
+  const knownGroups = new Set((CFG.groups || []).map(g => g.id));
   const u = {
     id: auth.newUserId(),
     firstName: String(b.firstName || "").trim(), lastName: String(b.lastName || "").trim(),
     loginName, loginNameLower,
     email: String(b.email || "").trim(), phone: String(b.phone || "").trim(),
     role: b.role, otpEnabled, passwordHash,
+    groupIds: Array.isArray(b.groupIds) ? b.groupIds.filter(gId => knownGroups.has(gId)) : [],
     createdAt: now, updatedAt: now
   };
   USERS.push(u);
   try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "user-created", ...actorFromReq(req), detail: { targetUserId: u.id, loginName: u.loginName, role: u.role } });
   res.json({ ok: true, user: publicUser(u) });
 });
 
@@ -1722,6 +2112,10 @@ app.put("/api/users/:id", requireAdmin, async (req, res) => {
   if (b.lastName !== undefined) u.lastName = String(b.lastName || "").trim();
   if (b.email !== undefined) u.email = String(b.email || "").trim();
   if (b.phone !== undefined) u.phone = String(b.phone || "").trim();
+  if (Array.isArray(b.groupIds)) {
+    const known = new Set((CFG.groups || []).map(g => g.id));
+    u.groupIds = b.groupIds.filter(gId => known.has(gId));
+  }
   u.otpEnabled = nextOtpEnabled;
   // A password already on file stays on file when OTP is turned on — it's just
   // unusable while otpEnabled blocks password login (see /api/login above) —
@@ -1729,6 +2123,7 @@ app.put("/api/users/:id", requireAdmin, async (req, res) => {
   if (!nextOtpEnabled && newPasswordHash) u.passwordHash = newPasswordHash;
   u.updatedAt = new Date().toISOString();
   try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "user-updated", ...actorFromReq(req), detail: { targetUserId: u.id, loginName: u.loginName } });
   res.json({ ok: true, user: publicUser(u) });
 });
 
@@ -1745,7 +2140,535 @@ app.delete("/api/users/:id", requireAdmin, (req, res) => {
   const [removed] = USERS.splice(idx, 1);
   try { saveUsers(); } catch (e) { USERS.splice(idx, 0, removed); return res.status(500).json({ error: e.message }); }
   if (removed.id === (req.user && req.user.id)) { auth.destroySession(req.sessionToken); res.clearCookie(auth.SESSION_COOKIE); }
+  auditLog.log({ category: "admin", event: "user-deleted", ...actorFromReq(req), detail: { targetUserId: removed.id, loginName: removed.loginName } });
   res.json({ ok: true });
+});
+
+// ---- Groups: scope which users can see/act on which printers ----
+// CFG.groups lives in config.json (not users.json) since it must exist
+// unconditionally at startup, same as CFG.printers (see ensureGroupsSchema).
+// USERS[].groupIds and PRINTERS[].allowedGroups are the two membership
+// edges; printerVisibleTo() is the one place their "missing means Everyone"
+// fallback is applied.
+app.get("/api/groups", requireAdmin, (req, res) => {
+  res.json(CFG.groups || []);
+});
+
+app.post("/api/groups", requireAdmin, (req, res) => {
+  const name = String((req.body || {}).name || "").trim();
+  if (!name) return res.status(400).json({ error: "Group name required" });
+  if (!Array.isArray(CFG.groups)) CFG.groups = [];
+  const now = new Date().toISOString();
+  const g = { id: newGroupId(), name, createdAt: now, updatedAt: now };
+  CFG.groups.push(g);
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { CFG.groups.pop(); return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "group-created", ...actorFromReq(req), detail: { groupId: g.id, name } });
+  res.json({ ok: true, group: g });
+});
+
+app.put("/api/groups/:id", requireAdmin, (req, res) => {
+  const g = (CFG.groups || []).find(x => x.id === req.params.id);
+  if (!g) return res.status(404).json({ error: "Group not found" });
+  if (g.id === GROUP_EVERYONE_ID) return res.status(400).json({ error: "The Everyone group can't be renamed" });
+  const name = String((req.body || {}).name || "").trim();
+  if (!name) return res.status(400).json({ error: "Group name required" });
+  const prevName = g.name;
+  g.name = name;
+  g.updatedAt = new Date().toISOString();
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { g.name = prevName; return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "group-renamed", ...actorFromReq(req), detail: { groupId: g.id, from: prevName, to: name } });
+  res.json({ ok: true, group: g });
+});
+
+app.delete("/api/groups/:id", requireAdmin, (req, res) => {
+  const id = req.params.id;
+  if (id === GROUP_EVERYONE_ID) return res.status(400).json({ error: "The Everyone group can't be deleted" });
+  const idx = (CFG.groups || []).findIndex(x => x.id === id);
+  if (idx === -1) return res.status(404).json({ error: "Group not found" });
+
+  // Nothing is written to either file until both are known-good — restores
+  // all three in-memory structures if either save fails, matching the
+  // validate-then-mutate pattern the user CRUD routes above already use.
+  const removedGroup = CFG.groups[idx];
+  const groupsBackup = CFG.groups.slice();
+  const printerBackups = PRINTERS.map(p => p.allowedGroups);
+  const userBackups = USERS.map(u => u.groupIds);
+
+  CFG.groups.splice(idx, 1);
+  removeGroupReferences(id, PRINTERS, USERS);
+
+  try {
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
+    saveUsers();
+  } catch (e) {
+    CFG.groups = groupsBackup;
+    PRINTERS.forEach((p, i) => { p.allowedGroups = printerBackups[i]; });
+    USERS.forEach((u, i) => { u.groupIds = userBackups[i]; });
+    return res.status(500).json({ error: e.message });
+  }
+  auditLog.log({ category: "admin", event: "group-deleted", ...actorFromReq(req), detail: { groupId: id, name: removedGroup.name } });
+  res.json({ ok: true });
+});
+
+// ---- Audit log: read-only Settings > Logs tab ----
+app.get("/api/audit-log", requireAdmin, (req, res) => {
+  const { from, to, category, event, userId, printerId, q, limit, offset } = req.query;
+  res.json(auditLog.query({
+    from: from ? Number(from) : undefined,
+    to: to ? Number(to) : undefined,
+    category: category || undefined,
+    event: event || undefined,
+    userId: userId || undefined,
+    printerId: printerId || undefined,
+    q: q || undefined,
+    limit: limit ? Number(limit) : 100,
+    offset: offset ? Number(offset) : 0
+  }));
+});
+
+// ==================================================================
+// ---- Queue Management (Phase 1: per-printer manual queues) ----
+// ==================================================================
+
+app.get("/api/queue-management/status", requireAuth, (req, res) => {
+  res.json({ enabled: !!(CFG.queueManagement && CFG.queueManagement.enabled), mode: (CFG.queueManagement && CFG.queueManagement.mode) || "per-printer", store: queueStore.getGlobalStatus() });
+});
+
+app.post("/api/queue-management/enable", requireAdmin, (req, res) => {
+  if (!CFG.queueManagement || typeof CFG.queueManagement !== "object") CFG.queueManagement = { enabled: false, mode: "per-printer" };
+  if (!CFG.queueManagement.enabled) {
+    CFG.queueManagement.enabled = true;
+    ensurePrinterPoolSchema(); // creates the protected Unassigned pool + persists
+    // Auto-assign every currently-unmanaged printer — both systems of
+    // record (config.json's printerPoolId, and QueueStore's own queueState)
+    // need updating together (design doc A3).
+    let changed = false;
+    for (const p of PRINTERS) {
+      if (!p.printerPoolId) { p.printerPoolId = PRINTER_POOL_DEFAULT_MANUAL_ID; changed = true; }
+      if (queueStore.getPrinterState(p.id).queueState === "unmanaged") queueStore.assignPool(p.id);
+    }
+    if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+    auditLog.log({ category: "admin", event: "queue-management-enabled", ...actorFromReq(req) });
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/queue-management/disable", requireAdmin, (req, res) => {
+  if (!CFG.queueManagement) CFG.queueManagement = {};
+  CFG.queueManagement.enabled = false;
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
+  auditLog.log({ category: "admin", event: "queue-management-disabled", ...actorFromReq(req) });
+  res.json({ ok: true });
+});
+
+// ---- Printer Pools (bed-clear policy) ----
+function sanitizePrinterPool(p) { return { id: p.id, name: p.name, type: p.type, isDefault: !!p.isDefault, autoBalance: !!p.autoBalance }; }
+
+app.get("/api/printer-pools", requireAuth, (req, res) => {
+  const pools = CFG.printerPools || [];
+  if (req.user.role !== "admin") return res.json(pools.map(sanitizePrinterPool));
+  res.json(pools.map(p => ({ ...sanitizePrinterPool(p), bedClearOnDispatchFailure: !!p.bedClearOnDispatchFailure, createdAt: p.createdAt, updatedAt: p.updatedAt })));
+});
+
+app.post("/api/printer-pools", requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || "").trim();
+  if (!name) return res.status(400).json({ error: "Pool name required" });
+  // Phase 1: only Manual pools exist — G-code/API land in Phase 2.
+  if (b.type && b.type !== "manual") return res.status(400).json({ error: "Only Manual bed-clear pools are available right now" });
+  if (!Array.isArray(CFG.printerPools)) CFG.printerPools = [];
+  const now = new Date().toISOString();
+  const pool = { id: newPrinterPoolId(), name, type: "manual", isDefault: false, bedClearOnDispatchFailure: false, autoBalance: false, createdAt: now, updatedAt: now };
+  CFG.printerPools.push(pool);
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { CFG.printerPools.pop(); return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "printer-pool-created", ...actorFromReq(req), detail: { poolId: pool.id, name } });
+  res.json({ ok: true, pool });
+});
+
+app.put("/api/printer-pools/:id", requireAdmin, (req, res) => {
+  const pool = (CFG.printerPools || []).find(p => p.id === req.params.id);
+  if (!pool) return res.status(404).json({ error: "Pool not found" });
+  const b = req.body || {};
+  const prevName = pool.name, prevAutoBalance = !!pool.autoBalance;
+  if (b.name !== undefined) {
+    const name = String(b.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Pool name required" });
+    pool.name = name;
+  }
+  if (b.bedClearOnDispatchFailure !== undefined) pool.bedClearOnDispatchFailure = !!b.bedClearOnDispatchFailure;
+  if (b.autoBalance !== undefined) pool.autoBalance = !!b.autoBalance;
+  pool.updatedAt = new Date().toISOString();
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { pool.name = prevName; pool.autoBalance = prevAutoBalance; return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "printer-pool-updated", ...actorFromReq(req), detail: { poolId: pool.id, name: pool.name } });
+  res.json({ ok: true, pool });
+});
+
+app.delete("/api/printer-pools/:id", requireAdmin, (req, res) => {
+  const id = req.params.id;
+  if (id === PRINTER_POOL_DEFAULT_MANUAL_ID) return res.status(400).json({ error: "The Unassigned pool can't be deleted" });
+  const idx = (CFG.printerPools || []).findIndex(p => p.id === id);
+  if (idx === -1) return res.status(404).json({ error: "Pool not found" });
+  if (PRINTERS.some(p => p.printerPoolId === id)) return res.status(400).json({ error: "Printers are still assigned to this pool — reassign them first" });
+  const removed = CFG.printerPools[idx];
+  CFG.printerPools.splice(idx, 1);
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { CFG.printerPools.splice(idx, 0, removed); return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "printer-pool-deleted", ...actorFromReq(req), detail: { poolId: id, name: removed.name } });
+  res.json({ ok: true });
+});
+
+// Reassigning a printer's Printer Pool — separate from /api/config's
+// general printer save, same reasoning as /api/printer-tags having its own
+// dedicated endpoint: this touches QueueStore state, not just config.json.
+app.post("/api/printer-pool", requireAdmin, (req, res) => {
+  const { printer, printerId, printerPoolId } = req.body || {};
+  // Prefers the persistent printer id when given — a Settings-tab row's DOM
+  // position can briefly disagree with PRINTERS[]'s real order during an
+  // unsaved drag-reorder, which a plain array index would silently trust.
+  const p = printerId ? printerById(printerId) : PRINTERS[parseInt(printer, 10)];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  const qs = queueStore.getPrinterState(p.id);
+  if (qs.queueState !== "idle" && qs.queueState !== "unmanaged") return res.status(409).json({ error: "This printer's queue must be idle before changing its pool" });
+  if (qs.queue.length) return res.status(409).json({ error: "Clear this printer's queue before changing its pool" });
+
+  if (!printerPoolId) {
+    p.printerPoolId = undefined;
+    queueStore.unassignPool(p.id);
+  } else {
+    const pool = (CFG.printerPools || []).find(x => x.id === printerPoolId);
+    if (!pool) return res.status(400).json({ error: "Unknown printer pool" });
+    p.printerPoolId = printerPoolId;
+    queueStore.assignPool(p.id);
+  }
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { return res.status(500).json({ error: e.message }); }
+  auditLog.log({ category: "admin", event: "printer-pool-changed", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { printerPoolId: printerPoolId || null } });
+  res.json({ ok: true, printerPoolId: p.printerPoolId || null });
+});
+
+// ---- Per-printer queue ----
+app.get("/api/queue/:printerId", requireAuth, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: "Unknown printer" });
+  res.json({ printerId: p.id, printerPoolId: p.printerPoolId || null, ...redactQueueStateForResponse(queueStore.getPrinterState(p.id)) });
+});
+
+app.post("/api/queue/:printerId/items", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p.printerPoolId) return res.status(400).json({ error: "This printer has no Printer Pool assigned" });
+  const b = req.body || {};
+  const files = Array.isArray(b.files) ? b.files : [];
+  if (!files.length) return res.status(400).json({ error: "No files given" });
+
+  const actor = actorFromReq(req);
+  const items = [];
+  for (const f of files) {
+    const name = String((f || {}).name || "").trim();
+    const sub = String((f || {}).sub || "");
+    const qty = Math.max(1, Math.min(50, parseInt(f.quantity, 10) || 1));
+    const fp = safePath(sub ? sub + "/" + name : name);
+    if (!name || !fp || !fs.existsSync(fp)) return res.status(400).json({ error: "File not found: " + name });
+    let hash;
+    try { hash = queueStore.computeFileHash(fp); } catch { return res.status(400).json({ error: "Could not read file: " + name }); }
+    for (let i = 0; i < qty; i++) {
+      items.push({
+        id: QueueEngine.newQueueItemId(), status: "queued", alreadyUploaded: false,
+        file: { name, sub, sizeBytes: hash.sizeBytes, sha256: hash.sha256 },
+        map: f.map || {}, prefs: f.prefs || {},
+        createdAt: Date.now(), dispatchedAt: null, finishedAt: null,
+        queuedBy: actor, retryOfItemId: null, dispatchSnapshot: null
+      });
+    }
+  }
+
+  const result = queueStore.applyIntent(p.id, (state) => ({ ...state, queue: [...state.queue, ...items], updatedAt: Date.now() }));
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now — " + (result.reason || "unknown error") });
+  auditLog.log({ category: "job", event: "queue-item-added", ...actor, printerId: p.id, printerName: p.name, detail: { count: items.length } });
+  if (b.startImmediately) attemptQueueDispatch(p.id).catch(e => console.error("[queue] immediate dispatch error:", e.message));
+  res.json({ ok: true, added: items.length, state: redactQueueStateForResponse(result.nextState) });
+});
+
+app.delete("/api/queue/:printerId/items/:itemId", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const result = queueStore.applyIntent(p.id, (state) => {
+    const idx = state.queue.findIndex(i => i.id === req.params.itemId);
+    if (idx === -1) return state; // already gone — not an error
+    const next = state.queue.slice();
+    const [removed] = next.splice(idx, 1);
+    return { ...state, queue: next, recentHistory: QueueEngine.pushHistory(state.recentHistory, { ...removed, status: "removed", finishedAt: Date.now() }), updatedAt: Date.now() };
+  });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  auditLog.log({ category: "job", event: "queue-item-removed", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { itemId: req.params.itemId } });
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// Reorder within one printer's queue, or move to a compatible printer in the
+// same pool (design doc D8 — same-connector only in Phase 1, no
+// dependency on the future Shared Queue matcher).
+app.post("/api/queue/:printerId/items/:itemId/move", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const { toIndex, toPrinterId } = req.body || {};
+
+  if (toPrinterId && toPrinterId !== p.id) {
+    const target = printerById(toPrinterId);
+    if (!target) return res.status(400).json({ error: "Unknown target printer" });
+    if (!printerVisibleTo(req.user, target)) return res.status(403).json({ error: "You don't have access to the target printer" });
+    if (target.printerPoolId !== p.printerPoolId) return res.status(400).json({ error: "Can only move between printers in the same Printer Pool" });
+    if (!QueueEngine.printersCompatibleForMove(p, target)) return res.status(400).json({ error: "Target printer uses a different connector — the file's mapping wouldn't carry over" });
+
+    const source = queueStore.getPrinterState(p.id);
+    const item = source.queue.find(i => i.id === req.params.itemId);
+    if (!item) return res.status(404).json({ error: "Item not found (already dispatched, or removed)" });
+
+    const result = queueStore.applyBulkIntent((current) => {
+      const src = current[p.id] || defaultQueuePrinterState();
+      const dst = current[target.id] || defaultQueuePrinterState();
+      return {
+        [p.id]: { ...src, queue: src.queue.filter(i => i.id !== item.id), updatedAt: Date.now() },
+        [target.id]: { ...dst, queue: [...dst.queue, item], updatedAt: Date.now() }
+      };
+    });
+    if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+    auditLog.log({ category: "job", event: "queue-item-moved", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { itemId: item.id, toPrinterId: target.id } });
+    return res.json({ ok: true });
+  }
+
+  const result = queueStore.applyIntent(p.id, (state) => {
+    const idx = state.queue.findIndex(i => i.id === req.params.itemId);
+    if (idx === -1) return state;
+    const next = state.queue.slice();
+    const [item] = next.splice(idx, 1);
+    const target = Math.max(0, Math.min(next.length, Number(toIndex) || 0));
+    next.splice(target, 0, item);
+    return { ...state, queue: next, updatedAt: Date.now() };
+  });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+app.post("/api/queue/:printerId/pause", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const result = queueStore.applyIntent(p.id, QueueEngine.pauseQueue);
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  auditLog.log({ category: "job", event: "queue-paused", ...actorFromReq(req), printerId: p.id, printerName: p.name });
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// A single "Resume Queue" action handles both cases — clearing a plain
+// pause needs no reconciliation, but clearing a Stop always re-probes the
+// printer live first (design doc D3): a printer that sat stopped for a
+// while could have had something started on it manually in the meantime.
+app.post("/api/queue/:printerId/resume", requireRegular, async (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const qs = queueStore.getPrinterState(p.id);
+
+  let result;
+  if (qs.queueStopped) {
+    let probe;
+    try { probe = await getConnector(p.connector).probe(p); } catch { probe = { online: false }; }
+    result = queueStore.applyIntent(p.id, QueueEngine.resumeFromStop, probe);
+  } else {
+    result = queueStore.applyIntent(p.id, QueueEngine.resumeQueue);
+  }
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  auditLog.log({ category: "job", event: "queue-resumed", ...actorFromReq(req), printerId: p.id, printerName: p.name });
+  attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-resume dispatch error:", e.message));
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+app.post("/api/queue/:printerId/stop", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const result = queueStore.applyIntent(p.id, QueueEngine.stopQueue);
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  auditLog.log({ category: "job", event: "queue-stopped", ...actorFromReq(req), printerId: p.id, printerName: p.name });
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// Clear — the actual "abort everything" action Stop deliberately isn't
+// (Stop only blocks the next auto-dispatch; the current print, if any, keeps
+// running and every queued item stays queued). This cancels whatever's
+// physically printing right now, then wipes the rest of the queue.
+app.post("/api/queue/:printerId/clear", requireRegular, async (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const qs = queueStore.getPrinterState(p.id);
+  const wasPrinting = qs.queueState === "dispatching" || qs.queueState === "printing";
+  if (wasPrinting) {
+    try { await getConnector(p.connector).cancel(p); }
+    catch (e) { return res.status(502).json({ error: "Could not cancel the current print: " + e.message }); }
+  }
+  const removedQueuedCount = qs.queue.length;
+  const result = queueStore.applyIntent(p.id, QueueEngine.clearQueue);
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  auditLog.log({ category: "job", event: "queue-cleared", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { cancelledCurrent: wasPrinting, removedQueuedCount } });
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// Manual bed-clear confirmation — always a real, audited, server-side
+// action (Correction 2), never a client-only state flip.
+app.post("/api/queue/:printerId/confirm-bed-clear", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const actor = actorFromReq(req);
+  const result = queueStore.confirmManualBedClear(p.id, actor);
+  if (!result.ok) return res.status(409).json({ error: "Could not confirm right now — " + (result.reason || "invalid state") });
+  const hadWork = result.nextState.queue.length > 0;
+  result.auditEvent.detail.resultedInDispatch = hadWork;
+  auditLog.log(result.auditEvent);
+  if (hadWork) attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-confirm dispatch error:", e.message));
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// Resolving queue_attention_required — Resume re-verifies the printer's
+// LIVE state before allowing it (never trust what was recorded at the
+// moment of failure) and, if legal, actually tells the printer to resume
+// before the queue's own state catches up to match.
+app.post("/api/queue/:printerId/resolve", requireRegular, async (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const { action } = req.body || {};
+
+  if (action === "resume") {
+    let probe;
+    try { probe = await getConnector(p.connector).probe(p); } catch { probe = { online: false }; }
+    if (!probe.online || probe.state !== "paused") return res.status(409).json({ error: "This printer isn't in a resumable state right now" });
+    try { await getConnector(p.connector).resume(p); }
+    catch (e) { return res.status(502).json({ error: "Resume failed: " + e.message }); }
+  }
+
+  const result = queueStore.applyIntent(p.id, QueueEngine.resolveAttention, action);
+  if (!result.ok) return res.status(400).json({ error: result.reason === "invalid-transition" ? (result.error && result.error.message) : "Could not resolve right now" });
+  auditLog.log({ category: "job", event: "queue-attention-resolved", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { action } });
+  if (result.nextState.queueState === "idle" || result.nextState.queueState === "dispatching") {
+    attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-resolve dispatch error:", e.message));
+  }
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// file-changed's dedicated accept path — forces a fresh, uncached hash
+// (round-4 issue #7) rather than trusting anything cached, since this IS
+// the moment identity itself is being decided.
+app.post("/api/queue/:printerId/accept-file-change", requireRegular, (req, res) => {
+  const p = printerById(req.params.printerId);
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const qs = queueStore.getPrinterState(p.id);
+  if (qs.attentionReason !== "file-changed" || !qs.currentItem) return res.status(409).json({ error: "Nothing to accept right now" });
+  const item = qs.currentItem;
+  const fp = safePath((item.file.sub ? item.file.sub + "/" : "") + item.file.name);
+  if (!fp || !fs.existsSync(fp)) return res.status(400).json({ error: "File no longer exists" });
+  let hash;
+  try { hash = queueStore.computeFileHash(fp, { force: true }); } catch (e) { return res.status(400).json({ error: e.message }); }
+  const actor = actorFromReq(req);
+  const result = queueStore.applyIntent(p.id, QueueEngine.acceptFileChange, { sizeBytes: hash.sizeBytes, sha256: hash.sha256, actor });
+  if (!result.ok) return res.status(400).json({ error: "Could not accept the file change" });
+  auditLog.log({ category: "job", event: "queue-file-change-accepted", ...actor, printerId: p.id, printerName: p.name, detail: { file: item.file.name } });
+  attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-accept dispatch error:", e.message));
+  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+});
+
+// ---- Bulk "Send to Queue" (file-manager multiselect → Printer Pool) ----
+app.post("/api/queue/send", requireRegular, (req, res) => {
+  const b = req.body || {};
+  const files = Array.isArray(b.files) ? b.files : [];
+  const poolId = b.poolId;
+  const mode = b.mode === "distribute" ? "distribute" : "print-on-all";
+  if (!files.length) return res.status(400).json({ error: "No files given" });
+  const pool = (CFG.printerPools || []).find(x => x.id === poolId);
+  if (!pool) return res.status(400).json({ error: "Unknown printer pool" });
+  const targetPrinters = PRINTERS.filter(p => p.printerPoolId === poolId && printerVisibleTo(req.user, p));
+  if (!targetPrinters.length) return res.status(400).json({ error: "No printers available in this pool" });
+
+  // Validate + resolve every file BEFORE computing or writing anything —
+  // one invalid file fails the whole request, never a partial distribution
+  // (round-4 issue #2).
+  const resolved = [];
+  for (const f of files) {
+    const name = String((f || {}).name || "").trim();
+    const sub = String((f || {}).sub || "");
+    const qty = Math.max(1, Math.min(50, parseInt(f.quantity, 10) || 1));
+    const fp = safePath(sub ? sub + "/" + name : name);
+    if (!name || !fp || !fs.existsSync(fp)) return res.status(400).json({ error: "File not found: " + name });
+    let hash;
+    try { hash = queueStore.computeFileHash(fp); } catch { return res.status(400).json({ error: "Could not read file: " + name }); }
+    resolved.push({ name, sub, qty, sizeBytes: hash.sizeBytes, sha256: hash.sha256, map: f.map || {}, prefs: f.prefs || {} });
+  }
+
+  const actor = actorFromReq(req);
+  const makeItem = (f) => ({
+    id: QueueEngine.newQueueItemId(), status: "queued", alreadyUploaded: false,
+    file: { name: f.name, sub: f.sub, sizeBytes: f.sizeBytes, sha256: f.sha256 },
+    map: f.map, prefs: f.prefs, createdAt: Date.now(), dispatchedAt: null, finishedAt: null,
+    queuedBy: actor, retryOfItemId: null, dispatchSnapshot: null
+  });
+  // Quantity is expanded into a flat list of individual entries before
+  // distribution — Distribute's round-robin never has to know "quantity" is
+  // a separate concept (design doc A5).
+  const expanded = [];
+  for (const f of resolved) for (let i = 0; i < f.qty; i++) expanded.push(f);
+
+  const result = queueStore.applyBulkIntent((current) => {
+    const updates = {};
+    targetPrinters.forEach(p => { updates[p.id] = { ...(current[p.id] || defaultQueuePrinterState()), queue: [...((current[p.id] || defaultQueuePrinterState()).queue)], updatedAt: Date.now() }; });
+    if (mode === "print-on-all") {
+      targetPrinters.forEach(p => { updates[p.id].queue.push(...expanded.map(makeItem)); });
+    } else {
+      expanded.forEach((f, i) => { updates[targetPrinters[i % targetPrinters.length].id].queue.push(makeItem(f)); });
+    }
+    return updates;
+  });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  auditLog.log({ category: "job", event: "queue-bulk-send", ...actor, detail: { poolId, mode, fileCount: resolved.length, totalItems: expanded.length, printerCount: targetPrinters.length } });
+  if (b.startImmediately) targetPrinters.forEach(p => attemptQueueDispatch(p.id).catch(e => console.error("[queue] bulk-send dispatch error:", e.message)));
+  res.json({ ok: true, printers: targetPrinters.map(p => p.id), totalItems: expanded.length });
+});
+
+// ---- Global store status/controls (round-4 issue #1/#8) ----
+app.get("/api/queue-store/status", requireAuth, (req, res) => res.json(queueStore.getGlobalStatus()));
+app.post("/api/queue-store/retry-save", requireAdmin, (req, res) => {
+  const r = queueStore.retrySave();
+  auditLog.log({ category: "admin", event: r.ok ? "queue-store-recovered" : "queue-store-retry-failed", ...actorFromReq(req) });
+  res.json(r);
+});
+app.post("/api/queue-store/stop-all", requireAdmin, (req, res) => {
+  queueStore.stopAll();
+  auditLog.log({ category: "admin", event: "queue-store-stopped-by-admin", ...actorFromReq(req) });
+  res.json({ ok: true });
+});
+app.post("/api/queue-store/resume-all", requireAdmin, (req, res) => {
+  queueStore.resumeAll();
+  auditLog.log({ category: "admin", event: "queue-store-resumed-by-admin", ...actorFromReq(req) });
+  res.json({ ok: true });
+});
+app.post("/api/queue-store/acknowledge-reset", requireAdmin, (req, res) => {
+  const r = queueStore.acknowledgeReset((req.body || {}).confirm);
+  if (!r.ok) return res.status(400).json(r);
+  auditLog.log({ category: "admin", event: "queue-store-reset-acknowledged", ...actorFromReq(req) });
+  res.json(r);
+});
+app.get("/api/queue-store/corrupt-files/:name", requireAdmin, (req, res) => {
+  const p = queueStore.getCorruptFilePath(req.params.name);
+  if (!p || !fs.existsSync(p)) return res.status(404).json({ error: "Not found" });
+  res.download(p);
 });
 
 // Mirrors /api/notify-test's "test the live form values, not necessarily
@@ -1932,17 +2855,32 @@ const DEFAULT_MILESTONES = [25, 50, 75];
 
 async function notifyTick() {
   const nf = CFG.notifications || {};
-  if (!nf.enabled) return;
   const ntfyReady = !!nf.ntfyEnabled && !!nf.ntfyTopic;
   const telegramReady = !!nf.telegramEnabled && !!nf.telegramChatId && !!nf.telegramBotToken;
-  if (!ntfyReady && !telegramReady) return;
-  const anyEvent = nf.onStart || nf.onPause || nf.onError || nf.onComplete;
-  if (!anyEvent && !nf.onIntervals) return;
+  // Whether the Notifications feature itself can fire anything right now —
+  // gates ONLY the actual sendEventNotification calls below. State tracking
+  // (prev/cur diffing, newJob detection) and the audit-log calls that ride on
+  // it run unconditionally, regardless of this — see the notifyTick refactor
+  // in the Audit plan: a job started/finished on a printer's own screen must
+  // still be logged even with Notifications turned off entirely.
+  const notifyReady = !!nf.enabled && (ntfyReady || telegramReady);
+  const canNotifyEvent = notifyReady && (nf.onStart || nf.onPause || nf.onError || nf.onComplete);
+  const canNotifyIntervals = notifyReady && nf.onIntervals;
   const milestones = (Array.isArray(nf.milestonePercents) && nf.milestonePercents.length) ? nf.milestonePercents : DEFAULT_MILESTONES;
 
   await Promise.all(PRINTERS.map(async (p, i) => {
     const st = await probeCached(p);
     if (!st.online) return;
+
+    // A printer that was unreachable during startup reconciliation
+    // (round-3 issue #11) gets a real reconciliation attempt the moment a
+    // regular poll finally reaches it — no separate retry loop needed, this
+    // rides on the fleet poll that already exists.
+    if (p.printerPoolId && queueStore.getPrinterState(p.id).reconciliationPending) {
+      queueStore.applyObserved(p.id, QueueEngine.reconcileOnStartup, { online: true, state: st.state, filename: st.filename });
+      queueStore.setReconciliationPending(p.id, false);
+    }
+
     const prev = NOTIFY_STATE.get(p.url);
     const cur = {
       state: st.state, filename: st.filename, progress: st.progress || 0,
@@ -1966,18 +2904,89 @@ async function notifyTick() {
     }
     NOTIFY_STATE.set(p.url, cur);
 
-    try {
-      if (newJob) {
-        if (nf.onStart) await sendEventNotification(i, p, "start", st);
-      } else if (st.state !== prev.state) {
-        if (st.state === "complete" && nf.onComplete) await sendEventNotification(i, p, "complete", st);
-        else if (st.state === "paused" && nf.onPause) await sendEventNotification(i, p, "paused", st);
-        // "cancelled" is folded into the same "error or failure" toggle as
-        // "error" — from a notification's point of view both mean the same
-        // thing: this print did not reach complete on its own.
-        else if ((st.state === "error" || st.state === "cancelled") && nf.onError) await sendEventNotification(i, p, st.state, st);
+    // Audit: printer-observed, not SnapCon-attributable — userId/userLabel
+    // both null, same as any other action that happened directly on the
+    // printer's own screen rather than through this app. Runs every tick,
+    // independent of whether Notifications is even configured. Skips
+    // logging a start already recorded (with the real user) by /api/print or
+    // /api/printfile the moment they kicked it off — this is only reached
+    // for a start ROUTE_STARTED_PRINT never saw at all, i.e. one that began
+    // directly on the printer's own screen.
+    if (newJob) {
+      if (!ROUTE_STARTED_PRINT.delete(p.url)) {
+        auditLog.log({ category: "job", event: "print-started", printerId: p.id, printerName: p.name, detail: { file: st.filename } });
       }
-      if (nf.onIntervals && st.state === "printing") {
+    } else if (st.state !== prev.state) {
+      if (st.state === "complete") {
+        // Klipper's filament_used is raw extruded length in mm — the printer
+        // reports no diameter/density, so a gram figure is only ever an
+        // estimate (standard 1.75mm filament at PLA-like density, ~1.24
+        // g/cm³; genuinely off for TPU/ABS/other diameters). Cost is
+        // estimated from the rates configured RIGHT NOW, at completion time
+        // — a historical log entry should reflect what a print likely cost
+        // when it ran, not get silently recomputed against whatever
+        // Settings says the next time someone views the Logs tab.
+        const filamentUsedMm = st.filamentUsed;
+        const filamentGramsEst = (typeof filamentUsedMm === "number") ? filamentUsedMm * 0.002982 : null;
+        const elapsedSec = st.elapsed;
+        const hours = (typeof elapsedSec === "number") ? elapsedSec / 3600 : 0;
+        const fCost = (CFG.filamentCost > 0 && filamentGramsEst) ? (CFG.filamentCost / 1000) * filamentGramsEst : 0;
+        const eCost = (CFG.electricityRate > 0 && hours) ? CFG.electricityRate * hours : 0;
+        const costEst = (fCost + eCost) > 0 ? Math.round((fCost + eCost) * 100) / 100 : null;
+        auditLog.log({ category: "job", event: "print-completed", printerId: p.id, printerName: p.name, detail: { file: st.filename, elapsedSec, filamentUsedMm, filamentGramsEst, costEst } });
+      } else if (st.state === "error" || st.state === "cancelled") {
+        // A "cancelled" state can be the direct downstream result of a
+        // printer error the 30s poll interval never caught as its own
+        // separate "error" state (the printer auto-cancels, or something
+        // cancels in response to the error, all inside one poll window) —
+        // st.message/st.errorCode reflect the printer's own print_stats
+        // regardless of which state it settled on by the time this polls,
+        // so surfacing them here is the only way "cancelled" ever explains
+        // itself as error-caused rather than a plain, deliberate cancel.
+        // Not every connector exposes these (FlashForge only populates
+        // message while status is literally "error"), so this degrades to
+        // just the filename wherever they're not available.
+        const detail = { file: st.filename };
+        if (st.message) detail.reason = st.message;
+        if (st.errorCode) detail.errorCode = st.errorCode;
+        auditLog.log({ category: "job", event: "print-" + st.state, printerId: p.id, printerName: p.name, detail });
+      }
+    }
+
+    // Queue Management: reuses this same state-diffing to drive
+    // onProbeComplete/onProbeFailedOrCancelled — only for a printer whose
+    // queue actually believes it's "printing" right now (a print started
+    // outside the queue, e.g. directly on the printer's touchscreen, never
+    // entered "printing" from the queue's perspective, so there's nothing
+    // here for it to advance). "resumable" is deliberately recorded false at
+    // detection time — resolveAttention's Resume action re-checks the LIVE
+    // probe itself rather than trusting a snapshot that could be stale by
+    // the time a human actually clicks it.
+    if (!newJob && st.state !== prev.state) {
+      const qState = queueStore.getPrinterState(p.id);
+      if (qState.queueState === "printing") {
+        if (st.state === "complete") {
+          queueStore.applyObserved(p.id, QueueEngine.onProbeComplete);
+        } else if (st.state === "error" || st.state === "cancelled") {
+          queueStore.applyObserved(p.id, QueueEngine.onProbeFailedOrCancelled, false, { code: st.state, message: st.message || ("Print " + st.state) });
+        }
+      }
+    }
+
+    try {
+      if (canNotifyEvent) {
+        if (newJob) {
+          if (nf.onStart) await sendEventNotification(i, p, "start", st);
+        } else if (st.state !== prev.state) {
+          if (st.state === "complete" && nf.onComplete) await sendEventNotification(i, p, "complete", st);
+          else if (st.state === "paused" && nf.onPause) await sendEventNotification(i, p, "paused", st);
+          // "cancelled" is folded into the same "error or failure" toggle as
+          // "error" — from a notification's point of view both mean the same
+          // thing: this print did not reach complete on its own.
+          else if ((st.state === "error" || st.state === "cancelled") && nf.onError) await sendEventNotification(i, p, st.state, st);
+        }
+      }
+      if (canNotifyIntervals && st.state === "printing") {
         for (const m of milestones) {
           if (cur.progress * 100 >= m && !cur.milestones.has(m)) {
             cur.milestones.add(m);
@@ -2233,6 +3242,36 @@ app.get("/api/discover", requireAdmin, async (req, res) => {
   res.json({ subnets: labels, found });
 });
 
+// ---- Queue Management: startup crash recovery (design doc Part E) ----
+// Only states that could plausibly be "mid-something" at the moment of a
+// crash need reconciling — idle/unmanaged/awaiting_bed_clear (Manual, just
+// waiting on a human)/queue_attention_required/queue_stopped-flagged are all
+// safe to simply resume exactly as persisted.
+const QUEUE_RECONCILE_STATES = new Set(["dispatching", "printing", "bed_clear_running"]);
+async function reconcileQueuesOnStartup() {
+  if (!CFG.queueManagement || !CFG.queueManagement.enabled) return;
+  for (const p of PRINTERS) {
+    if (!p.printerPoolId) continue;
+    const qs = queueStore.getPrinterState(p.id);
+    if (!QUEUE_RECONCILE_STATES.has(qs.queueState)) continue;
+    let probe;
+    try { probe = await getConnector(p.connector).probe(p); }
+    catch { probe = { online: false }; }
+    if (!probe.online) {
+      // Can't reach it right now — this is a SOFTER, "we don't know yet"
+      // signal than a confirmed mismatch (round-3 issue #11), not treated
+      // the same. The regular fleet poll picks this back up the moment it
+      // actually reaches the printer (see notifyTick).
+      queueStore.setReconciliationPending(p.id, true);
+      continue;
+    }
+    const result = queueStore.applyObserved(p.id, QueueEngine.reconcileOnStartup, probe);
+    if (result.nextState.attentionReason) {
+      auditLog.log({ category: "job", event: "queue-recovery-review-needed", printerId: p.id, printerName: p.name, detail: { reason: result.nextState.attentionReason } });
+    }
+  }
+}
+
 const httpServer = app.listen(PORT, () => {
   const url = "http://localhost:" + PORT;
   console.log("\n  SnapCon  v" + VERSION + "  →  " + url);
@@ -2250,6 +3289,7 @@ const httpServer = app.listen(PORT, () => {
   // process and probe this server's own /api/remote-access/probe endpoint,
   // neither of which can happen correctly before app.listen's callback fires.
   remoteAccess.startupInit().catch(e => console.error("[remote-access] startupInit failed:", e.message));
+  reconcileQueuesOnStartup().catch(e => console.error("[queue] startup reconciliation failed:", e.message));
 });
 
 // Graceful shutdown — new to this codebase (previously nothing here handled

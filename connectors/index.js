@@ -6,7 +6,8 @@ const REGISTRY = {
   "klipper-moonraker": () => require("./klipper-moonraker"),
   "creality-klipper": () => require("./creality-klipper"),
   "flashforge-adventurer": () => require("./flashforge-adventurer"),
-  "flashforge-ad5x": () => require("./flashforge-ad5x")
+  "flashforge-ad5x": () => require("./flashforge-ad5x"),
+  "simulator": () => require("./dummy-simulator")
 };
 
 const DEFAULT_TYPE = "snapmaker-u1-klipper";

@@ -107,3 +107,13 @@ test("H-3: docker-compose.yml persists users.json and remote-access-data, not ju
   assert.ok(hosts.includes("./users.json"), "users.json must be mounted or User Access Management accounts are wiped by recreating the container");
   assert.ok(hosts.includes("./remote-access-data"), "remote-access-data must be mounted or Remote Access's identity/token is orphaned by recreating the container");
 });
+
+test("Audit: docker-compose.yml mounts the whole audit-data directory, not just the .db file", () => {
+  const hosts = composeHostVolumePaths();
+  assert.ok(hosts.includes("./audit-data"), "audit-data must be mounted as a directory (its WAL -wal/-shm sidecar files would be lost on container recreate if only audit.db itself were mounted) or the audit trail is wiped by recreating the container");
+});
+
+test("Queue: docker-compose.yml mounts the whole data directory, not a single queue-data.json file", () => {
+  const hosts = composeHostVolumePaths();
+  assert.ok(hosts.includes("./data"), "data must be mounted as a directory — queue-data.json's atomic temp-file-then-rename-with-backup sequence needs the temp file and the real file on the same underlying mount, or Queue Management state is wiped by recreating the container");
+});

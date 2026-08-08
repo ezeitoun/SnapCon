@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14" id="View-PrintFarm--Streamline-Core" height="14" width="14">
+  <desc>
+    Print Farm View Icon
+  </desc>
+  <g id="view-printfarm">
+    <path id="Union" fill="#8fbffa" fill-rule="evenodd" d="M2.5 0A2.5 2.5 0 0 0 0 2.5v9A2.5 2.5 0 0 0 2.5 14h9a2.5 2.5 0 0 0 2.5 -2.5v-9A2.5 2.5 0 0 0 11.5 0h-9Z" clip-rule="evenodd" stroke-width="1"></path>
+    <path id="Union_2" fill="#2859c5" fill-rule="evenodd" d="M3 4.25a0.75 0.75 0 0 1 0.75 -0.75h6.5a0.75 0.75 0 0 1 0 1.5h-6.5A0.75 0.75 0 0 1 3 4.25Zm0 3a0.75 0.75 0 0 1 0.75 -0.75h6.5a0.75 0.75 0 0 1 0 1.5h-6.5A0.75 0.75 0 0 1 3 7.25Zm0.75 2.25a0.75 0.75 0 0 0 0 1.5h4a0.75 0.75 0 0 0 0 -1.5h-4Z" clip-rule="evenodd" stroke-width="1"></path>
+  </g>
+</svg>

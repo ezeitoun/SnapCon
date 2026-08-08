@@ -128,7 +128,7 @@ function makeAuthMiddleware(getCfg, getUsers) {
     const users = getUsers();
     const u = users.find(u => u.id === session.userId);
     if (!u) { req.user = null; return next(); }
-    req.user = { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role };
+    req.user = { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, groupIds: Array.isArray(u.groupIds) ? u.groupIds : [] };
     req.sessionToken = token;
     // Refresh the cookie's expiry on every authenticated request — without
     // this, the browser drops the cookie 18h after LOGIN even for a
