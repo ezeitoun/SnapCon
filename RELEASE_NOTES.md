@@ -129,18 +129,4 @@ printer doesn't erase its history. Filterable by date, category, and free-text s
 Users can be scoped to specific printer groups instead of seeing the whole fleet, managed from
 Settings → Users.
 
-### Header & View Redesign
-The topbar picked up a live clock, an optional Site Name, and a clearer "(view name)" label next to the
-SnapCon logo when you're in a non-default view. The Fleet Status legend now doubles as a multi-select
-filter, and the default "Printer Profile" pool was renamed to **Unassigned** to make clear it's where
-printers land by default, not a queue you set up on purpose (it's excluded from queue-orchestration
-controls like Auto-balance and Pause All for the same reason).
-
-### Accessibility Pass
-A dedicated pass against the Web Interface Guidelines: real keyboard support for every previously
-mouse-only interaction (file list, queue rows, thumbnail previews, the exclude-object plate map),
-`aria-live` on every status message, correctly associated form labels throughout Settings, a skip link,
-an unsaved-changes warning before closing/reloading with edits pending, visible focus states, and
-reduced-motion support for every ambient animation.
-
 
