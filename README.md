@@ -324,6 +324,75 @@ Remote Access cannot be enabled unless User Access Management is active and at l
 </p>
 <br clear="all">
 
+### Queue Management
+<p>
+  <img
+    src="./docs/queue-settings.png"
+    alt="Queue Management Settings"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+Settings now includes a new Queue Management tab where the feature can be enabled and configured. From here, you can create Printer Pools and assign each printer to a specific pool for queue management.
+
+At this stage, Queue Management supports a Per-Printer Queue model, where each printer maintains its own individual queue. A Shared Queue mechanism, where jobs are managed centrally at the pool level and dynamically assigned to available printers, is planned for a future release.
+</p>
+<br clear="all">
+
+Once enabled, Queue Management gets its own full-page dashboard, accessible from the same view selector used for Compact, Camera, and List views. It can also be configured as your default view in Settings.
+![Queue View](./docs/Queue-View.png)
+
+Fleet Overview: A sticky header provides an at-a-glance view of overall fleet utilization, showing how many printers are actively printing out of the total available, along with quick counts for Printing, Idle, Awaiting Sign-off, and Parts Today.
+
+Queue Status: Each Printer Pool gets its own status card showing the work currently assigned to that pool. For every file, you can see Completed / Printing / Queued counts, along with a live progress bar and elapsed time.
+
+Fleet Status: Every printer in the pool is represented by a compact, color-coded status chip: Printing, Idle, Awaiting Sign-off, Stopped, Paused, Error, or Offline.
+
+The status legend also works as a filter, click any status to instantly show only printers in that state. Some states are directly actionable: Stopped or Paused printers can be resumed from the dashboard, while an Error printer can be released by ejecting the stuck file, without having to open the printer's individual row.
+
+Printer Queues: The printer list shows each printer and its current queue. Expand a printer to see what's coming next and manage it directly with Pause, Resume, and Stop controls.
+
+A Clear Queue action cancels the current print and removes everything else waiting in that printer's queue in a single step. Because this action cannot be undone, SnapCon requires confirmation before proceeding.
+
+Auto-Balance, Printer Pools can optionally enable automatic queue balancing. When a printer runs out of queued work, SnapCon automatically pulls the next job from the sibling printer in the same pool with the largest remaining queue, helping keep available printers working without requiring manual queue redistribution.
+
+<p>
+  <img
+    src="./docs/queue-filemanager.png"
+    alt="Queue Management File Manager"
+    width="48%"
+    align="left"
+    style="margin-right: 24px; margin-bottom: 12px;"
+  >
+Once Queue Management is Enabled, the File Manager gets multi-select: Shift-click to grab a range, Ctrl/Cmd-click to toggle individual files. With more than one file selected, a Send to Queue button appears.
+
+That opens the Send to Queue screen, where you pick:
+- Which Printer Pool to send to
+- How many copies of each file (per-file quantity, e.g. ×3)
+- How to send, two modes:
+  - Print on All: every file goes to every printer in the pool. Good for "give me one of each on every printer."
+  - Distribute: files are spread round-robin across the pool's printers instead of duplicated. Good for batch jobs, e.g. queueing 12 copies of a part across 4 printers, 3 each.
+
+A live preview shows exactly what will land on which printer before you confirm, nothing is sent until you click through.
+</p>
+<br clear="all">
+
+### Audit Trail
+Settings → Logs provides a complete activity history for your SnapCon instance, including user logins, print activity, queue events, failures, and configuration changes.
+
+Audit records are stored independently from the current printer and configuration data. This means that even if a printer is renamed or removed, its historical activity remains available for review.
+
+Each log entry is grouped into one of three categories:
+- Job: print activity, queue actions, pauses, failures, and related events
+- Admin: settings, configuration, printer, and system changes
+- Auth: user login and authentication activity
+
+The Audit Trail can be filtered by date range, category, or free-text search, making it easy to locate specific events or investigate past activity.
+
+Logs are retained for 90 days by default, with the retention period configurable in Settings. Older entries are automatically pruned based on the configured retention policy.
+
+![audit trail](./docs/audit-trail.png)
+
 ### Cost Tracking
 Set an average filament cost (per spool) and an electricity rate ($/kWh), and SnapCon estimates filament +
 energy cost per print (shown on the Selected Model card and in the print-from-printer picker). Don't know your
