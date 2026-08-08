@@ -13,3 +13,9 @@ gcode/*.mapped.gcode
 .github
 capture-*.log
 package-lock.json
+CLAUDE.md
+CODE_REVIEW.md
+SECURITY_REVIEW.md
+VERIFIED_CODE_REVIEW.md
+queue-management-design.md
+queue-management-implementation-plan.md
