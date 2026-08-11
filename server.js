@@ -20,6 +20,7 @@ const { createRemoteAccessService } = require("./remote-access/RemoteAccessServi
 const { createAuditLog } = require("./audit/AuditLog");
 const { createSyncEngine } = require("./sync/SyncEngine");
 const { loadConfigFile } = require("./configLoader");
+const { readNotifyToken, ensureNotifyToken, timingSafeTokenEqual } = require("./notifyToken");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -53,6 +54,7 @@ const IS_DOCKER = (() => { try { return fs.existsSync("/.dockerenv"); } catch { 
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
 const USERS_PATH = path.join(BASE_DIR, "users.json");
 const QUEUED_FILE_PATH = path.join(BASE_DIR, "queued-files.json");
+const NOTIFY_TOKEN_PATH = path.join(BASE_DIR, "notify-token.json");
 const DEFAULT_CFG = { gcodeFolder: "./gcode", port: 4545, printers: [] };
 
 // Live config — editable from the Settings page, no restart needed.
@@ -275,10 +277,18 @@ if (CLI_LOAD_ARG !== -1) {
     return;
   }
 
+  // Reads (never generates) the local notify token the running server
+  // already established at its own startup — see notifyToken.js's header
+  // comment for why the CLI must never be the one to create this value.
+  const notifyToken = readNotifyToken(NOTIFY_TOKEN_PATH);
+  if (!notifyToken) {
+    console.error("SnapCon: no local notify token found at " + NOTIFY_TOKEN_PATH + " — is SnapCon running (has it started at least once)? If it logged a token-persistence failure, this feature is unavailable until that's fixed.");
+    process.exit(1);
+  }
   const body = JSON.stringify({ file: path.resolve(file), printer, outputname });
   const req = http.request({
     hostname: "127.0.0.1", port: PORT, path: "/api/notify-load", method: "POST",
-    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), "X-SnapCon-Local-Token": notifyToken }
   }, res => {
     let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
     res.on("end", () => {
@@ -290,6 +300,13 @@ if (CLI_LOAD_ARG !== -1) {
   req.write(body); req.end();
   return;
 }
+
+// Established once here, at genuine server startup (never in CLI mode,
+// which returns above before reaching this line) — the ONE writer for this
+// value; see notifyToken.js's header comment. null means persistence
+// failed; /api/notify-load's file-path branch below must fail closed in
+// that case rather than fall back to trusting isLoopback() alone.
+const NOTIFY_TOKEN = ensureNotifyToken(NOTIFY_TOKEN_PATH);
 
 // Temp staging area for files pushed from a remote --snapcon CLI call (see
 // /api/notify-load) — the server can't reference a path on the CLI's own
@@ -1190,8 +1207,17 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
   res.json(out.filter(Boolean));
 });
 
-// Only the local machine may stage arbitrary filesystem paths onto a printer —
-// this bypasses the gcodeFolder jail that keeps the normal web UI sandboxed.
+// NOT a sufficient authentication boundary on its own (see CODE_AUDIT.md
+// P0-3): once Remote Access is enabled, cloudflared runs as a local child
+// process forwarding tunnel traffic to http://localhost:<port> (snapcon-api
+// hardcodes this as every Hub's ingress target), so a request that arrived
+// over the public tunnel is indistinguishable from a genuinely local one at
+// this level — req.socket.remoteAddress reflects the immediate TCP peer,
+// not the original public client. /api/notify-load's file-path branch below
+// pairs this with a real local-possession credential (notifyToken.js) as
+// the actual authentication boundary; this check is kept only as
+// additional, cheap defense-in-depth (it still blocks an ordinary LAN
+// caller who's obtained the token from using this over the network).
 function isLoopback(req) {
   const ip = req.socket.remoteAddress || "";
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
@@ -1229,7 +1255,14 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
     return res.json({ ok: true, mode: "queued", printer: p.name });
   }
 
+  // isLoopback() is defense-in-depth only, not the real boundary — see its
+  // own comment and notifyToken.js. NOTIFY_TOKEN === null means the server
+  // could never durably persist a token (logged loudly at startup); fail
+  // closed rather than accept any header value or silently trust loopback
+  // alone in that state.
   if (!isLoopback(req)) return res.status(403).json({ error: "localhost only" });
+  if (!NOTIFY_TOKEN) return res.status(503).json({ error: "Local file-path notify is unavailable — SnapCon could not establish a local notify token. Check server logs." });
+  if (!timingSafeTokenEqual(req.headers["x-snapcon-local-token"], NOTIFY_TOKEN)) return res.status(403).json({ error: "localhost only" });
   const { file, printer, outputname } = req.body || {};
   if (!file || typeof file !== "string") return res.status(400).json({ error: "file required" });
   if (!printer) return res.status(400).json({ error: "printer required" });

@@ -18,7 +18,7 @@ RUN npm pkg delete devDependencies \
 # `Error: Cannot find module './auth'` the moment the container actually
 # runs. Keep this in sync with server.js's top-of-file require() list as new
 # top-level modules are added.
-COPY server.js parser.js auth.js groupAccess.js configLoader.js ./
+COPY server.js parser.js auth.js groupAccess.js configLoader.js notifyToken.js ./
 COPY connectors ./connectors
 COPY remote-access ./remote-access
 COPY audit ./audit
