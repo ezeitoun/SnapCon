@@ -376,7 +376,9 @@ function safePath(sub) {
 
 
 app.get("/api/printers", requireAuth, (req, res) => {
-  res.json(PRINTERS.map((p, i) => ({ id: i, name: p.name })));
+  const out = [];
+  PRINTERS.forEach((p, i) => { if (printerVisibleTo(req.user, p)) out.push({ id: i, name: p.name }); });
+  res.json(out);
 });
 
 app.get("/api/files", requireAuth, (req, res) => {
@@ -737,7 +739,7 @@ app.get("/api/print-status", requireAuth, (req, res) => {
 // ---- Files stored on a printer + start one directly ----
 app.get("/api/printer-files", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   try {
     res.json({ files: await getConnector(p.connector).listFiles(p) });
   } catch (e) {
@@ -750,7 +752,7 @@ app.get("/api/printer-files", requireAuth, async (req, res) => {
 // same rule parser.js applies to local files.
 app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
   if (!file) return res.status(400).json({ error: "Missing file" });
   const c = getConnector(p.connector);
@@ -813,7 +815,7 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
 // ---- Exclude-object: live plate map + skip a single object mid-print ----
 app.get("/api/plate", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   const c = getConnector(p.connector);
   if (!c.getPlate) return res.json({ objects: [], current: null, excluded: [] });
   try {
@@ -1210,7 +1212,7 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
     if (!printer) return res.status(400).json({ error: "printer required" });
     if (outputname && /["\r\n/\\]/.test(outputname)) return res.status(400).json({ error: "Bad output name" });
     const idx = findPrinterIndex(printer);
-    if (idx === -1) return res.status(400).json({ error: "Unknown printer: " + printer });
+    if (idx === -1 || !printerVisibleTo(req.user, PRINTERS[idx])) return res.status(400).json({ error: "Unknown printer: " + printer });
     const p = PRINTERS[idx];
     const name = outputname || path.basename(filename || "upload.gcode");
     fs.mkdirSync(NOTIFY_TMP_DIR, { recursive: true });
@@ -1299,7 +1301,7 @@ async function getSnapshotThrottled(p, idx) {
 app.get("/api/snapshot", requireAuth, async (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p   = PRINTERS[idx];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   try {
     let contentType, buffer;
     if (req.query.fresh) {
@@ -1319,7 +1321,7 @@ app.get("/api/snapshot", requireAuth, async (req, res) => {
 // ---- Thumbnail proxy: fetch gcode thumbnail from Moonraker ----
 app.get("/api/thumbnail", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
   if (!file) return res.status(400).json({ error: "Missing file" });
   try {
@@ -1405,7 +1407,8 @@ async function probeFirmware(p) {
 }
 
 app.get("/api/firmware", requireAuth, async (req, res) => {
-  const out = await Promise.all(PRINTERS.map((p, i) => probeFirmware(p).then(r => ({ id: i, ...r }))));
+  const visible = PRINTERS.map((p, i) => ({ p, i })).filter(({ p }) => printerVisibleTo(req.user, p));
+  const out = await Promise.all(visible.map(({ p, i }) => probeFirmware(p).then(r => ({ id: i, ...r }))));
   res.json(out);
 });
 
@@ -1660,7 +1663,8 @@ app.get("/api/browse", requireAdmin, (req, res) => {
 });
 
 app.get("/api/inventory", requireAuth, async (req, res) => {
-  const out = await Promise.all(PRINTERS.map((p, i) => {
+  const visible = PRINTERS.map((p, i) => ({ p, i })).filter(({ p }) => printerVisibleTo(req.user, p));
+  const out = await Promise.all(visible.map(({ p, i }) => {
     const c = getConnector(p.connector);
     return c.getInventory ? c.getInventory(p).then(r => ({ id: i, ...r })) : Promise.resolve({ id: i, name: p.name, online: null, skipped: true, reason: "not supported" });
   }));
@@ -1670,7 +1674,7 @@ app.get("/api/inventory", requireAuth, async (req, res) => {
 // ---- Printer hours: proxy Moonraker history/totals ----
 app.get("/api/printer-hours", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   try {
     const { ok, status, json: j } = await fetchJSONTimeout(baseUrl(p) + "/server/history/totals", 5000);
     if (!ok) return res.status(502).json({ error: "Moonraker " + status });
@@ -1769,7 +1773,7 @@ function computeMaintenanceAttention(p) {
 app.get("/api/maintenance", requireAuth, (req, res) => {
   const idx = parseInt(req.query.printer, 10);
   const p = PRINTERS[idx];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   // Keyed by the printer's persistent id (CFG.maintenanceHistory), never
   // nested inside the printer's own config entry — so this survives the
   // printer being renamed, re-IP'd, or deleted (see ensurePrinterIds()).
@@ -1785,6 +1789,7 @@ app.post("/api/maintenance", requireRegular, (req, res) => {
   const idx = parseInt(printer, 10);
   const p = PRINTERS[idx];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (!entry || !entry.date) return res.status(400).json({ error: "Missing date" });
   if (!CFG.maintenanceHistory || typeof CFG.maintenanceHistory !== "object") CFG.maintenanceHistory = {};
   if (!Array.isArray(CFG.maintenanceHistory[p.id])) CFG.maintenanceHistory[p.id] = [];
@@ -1817,6 +1822,7 @@ app.post("/api/maintenance-mode", requireRegular, (req, res) => {
   const { printer, offline } = req.body || {};
   const p = PRINTERS[parseInt(printer, 10)];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   p.maintenanceMode = !!offline;
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
