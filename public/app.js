@@ -1197,7 +1197,7 @@ function fmtTime(ms){ const d=new Date(ms), df=(Date.now()-ms)/1000;
   if(df<60)return"just now"; if(df<3600)return Math.floor(df/60)+"m ago"; if(df<86400)return Math.floor(df/3600)+"h ago";
   return d.toLocaleDateString([],{month:"short",day:"numeric"})+" "+d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function stripExt(s){ return s.replace(/\.(gcode|gco|g)$/i,""); }
+function stripExt(name){ return String(name||"").replace(/\.[^./\\]+$/,""); }
 function hexToHsl(hex){
   if(!hex||!hex.startsWith('#')) return null;
   let h=hex.replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
@@ -2593,7 +2593,6 @@ function queueRowCategory(qs, fleetRow){
   if((fleetRow&&fleetRow.state==="printing")||(qs&&["dispatching","printing","bed_clear_running"].includes(qs.queueState))) return "printing";
   return "idle";
 }
-function stripExt(name){ return String(name||"").replace(/\.[^./\\]+$/,""); }
 // n is 0-based position within qs.queue AFTER the "Next" one (n=0 -> "3rd",
 // n=1 -> "4th", ...) — kept separate from the "+N" queue-depth badge so a
 // row's position label is never confused with how many are behind it.
