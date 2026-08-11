@@ -35,7 +35,7 @@ exports.capabilities = {
   // leveling routine (home, clear old mesh, nozzle-clear, re-home, probe,
   // save), not a bare BED_MESH_CALIBRATE composed here by guesswork.
   autoLevel: true,
-  unloadFilament: false, firmwareInfo: true, inventory: false, discovery: true,
+  unloadFilament: false, firmwareInfo: true, inventory: false, discovery: true, health: true, fileSync: true,
   // Confirmed live against a real Ender-3 V3 Plus: it serves its own
   // proprietary web UI (title "Creality", not actually Fluidd/Mainsail) on
   // the same host/port as Moonraker — a real dashboard either way.
@@ -330,6 +330,10 @@ exports.getThumbnail = getThumbnail;
 
 // ---- Firmware (generic Moonraker query) ----
 exports.getFirmwareInfo = http.queryFirmwareInfo;
+exports.getHealth = http.queryHealth;
+exports.querySyncFiles = http.queryRemoteFileList;
+exports.downloadSyncFile = http.downloadRemoteFile;
+exports.deleteSyncFile = http.deleteRemoteFile;
 
 // ---- Camera detection + snapshot ----
 // Earlier assumption here (K1/K2 firmware docs describing a closed-source

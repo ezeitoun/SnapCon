@@ -523,12 +523,15 @@ function nextViewMode(){
   // goes back to Regular; Regular goes to the one configured alternate.
   return VIEW_MODE==='regular' ? ALT_DISPLAY : 'regular';
 }
-// Camera view and list view share the same toolbar (status tabs, tag
-// filter, checkbox multi-select, bulk actions, Edit Tags) — Bambu's own
-// farm manager uses one toolbar for both its grid and list modes, and
-// there's no reason for a printer's tag or selection state to reset just
-// because the user switched between two views that both show it.
-function gridToolbarActive(){ return VIEW_MODE==='camera' || VIEW_MODE==='list'; }
+// All four fleet display modes (regular, compact, camera, list) share the
+// same toolbar (status tabs, tag filter, checkbox multi-select, bulk
+// actions, Edit Tags) and the same cards/bulk actions underneath — there's
+// no reason selection or tag/status filtering should only work in two of
+// the four. Print Farm (VIEW_MODE==='printfarm') is a separate full-page
+// dashboard with its own printer list, not part of this grid at all — it's
+// deliberately excluded, and #fleet-wrap (this toolbar's own ancestor) is
+// hidden outright while it's open regardless of this function's answer.
+function gridToolbarActive(){ return VIEW_MODE==='camera' || VIEW_MODE==='list' || VIEW_MODE==='regular' || VIEW_MODE==='compact'; }
 // Shows which non-default view is active right next to the SnapCon name —
 // Queue Management takes priority over the four fleet display modes since
 // it's a separate page, not one of them; the standard fleet view shows
@@ -721,6 +724,10 @@ function applyRoleUI(){
   // still showing — it's the only way back to Fleet (mirrors #gear staying
   // visible/clickable the whole time Settings is open).
   if($("queueBtn")) $("queueBtn").style.display = (QUEUE_MANAGEMENT_ENABLED && !settingsOpen) ? "" : "none";
+  // Health is read-only diagnostics — available to every role, same as the
+  // fleet card itself; only Settings (an exclusive full-page takeover)
+  // hides it, same as maintBtn/bulkHeatBtn/filesBtn above.
+  if($("healthBtn")) $("healthBtn").style.display = settingsOpen ? "none" : "";
   if(USERS_ENABLED && CURRENT_USER){
     // First name if set, else fall back to the login name.
     const uname=CURRENT_USER.firstName||CURRENT_USER.loginName;
@@ -774,6 +781,12 @@ async function init(){
     if(fleetSechead) fleetSechead.style.display="none";
   }
   await checkVersion(); await loadConfigUI(); await loadFiles(); await initialFleetLoad();
+  // /health or /health/<id> deep link — read once here, after FLEET is
+  // populated (auto-select-first-attention needs it). Live navigation after
+  // this point goes through selectHealthPrinter()/the popstate listener,
+  // not this check again.
+  const healthMatch=location.pathname.match(/^\/health\/?(\d*)$/i);
+  if(healthMatch) openHealthPage(healthMatch[1]?parseInt(healthMatch[1],10):null);
   // First fleet data is in (or failed) — fade the splash out and drop it.
   const splash=$("splash");
   if(splash){ splash.classList.add("hide"); setTimeout(()=>splash.remove(), 600); }
@@ -793,27 +806,34 @@ function wireUI(){
   $("plateSkip").addEventListener("click", doPlateSkip);
   wireModal("thumbmodal", closeThumb, ["thumbx"]);
   wireModal("snapmodal", closeSnapshot, ["snapx"]);
-  wireModal("unloadmodal", closeUnload, ["unloadx","unloadNo"]);
-  wireModal("spoolColorModal", closeSpoolColorModal, ["sccX","sccCancel"]);
-  document.querySelectorAll(".scc-tab").forEach(b=>{
-    b.addEventListener("click",()=>{ SPOOL_MODAL_TAB=b.dataset.scctab; renderSpoolColorTabs(); });
+  // The X button always fully closes; Cancel and the backdrop are mode-aware
+  // (back out of color mode instead of closing, when a color edit is in
+  // progress) — not run through wireModal(), which assumes one close
+  // behavior for everything.
+  $("unloadx").addEventListener("click", closeUnload);
+  $("unloadNo").addEventListener("click", unloadCancelClicked);
+  $("unloadmodal").addEventListener("click", e=>{ if(e.target===$("unloadmodal")) unloadCancelClicked(); });
+  $("unloadEditColorBtn").addEventListener("click", enterColorMode);
+  document.querySelectorAll("#unloadColorTabs .scc-tab").forEach(b=>{
+    b.addEventListener("click",()=>{ SPOOL_MODAL_TAB=b.dataset.scctab; renderUnloadColorTabs(); });
   });
-  $("sccHexField").addEventListener("input",()=>applyCustomHex($("sccHexField").value));
-  $("sccColorInput").addEventListener("input",applyNativeColor);
-  ["sccR","sccG","sccB"].forEach(id=>$(id).addEventListener("input",applyCustomRgb));
+  $("unloadHexField").addEventListener("input",()=>applyCustomHex($("unloadHexField").value));
+  $("unloadColorInput").addEventListener("input",applyNativeColor);
+  ["unloadR","unloadG","unloadB"].forEach(id=>$(id).addEventListener("input",applyCustomRgb));
   // Feature-detected, not assumed — EyeDropper is Chromium-only as of this
   // writing. The button stays hidden (its default state in the markup) on
   // any browser without it.
   if(typeof window.EyeDropper!=="undefined"){
-    $("sccEyedropper").style.display="";
-    $("sccEyedropper").addEventListener("click",async ()=>{
+    $("unloadEyedropper").style.display="";
+    $("unloadEyedropper").addEventListener("click",async ()=>{
       try{
         const result=await new window.EyeDropper().open();
         if(result&&result.sRGBHex) setPendingColor(result.sRGBHex,"Custom");
       }catch{ /* user pressed Escape / cancelled — not an error */ }
     });
   }
-  $("sccApply").addEventListener("click", doApplySpoolColor);
+  $("unloadSaveColorBtn").addEventListener("click", doApplyUnloadColor);
+  $("unloadAllCheck").addEventListener("change", updateUnloadConfirmLabel);
   wireModal("quickPrintModal", closeQuickPrintModal, ["qpX","qpCancel"]);
   $("qpPrint").addEventListener("click", doQuickPrint);
   // Single-button toggle, same convention as #gear: click opens the
@@ -823,6 +843,17 @@ function wireUI(){
     if($("queueDashboard").classList.contains("show")) closeQueueDashboard();
     else openQueueDashboard();
   });
+  $("healthBtn").addEventListener("click", ()=>{
+    if($("healthPage").classList.contains("show")) closeHealthPage();
+    else openHealthPage();
+  });
+  $("healthRefreshBtn").addEventListener("click", ()=>{ if(HEALTH_PRINTER_ID!=null) loadHealthData(); });
+  $("healthSvcCancel").addEventListener("click", closeHealthServiceForm);
+  $("healthSvcSave").addEventListener("click", saveHealthService);
+  $("healthSvcOffline").addEventListener("change", toggleHealthOffline);
+  $("healthSvcDate").addEventListener("input", updateHealthNextDuePreview);
+  $("healthSvcFrequency").addEventListener("change", updateHealthNextDuePreview);
+  $("healthSvcComponentOther").addEventListener("input", ()=>{ updateHealthNextDuePreview(); syncHealthSvcSaveEnabled(); });
   wireModal("sendQueueModal", closeSendQueueModal, ["sendQueueX","sendQueueCancel"]);
   $("sendToQueueBtn").addEventListener("click", openSendQueueModal);
   $("sendQueuePool").addEventListener("change", renderSendQueuePreview);
@@ -866,9 +897,6 @@ function wireUI(){
     });
     updateCamToolbar();
   });
-  $("camBulkPause").addEventListener("click",()=>bulkCtl("pause"));
-  $("camBulkResume").addEventListener("click",()=>bulkCtl("resume"));
-  $("camBulkCancel").addEventListener("click",()=>bulkCtl("cancel"));
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
   wireModal("bulkheatmodal", closeBulkHeatModal, ["bulkheatx","bulkheatCancel"]);
   $("bulkHeatBtn").addEventListener("click", openBulkHeat);
@@ -911,10 +939,21 @@ function wireUI(){
   $("pfileSearch").addEventListener("input", renderPfileList);
 
   $("snaprefresh").addEventListener("click", loadSnapshot);
-  $("browseBtn").addEventListener("click", openBrowse);
+  $("browseBtn").addEventListener("click", ()=>openBrowse("setFolder"));
+  $("browseLogsBtn").addEventListener("click", ()=>openBrowse("setLogsFolder"));
+  $("browseCameraBtn").addEventListener("click", ()=>openBrowse("setCameraFolder"));
+  $("browseGcodeSyncBtn").addEventListener("click", ()=>openBrowse("setGcodeSyncFolder"));
   $("browsego").addEventListener("click", ()=>navigateBrowse($("browsepath").value.trim()));
   $("browsepath").addEventListener("keydown", e=>{ if(e.key==="Enter") navigateBrowse($("browsepath").value.trim()); });
-  $("browseok").addEventListener("click", ()=>{ const p=$("browsepath").value.trim(); if(p){ $("setFolder").value=p; scheduleFolderCheck(); updateSettingsDirtyBar("general"); } closeBrowse(); });
+  $("browseok").addEventListener("click", ()=>{
+    const p=$("browsepath").value.trim();
+    if(p){
+      $(BROWSE_TARGET_FIELD).value=p;
+      if(BROWSE_TARGET_FIELD==="setFolder") scheduleFolderCheck();
+      updateSettingsDirtyBar("general");
+    }
+    closeBrowse();
+  });
   $("setFolder").addEventListener("input", scheduleFolderCheck);
   $("setRefresh").addEventListener("input", updateRefreshHelper);
   $("setCurrency").addEventListener("change", updateCurrencyLabels);
@@ -926,6 +965,7 @@ function wireUI(){
   $("elecZip").addEventListener("keydown", e=>{ if(e.key==="Enter") doElecLookup(); });
   $("elecApply").addEventListener("click", ()=>{ closeElecModal(); });
 
+  wireFleetCardEvents();
   wireFleetDrag();
   wirePrinterDrag();
 
@@ -1195,30 +1235,62 @@ function needsDarkText(hex){
   return (0.299*parseInt(h.slice(0,2),16)+0.587*parseInt(h.slice(2,4),16)+0.114*parseInt(h.slice(4,6),16))/255 > 0.65;
 }
 
-// Special "/[color]/" tag syntax: a tag literally wrapped in slashes tints
-// that printer's card background with the color inside — a name CSS
-// understands natively ("/red/"), an "r,g,b" triple ("/255,80,80/"), or a
-// hex code ("/#ff5050/" or "/f50/"). The first match wins if a printer has
-// more than one such tag. Anything unresolvable is ignored (never a broken
-// or blank card) — a bare keyword is handed to CSS as-is and trusted to
-// validate itself; an invalid one just fails to apply, same as any other
-// bad CSS color value.
+// Special "/[color]/" tag syntax: a tag literally wrapped in slashes is a
+// formatting directive that tints that printer's card background, not an
+// ordinary label — a name CSS understands natively ("/red/"), an "r,g,b"
+// triple ("/255,80,80/" — a bare comma list, NOT the CSS rgb() function
+// syntax), or a hex code ("/#ff5050/" or "/f50/", '#' optional, 3/6/8 hex
+// digits). isColorTag() is the SYNTAX check alone (any /.../ tag, whether or
+// not the inside actually resolves) — this is what every other component
+// (list view, tag filter, counts, search) must use to keep these out of
+// ordinary tag UI, since a typo'd one (e.g. "/nosuchcolor/") is still a
+// color-tag attempt, not a label with odd punctuation. resolveColorTag()
+// additionally validates the inside and returns the real CSS color value,
+// or null if it's slash-wrapped but doesn't resolve to anything — a bare
+// keyword is handed to CSS as-is and trusted to validate itself, so an
+// unresolvable one (a real typo, or a name CSS doesn't recognize) fails
+// silently at the CSS layer with no error surfaced anywhere; the tag editor
+// is the one place that gap is visible (see tagEditorSwatchHtml below).
+function isColorTag(tag){
+  return /^\/(.+)\/$/.test(String(tag||"").trim());
+}
+function resolveColorTag(tag){
+  const m=/^\/(.+)\/$/.exec(String(tag||"").trim());
+  if(!m) return null;
+  const inner=m[1].trim();
+  if(/^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{8}$/.test(inner)){
+    return inner[0]==='#'?inner:'#'+inner;
+  }
+  const rgb=/^(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})$/.exec(inner);
+  if(rgb){
+    const [r,g,b]=rgb.slice(1,4).map(n=>Math.min(255,parseInt(n,10)));
+    return `rgb(${r},${g},${b})`;
+  }
+  if(/^[a-zA-Z]+$/.test(inner)) return inner.toLowerCase();
+  return null;
+}
+// The first match wins if a printer has more than one color tag.
 function parseColorTag(tags){
   for(const t of (tags||[])){
-    const m=/^\/(.+)\/$/.exec(String(t||"").trim());
-    if(!m) continue;
-    const inner=m[1].trim();
-    if(/^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$|^#?[0-9a-fA-F]{8}$/.test(inner)){
-      return inner[0]==='#'?inner:'#'+inner;
-    }
-    const rgb=/^(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})$/.exec(inner);
-    if(rgb){
-      const [r,g,b]=rgb.slice(1,4).map(n=>Math.min(255,parseInt(n,10)));
-      return `rgb(${r},${g},${b})`;
-    }
-    if(/^[a-zA-Z]+$/.test(inner)) return inner.toLowerCase();
+    const c=resolveColorTag(t);
+    if(c) return c;
   }
   return null;
+}
+// Both tag editors are raw comma-separated text fields, not per-tag chips —
+// this renders one small indicator next to the field reflecting whatever
+// color tag is currently typed: a swatch in the resolved color, or a "!"
+// mark if a /.../ tag is present but doesn't resolve to anything (the one
+// place that failure is ever surfaced, since the CSS layer fails silently).
+function colorTagSwatchHtml(rawTagsStr){
+  const tags=(rawTagsStr||"").split(",").map(t=>t.trim()).filter(Boolean);
+  const colorTags=tags.filter(isColorTag);
+  if(!colorTags.length) return "";
+  const resolved=colorTags.map(t=>({tag:t,color:resolveColorTag(t)}));
+  const ok=resolved.find(r=>r.color);
+  if(ok) return `<span class="tag-color-swatch" style="background:${esc(ok.color)}" title="${esc(ok.tag)} → ${esc(ok.color)}"></span>`;
+  const bad=resolved[0];
+  return `<span class="tag-color-swatch invalid" title="${esc(bad.tag)} doesn't resolve to a color — it won't tint the card">!</span>`;
 }
 
 function renderList(){
@@ -1426,14 +1498,15 @@ const QUEUE_ATTENTION_RESOLUTIONS={
   "recovery-interrupted": [["retry","Retry Job"],["skip","Skip Job"],["stop","Stop Queue"]],
   "recovery-unknown-outcome": [["resume","Resume"],["retry","Retry Job"],["skip","Skip Job"],["stop","Stop Queue"]]
 };
-// Fleet, Settings, and Queue Management are mutually exclusive full-page
-// views (same show/hide idiom as .setup) — openQueueDashboard()/
+// Fleet, Settings, Queue Management, and Health are mutually exclusive
+// full-page views (same show/hide idiom as .setup) — openQueueDashboard()/
 // closeQueueDashboard() are the ONLY path in or out, so timer creation and
 // teardown can never be duplicated or skipped regardless of which of the
 // several entry points (queueBtn click, gear opening Settings on top of an
 // open dashboard) triggered it.
 function openQueueDashboard(){
   if($("queueDashboard").classList.contains("show")) return;
+  closeHealthPage();
   $("queueDashboard").classList.add("show");
   // Only the Fleet-specific CONTENT is swapped out for the dashboard (can't
   // show the printer grid and the dashboard at once) — every topbar
@@ -1470,6 +1543,768 @@ function closeQueueDashboard(){
 function fleetRowForPrinterId(pid){
   const idx=PRINTERS_CFG.findIndex(p=>p.id===pid);
   return idx===-1?null:FLEET.find(f=>f.id===idx);
+}
+
+// ---- Health page — fifth mutually-exclusive full-page view (same
+// show/hide idiom as #queueDashboard above). Deliberately NO timer: every
+// value is fetched once on open/printer-switch, or via the Refresh button —
+// see connectors/http-utils.js's queryHealth for why the data itself is
+// sectioned. HEALTH_SYNCING_FROM_POPSTATE suppresses pushState while we're
+// the ones reacting to a back/forward navigation, not causing one. ----
+let HEALTH_PRINTER_ID=null, HEALTH_DATA=null, HEALTH_MAINT=null, HEALTH_REQ_TOKEN=0, HEALTH_SYNCING_FROM_POPSTATE=false;
+const DISK_CRITICAL_PCT=0.05, DISK_CRITICAL_BYTES=2*1024*1024*1024;
+// Per-session cache of the RICH (per-printer, /api/health-derived)
+// needsAttention result, filled in only for printers whose Health page has
+// actually been opened this session — the picker chips use this to enrich
+// the attention marker beyond the cheap fleet-wide flag (maintenance/queue
+// only) WITHOUT ever fetching /api/health for a printer nobody opened. A
+// printer never opened this session still falls back to the cheap flag.
+const HEALTH_ATTENTION_CACHE={};
+let HEALTH_LAST_LOADED_AT=null, HEALTH_UPDATED_TICK_TIMER=null;
+
+function openHealthPage(printerId){
+  closeQueueDashboard();
+  $("healthPage").classList.add("show");
+  document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none");
+  $("healthBtn").title="Back to Fleet";
+  let id=printerId;
+  if(id==null){
+    const attn=FLEET.find(p=>p.needsAttention);
+    id=attn?attn.id:(FLEET[0]?FLEET[0].id:null);
+  }
+  selectHealthPrinter(id);
+  // Purely a local "Ns ago" text tick — no network call, so this doesn't
+  // reintroduce the auto-polling this page deliberately avoids.
+  if(!HEALTH_UPDATED_TICK_TIMER) HEALTH_UPDATED_TICK_TIMER=setInterval(updateHealthUpdatedAgo,5000);
+}
+function closeHealthPage(){
+  if(!$("healthPage").classList.contains("show")) return;
+  $("healthPage").classList.remove("show");
+  document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="");
+  $("healthBtn").title="Printer health";
+  HEALTH_PRINTER_ID=null; HEALTH_DATA=null; HEALTH_MAINT=null; HEALTH_LAST_LOADED_AT=null;
+  if(HEALTH_UPDATED_TICK_TIMER){ clearInterval(HEALTH_UPDATED_TICK_TIMER); HEALTH_UPDATED_TICK_TIMER=null; }
+  if(!HEALTH_SYNCING_FROM_POPSTATE && location.pathname.toLowerCase().startsWith("/health")) history.pushState(null,"","/");
+  applyRoleUI();
+}
+function selectHealthPrinter(id){
+  HEALTH_PRINTER_ID=id;
+  if(!HEALTH_SYNCING_FROM_POPSTATE && id!=null){
+    const target="/health/"+id;
+    if(location.pathname!==target) history.pushState(null,"",target);
+  }
+  renderHealthPicker();
+  loadHealthData();
+}
+window.addEventListener("popstate",()=>{
+  const m=/^\/health\/?(\d*)$/i.exec(location.pathname);
+  HEALTH_SYNCING_FROM_POPSTATE=true;
+  try{
+    if(!m){ if($("healthPage").classList.contains("show")) closeHealthPage(); return; }
+    const id=m[1]?parseInt(m[1],10):null;
+    if(!$("healthPage").classList.contains("show")) openHealthPage(id);
+    else selectHealthPrinter(id);
+  } finally { HEALTH_SYNCING_FROM_POPSTATE=false; }
+});
+
+// Rides the existing fleet poll (FLEET already carries needsAttention per
+// row from /api/fleet) — no fetch of its own, called from renderFleet().
+function updateHealthBadge(){
+  const badge=$("healthBadge");
+  if(!badge) return;
+  const n=FLEET.filter(p=>p.needsAttention).length;
+  if(n>0){ badge.textContent=n>99?"99+":String(n); badge.style.display=""; }
+  else badge.style.display="none";
+}
+function renderHealthPicker(){
+  const wrap=$("healthPicker");
+  if(!wrap) return;
+  if(!FLEET.length){ wrap.innerHTML=`<span class="settings-help">No printers configured.</span>`; return; }
+  wrap.innerHTML=FLEET.map(p=>{
+    const {statusColor}=statusColorText(p);
+    const active=p.id===HEALTH_PRINTER_ID;
+    // Rich cached result (if this printer's Health page has been opened
+    // this session) wins over the cheap fleet-wide flag — see
+    // HEALTH_ATTENTION_CACHE's own comment for why this never adds a fetch.
+    const needsAttention=HEALTH_ATTENTION_CACHE[p.id]!==undefined?HEALTH_ATTENTION_CACHE[p.id]:!!p.needsAttention;
+    return `<button type="button" class="health-chip${active?" active":""}" data-healthchip="${p.id}" style="--status-color:${statusColor}" title="${esc(p.name)}${needsAttention?" — needs attention":""}">`+
+      `<span class="health-chip-dot"></span><span class="health-chip-name">${esc(p.name)}</span>`+
+      (needsAttention?`<span class="health-chip-attn" aria-hidden="true"></span>`:"")+
+    `</button>`;
+  }).join("");
+  wrap.querySelectorAll("[data-healthchip]").forEach(b=>{
+    b.addEventListener("click",()=>selectHealthPrinter(parseInt(b.dataset.healthchip,10)));
+  });
+}
+
+async function loadHealthData(){
+  const pid=HEALTH_PRINTER_ID;
+  if(pid==null){ HEALTH_DATA=null; HEALTH_MAINT=null; renderHealthBody(); return; }
+  const token=++HEALTH_REQ_TOKEN;
+  HEALTH_DATA=null; HEALTH_MAINT=null;
+  renderHealthBody();
+  let health, maint;
+  try{ health=await (await fetch("/api/health?printer="+pid)).json(); }
+  catch(e){ health={ skipped:true, reason:"Could not reach SnapCon: "+e.message }; }
+  try{ maint=await (await fetch("/api/maintenance?printer="+pid)).json(); }
+  catch(e){ maint=null; }
+  if(token!==HEALTH_REQ_TOKEN||pid!==HEALTH_PRINTER_ID) return; // superseded by a newer switch/refresh
+  HEALTH_DATA=health; HEALTH_MAINT=maint;
+  HEALTH_LAST_LOADED_AT=Date.now();
+  if(!health.skipped) HEALTH_ATTENTION_CACHE[pid]=!!health.needsAttention;
+  renderHealthBody();
+  updateHealthUpdatedAgo();
+  renderHealthPicker(); // re-render so the enriched attention marker (if it changed) shows immediately, not just on the next printer switch
+  if(!health.skipped) resumeSyncPollingIfRunning(pid);
+}
+// A sync is server-side and outlives the browser tab that started it (same
+// as a print job) — so opening/reloading the Health page has no way to know
+// one is already in progress until it actually asks. One status check per
+// root, per printer-load; if genuinely running, that's what kicks off the
+// ongoing 1.5s poll loop. If not, this is a single cheap request, not
+// recurring — never calls loadHealthData() itself (unlike pollSyncStatus's
+// own "just finished" branch), so it can't loop.
+async function resumeSyncPollingIfRunning(printerId){
+  let anyRunning=false;
+  for(const root of ["logs","camera","gcodes"]){
+    let st;
+    try{ st=await getJSON("/api/sync-status?printer="+printerId+"&root="+root); }
+    catch{ continue; }
+    HEALTH_SYNC_STATE[syncKey(printerId,root)]=st;
+    if(syncRunning(st)){
+      anyRunning=true;
+      const key=syncKey(printerId,root);
+      clearTimeout(HEALTH_SYNC_TIMERS[key]);
+      HEALTH_SYNC_TIMERS[key]=setTimeout(()=>pollSyncStatus(printerId,root),1500);
+    }
+  }
+  if(anyRunning&&HEALTH_PRINTER_ID===printerId) renderHealthBody();
+}
+// Purely local text — recomputes "Ns/Nm ago" from the already-stored
+// HEALTH_LAST_LOADED_AT, no network call. Also restates that this page
+// never auto-refreshes, since "Updated Ns ago" alone could misread as "and
+// climbing on its own".
+function updateHealthUpdatedAgo(){
+  const el=$("healthUpdatedAt");
+  if(!el) return;
+  if(HEALTH_LAST_LOADED_AT==null){ el.textContent=""; return; }
+  const secs=Math.max(0,Math.round((Date.now()-HEALTH_LAST_LOADED_AT)/1000));
+  const ago=secs<60?secs+"s ago":Math.round(secs/60)+"m ago";
+  el.textContent=`Updated ${ago} · no auto-refresh`;
+}
+
+function fmtBytes(n){
+  if(n==null||!isFinite(n)) return "—";
+  const units=["B","KB","MB","GB","TB"];
+  let v=Math.max(0,n), i=0;
+  while(v>=1024&&i<units.length-1){ v/=1024; i++; }
+  return (i===0?Math.round(v):v.toFixed(1))+" "+units[i];
+}
+function lastServiceText(maint){
+  if(!maint||!maint.entries||!maint.entries.length) return "Never";
+  return fmtMaintDate(maint.entries.reduce((a,b)=>(a.date>b.date?a:b)).date);
+}
+function renderAttentionList(d){
+  const reasons=(d.attentionReasons||[]).slice().sort((a,b)=>(a.severity==="critical"?0:1)-(b.severity==="critical"?0:1));
+  if(!reasons.length) return `<div class="health-card"><div class="health-card-hdr">Needs attention</div><p class="settings-help">Nothing needs attention right now.</p></div>`;
+  return `<div class="health-card"><div class="health-card-hdr">Needs attention</div><div class="health-attn-list">`+
+    reasons.map(r=>`<div class="health-attn-item ${esc(r.severity)}"><span class="health-attn-dot"></span><div class="health-attn-text"><div class="health-attn-title">${esc(r.title)}</div><div class="health-attn-detail">${esc(r.detail)}</div></div>`+
+      (r.suggestedComponent?`<button type="button" class="btn ghost btn-sm" data-logfix="${esc(r.suggestedComponent)}">Log fix</button>`:"")+
+    `</div>`).join("")+
+  `</div></div>`;
+}
+// ReadingRow — the shared anatomy every Health card metric renders through:
+// a human label + a state-colored current-vs-threshold value on one line, an
+// optional duty/percent bar underneath. `state` is one of
+// 'healthy'|'warning'|'critical'|'neutral' ('neutral' = not evaluated: idle,
+// heating/cooling in transit, unmeasurable). The value TEXT and the bar FILL
+// deliberately use different color rules: a healthy row's value stays quiet
+// secondary grey while its bar still fills green — only warning/critical
+// color the text, so a card with a real problem is the one that visually
+// stands out. `pct` of null skips the bar entirely (used for states like
+// "Idle" where there's nothing to measure). `opts.title`, if given, adds a
+// hover explanation and an info mark on the label — for a row whose value
+// needs a caveat that doesn't fit inline (e.g. Storage's "Other" bucket).
+function readingRow(label,valueText,pct,state,opts){
+  opts=opts||{};
+  const cls=["healthy","warning","critical","neutral"].includes(state)?state:"healthy";
+  const bar=pct==null?"":`<div class="reading-bar"><div class="reading-bar-fill ${cls}" style="width:${Math.max(0,Math.min(100,pct))}%"></div></div>`;
+  const lbl=label+(opts.title?" ⓘ":"");
+  return `<div class="reading-row"${opts.title?` title="${esc(opts.title)}"`:""}>`+
+    `<div class="reading-row-top"><span class="reading-label">${esc(lbl)}</span><span class="reading-value ${cls}">${esc(valueText)}</span></div>`+
+    bar+
+  `</div>`;
+}
+// Toolheads card: compact rows, not the fleet card's big spool-icon lanes —
+// this page shows several cards on one screen, so each row is head label
+// (respecting the T-notation setting via the existing headLabel(), not a
+// hardcoded T-prefix), a small color swatch, material, color name
+// (nameForHex()), and state. Empty (loaded:false) is a hollow row, matching
+// the empty-slot convention everywhere else; a loaded head with no reported
+// hex is its own distinct "loaded, color unknown" state — not confused with
+// empty, not guessing a color.
+function renderToolheadRow(h,i,active,finished){
+  const label=esc(headLabel(i));
+  if(!h||!h.loaded){
+    return `<div class="health-toolhead-row empty"><span class="health-toolhead-swatch empty"></span><span class="health-toolhead-label">${label}</span><span class="health-toolhead-material">Empty</span><span class="health-toolhead-state"></span></div>`;
+  }
+  const hex=h.hex||null;
+  const colorName=hex?nameForHex(hex):"";
+  const material=h.material&&h.material!=="—"?h.material:"Unknown material";
+  const state=active?(finished?"Last used":"Active"):"Loaded";
+  return `<div class="health-toolhead-row${active?" active":""}">`+
+    `<span class="health-toolhead-swatch${hex?"":" unknown"}" style="${hex?`background:${esc(hex)}`:""}" title="${hex?esc(hex):"No color reported"}"></span>`+
+    `<span class="health-toolhead-label">${label}</span>`+
+    `<span class="health-toolhead-material">${esc(material)}${colorName?" · "+esc(colorName):""}</span>`+
+    `<span class="health-toolhead-state">${esc(state)}</span>`+
+  `</div>`;
+}
+function renderToolheadsCard(p){
+  if(!p||!p.capabilities?.filamentHeads) return "";
+  const heads=p.heads||[];
+  if(!heads.length) return "";
+  const rows=heads.map((h,i)=>renderToolheadRow(h,i,h&&h.loaded&&p.activeExt===i,p.state==="complete")).join("");
+  return `<div class="health-card"><div class="health-card-hdr">Toolheads</div>${rows}</div>`;
+}
+// MCU stats become readings, not a raw dump: a state dot plus the 3 values
+// that actually mean something, each against a warn/crit threshold with a
+// plain-language explanation. None of these thresholds are validated
+// against real degraded hardware — they're starting points, same caveat as
+// every other threshold on this page. `freq` (raw clock frequency) isn't a
+// health signal by itself — there's no known-good "nominal" frequency per
+// board to compute drift against, so rather than fabricate one, it moves
+// into the raw disclosure instead of the primary view, along with
+// srtt/rttvar/bytesWrite.
+const MCU_RETRANSMIT_RATE_WARN=1, MCU_RETRANSMIT_RATE_CRIT=5; // per 1,000,000 bytes written
+const MCU_TASK_AVG_WARN=0.001, MCU_TASK_AVG_CRIT=0.005; // seconds
+const MCU_INVALID_BYTES_WARN=1, MCU_INVALID_BYTES_CRIT=50; // count, cumulative since boot
+function stateFor(val,warn,crit){ return val==null?"healthy":val>=crit?"critical":val>=warn?"warning":"healthy"; }
+function worstOf(...states){ return states.includes("critical")?"critical":states.includes("warning")?"warning":"healthy"; }
+function mcuReading(m){
+  const rate=(m.bytesWrite&&m.bytesRetransmit!=null)?(m.bytesRetransmit/m.bytesWrite*1000000):null;
+  const rateState=stateFor(rate,MCU_RETRANSMIT_RATE_WARN,MCU_RETRANSMIT_RATE_CRIT);
+  const invalidState=stateFor(m.bytesInvalid,MCU_INVALID_BYTES_WARN,MCU_INVALID_BYTES_CRIT);
+  const taskState=stateFor(m.mcuTaskAvg,MCU_TASK_AVG_WARN,MCU_TASK_AVG_CRIT);
+  return { rate, rateState, invalidState, taskState, worst:worstOf(rateState,invalidState,taskState) };
+}
+function renderControllerCard(d){
+  const mcus=d.mcus;
+  if(!mcus||!mcus.available) return `<div class="health-card"><div class="health-card-hdr">Controller link</div><p class="settings-help">Controller data unavailable${mcus&&mcus.reason?": "+esc(mcus.reason):""}.</p></div>`;
+  if(!mcus.list.length) return "";
+  const blocks=mcus.list.map(m=>{
+    const r=mcuReading(m);
+    const rateTxt=r.rate!=null?r.rate.toFixed(2)+" per 1M bytes":"—";
+    const explain=r.worst!=="healthy"?(r.rateState!=="healthy"?"Rising retransmits usually indicate a cable, connector, or interference problem.":r.invalidState!=="healthy"?"Invalid bytes indicate corrupted communication, not just a retry — check the connection.":"The controller's main loop is taking longer than expected to process communication."):"";
+    return `<div class="health-mcu-block">`+
+      `<div class="health-mcu-hdr"><span class="health-mcu-dot ${r.worst}"></span><span class="health-mcu-name">${esc(mcuLabel(m.name))}</span></div>`+
+      readingRow("Retransmits",rateTxt,r.rate!=null?r.rate/MCU_RETRANSMIT_RATE_CRIT*100:0,r.rateState)+
+      readingRow("Invalid bytes",m.bytesInvalid??"—",m.bytesInvalid!=null?m.bytesInvalid/MCU_INVALID_BYTES_CRIT*100:0,r.invalidState)+
+      readingRow("Task load",m.mcuTaskAvg!=null?(m.mcuTaskAvg*1000).toFixed(3)+" ms":"—",m.mcuTaskAvg!=null?m.mcuTaskAvg/MCU_TASK_AVG_CRIT*100:0,r.taskState)+
+      (explain?`<div class="reading-note ${r.worst}">${esc(explain)}</div>`:"")+
+      `<div class="health-diag-vals">retransmit ${m.bytesRetransmit??"—"} · invalid ${m.bytesInvalid??"—"} · bytes written ${m.bytesWrite??"—"} · srtt ${m.srtt??"—"} · rttvar ${m.rttvar??"—"} · freq ${m.freq??"—"} · task avg ${m.mcuTaskAvg??"—"} · task stddev ${m.mcuTaskStddev??"—"}</div>`+
+    `</div>`;
+  }).join("");
+  return `<div class="health-card"><div class="health-card-hdr">Controller link</div>`+
+    `<p class="health-card-desc">Communication health between the mainboard and each toolhead controller. Rising retransmits, invalid bytes, or task load usually mean a cable, connector, or interference problem.</p>`+
+    blocks+
+  `</div>`;
+}
+// System utilization — the host machine running Klipper, not the printer's
+// own hardware. Thresholds are starting points, same caveat as everywhere
+// else on this page: this is a Pi-class SBC in the common case (though
+// confirmed elsewhere on this page that this fleet's own U1 hardware isn't
+// literally a Pi), so 80°C is used as a rough thermal-throttle reference
+// point rather than a validated figure for this specific board.
+const CPU_TEMP_WARN=70, CPU_TEMP_CRIT=80; // °C
+const CPU_USAGE_WARN=85, CPU_USAGE_CRIT=97; // percent
+const MEM_USAGE_WARN=85, MEM_USAGE_CRIT=95; // percent
+function renderSystemCard(d){
+  const s=d.system;
+  if(!s||!s.available) return `<div class="health-card"><div class="health-card-hdr">System utilization</div><p class="settings-help">System data unavailable${s&&s.reason?": "+esc(s.reason):""}.</p></div>`;
+  const rows=[];
+  if(s.cpuTemp!=null){
+    rows.push(readingRow("CPU temperature",Math.round(s.cpuTemp)+" °C",s.cpuTemp/CPU_TEMP_CRIT*100,stateFor(s.cpuTemp,CPU_TEMP_WARN,CPU_TEMP_CRIT)));
+  }
+  if(s.cpuUsage!=null){
+    rows.push(readingRow("CPU usage",Math.round(s.cpuUsage)+"%",s.cpuUsage,stateFor(s.cpuUsage,CPU_USAGE_WARN,CPU_USAGE_CRIT)));
+  }
+  if(s.memory&&s.memory.total){
+    const pct=s.memory.used/s.memory.total*100;
+    rows.push(readingRow("Memory",Math.round(pct)+"% used",pct,stateFor(pct,MEM_USAGE_WARN,MEM_USAGE_CRIT)));
+  }
+  if(!rows.length) return "";
+  return `<div class="health-card"><div class="health-card-hdr">System utilization</div>`+
+    `<p class="health-card-desc">Host load on the machine running Klipper. Sustained high CPU or memory usage can cause dropped MCU communication or a sluggish web UI.</p>`+
+    rows.join("")+
+    `<div class="health-diag-vals">uptime ${s.uptimeSec!=null?fmtDuration(s.uptimeSec):"—"} · memory ${s.memory?s.memory.used+" / "+s.memory.total+" KB":"—"}</div>`+
+  `</div>`;
+}
+// Single source of truth for "which physical toolhead does this Klipper
+// object refer to," shared by every card that references a toolhead
+// (heaters, fans, MCUs). Klipper's own extruder/e-index numbering is 0-based
+// (extruder == head 0, e0 == head 0, ...) but every other head number shown
+// in SnapCon is 1-based (T1..T4) — fixed, hand-checked, NOT derived from
+// headLabel()/USE_T_NOTATION, which is a different (0-based, G-code
+// Tn-command-style) numbering used by the Toolheads card and left untouched.
+function toolheadNumber(i){ return "T"+(i+1); }
+// heater_bed isn't a toolhead at all; "extruder" (no digit) is head 0 = T1.
+function heaterLabel(name){
+  if(name==="heater_bed") return "Bed";
+  const m=/^extruder(\d*)$/.exec(name);
+  if(m) return toolheadNumber(m[1]===""?0:parseInt(m[1],10))+" hotend";
+  return name;
+}
+// Fan names carry their toolhead index as an "eN" token wherever it
+// appears (e.g. "heater_fan e0_nozzle_fan", "fan_generic e1_fan") — names
+// with no eN token (cavity_fan, power_fan, the plain "fan", purifier's own
+// fan) have no confirmed toolhead association, so they're left as-is.
+// Explicit overrides for names with no eN token to derive a toolhead number
+// from — confirmed live, not guessed (no authoritative Snapmaker naming doc
+// exists for these; see the earlier research on this in the session).
+const FAN_NAME_OVERRIDES={ "fan":"Main Cooling Fan", "fan_generic cavity_fan":"Assist Cooling Fan", "purifier inner fan":"Recirculation Fan", "purifier exhaust fan":"Exhaust Fan" };
+function fanLabel(name){
+  if(FAN_NAME_OVERRIDES[name]) return FAN_NAME_OVERRIDES[name];
+  // The trailing boundary can't be \b here — every real name has "eN"
+  // immediately followed by "_" (e.g. "e0_nozzle_fan"), and "_" counts as a
+  // word character, so \b never matches there. A lookahead for "_" or
+  // end-of-string is what "the eN token ends here" actually means.
+  const m=/\be(\d)(?=_|$)/.exec(name);
+  if(!m) return name;
+  const rest=name.replace(/^(heater_fan|fan_generic)\s+e\d_/,"").replace(/_/g," ").trim();
+  return toolheadNumber(parseInt(m[1],10))+(rest?" "+rest:"");
+}
+// MCU names are already relabeled server-side ("mainboard", "toolhead e0"..
+// "toolhead e3" — see fetchMcuSection in connectors/http-utils.js).
+function mcuLabel(name){
+  if(name==="mainboard") return "Mainboard";
+  const m=/\be(\d)\b/.exec(name);
+  if(m) return toolheadNumber(parseInt(m[1],10));
+  return name;
+}
+// Duty is only meaningful once a reading has been stably AT target for a
+// while — server.js's annotateHeaterStates() does the actual dwell tracking
+// (it needs to survive across manual refreshes, so it lives server-side);
+// these thresholds judge the duty number once the server has told us it's
+// trustworthy (h.state==="stable"). Unvalidated starting points, same
+// caveat as every other threshold on this page.
+const HEATER_DUTY_WARN=0.6;
+const HEATER_DUTY_CRIT=0.85;
+const HEATER_DUTY_IMBALANCE_DELTA=0.3; // percentage-point spread (as a 0-1 fraction) between same-target siblings
+function heaterReadingRow(h){
+  const label=heaterLabel(h.name);
+  if(h.state==="idle") return readingRow(label,"Idle",null,"neutral");
+  const cur=h.temperature!=null?Math.round(h.temperature):"—";
+  const tgt=h.target!=null?Math.round(h.target):"—";
+  const dutyPct=h.power!=null?Math.round(h.power*100):null;
+  if(h.state==="heating"||h.state==="cooling"||h.state==="settling"){
+    const word=h.state==="heating"?"Heating":h.state==="cooling"?"Cooling":"Settling";
+    return readingRow(label,`${cur} of ${tgt} °C · ${word}`,dutyPct,"neutral");
+  }
+  // stable — the only state where duty is trusted enough to color-judge.
+  const state=h.power!=null&&h.power>=HEATER_DUTY_CRIT?"critical":h.power!=null&&h.power>=HEATER_DUTY_WARN?"warning":"healthy";
+  return readingRow(label,`${cur} of ${tgt} °C (${dutyPct!=null?dutyPct+"%":"—"})`,dutyPct,state);
+}
+// Cross-head duty imbalance: only compares stably-at-target extruder heads
+// sharing the same target (heater_bed has no siblings; different targets
+// aren't comparable). One named, specific note — not a generic warning —
+// or none at all. Returns {text,state} so the caller can color the note to
+// match its own severity (warning, or critical if the high head is already
+// past the critical duty threshold).
+function heaterImbalanceNote(list){
+  const stable=list.filter(h=>h.state==="stable"&&h.power!=null&&/^extruder\d*$/.test(h.name));
+  const byTarget=new Map();
+  stable.forEach(h=>{ const k=h.target; if(!byTarget.has(k)) byTarget.set(k,[]); byTarget.get(k).push(h); });
+  for(const group of byTarget.values()){
+    if(group.length<2) continue;
+    const sorted=group.slice().sort((a,b)=>b.power-a.power);
+    const hi=sorted[0], lo=sorted[sorted.length-1];
+    if(hi.power-lo.power>=HEATER_DUTY_IMBALANCE_DELTA&&hi.power>=HEATER_DUTY_WARN){
+      return {
+        text:`${heaterLabel(hi.name)} is at ${Math.round(hi.power*100)}% while ${heaterLabel(lo.name)} holds the same target at ${Math.round(lo.power*100)}%. Check the sock and thermistor seating.`,
+        state:hi.power>=HEATER_DUTY_CRIT?"critical":"warning"
+      };
+    }
+  }
+  return null;
+}
+function renderHeatersCard(d){
+  const heaters=d.heaters;
+  if(!heaters||!heaters.available) return `<div class="health-card"><div class="health-card-hdr">Heaters</div><p class="settings-help">Heater data unavailable${heaters&&heaters.reason?": "+esc(heaters.reason):""}.</p></div>`;
+  if(!heaters.list.length) return "";
+  const rows=heaters.list.map(heaterReadingRow).join("");
+  const note=heaterImbalanceNote(heaters.list);
+  return `<div class="health-card"><div class="health-card-hdr">Heaters</div>`+
+    `<p class="health-card-desc">Duty cycle while holding target. Persistent high duty means a failing heater or thermistor.</p>`+
+    rows+
+    (note?`<div class="reading-note ${note.state}">${esc(note.text)}</div>`:"")+
+  `</div>`;
+}
+// Same idea for fans: when everything reads 0, that's a summary line, not a
+// wall of zero rows. Auto-expands (or expands on click) the moment any fan
+// is actually running or reporting an RPM despite not being commanded on —
+// both are "worth a look" states. A fan with no tachometer (rpm:null) never
+// counts toward "is anything running" — it's simply not measurable, and
+// belongs in the expanded list's content, not driving whether the summary
+// shows at all.
+function fanIsActive(f){
+  return (typeof f.speed==="number"&&f.speed>0.05)||(typeof f.rpm==="number"&&f.rpm>0);
+}
+// Same commanded-vs-measured mismatch semantics as server.js's
+// checkFanMismatch, but evaluated fresh on every render, single-snapshot —
+// this is a card-coloring decision, not a Needs Attention trigger. The
+// server-side check additionally requires the mismatch to persist across
+// two consecutive manual refreshes before it becomes an attention item,
+// which this row-level color deliberately does not wait for.
+const FAN_MISMATCH_RPM_THRESHOLD=50;
+function fanReadingRow(f){
+  const commandedPct=f.speed!=null?Math.round(f.speed*100):null;
+  const measurable=f.rpm!=null;
+  const commanded=f.speed!=null&&f.speed>0.1;
+  const mismatched=measurable&&commanded&&f.rpm<FAN_MISMATCH_RPM_THRESHOLD;
+  const val=`${commandedPct!=null?commandedPct+"% commanded":"—"} · ${measurable?Math.round(f.rpm)+" RPM":"not measurable"}`;
+  const state=mismatched?"warning":measurable?"healthy":"neutral";
+  return readingRow(fanLabel(f.name),val,commandedPct,state);
+}
+// On SnapMaker U1, "fan_generic e1_fan"/"e2_fan"/"e3_fan" (no "_nozzle_")
+// are the SAME physical fan as the plain "fan" object (Main Cooling Fan) —
+// just mirrored per active toolhead, not distinct hardware. Shown alongside
+// "Main Cooling Fan" they'd read as 4 separate fans when there's really
+// one; filtered out here rather than displayed as redundant duplicates.
+// "e0_fan" never exists at all (only e0_nozzle_fan does), which is exactly
+// this pattern's other tell.
+const FAN_REDUNDANT_MIRROR=/^fan_generic e\d_fan$/;
+function renderFansCard(d){
+  const fans=d.fans;
+  if(!fans||!fans.available) return `<div class="health-card"><div class="health-card-hdr">Fans</div><p class="settings-help">Fan data unavailable${fans&&fans.reason?": "+esc(fans.reason):""}.</p></div>`;
+  const list=fans.list.filter(f=>!FAN_REDUNDANT_MIRROR.test(f.name));
+  if(!list.length) return "";
+  const desc=`<p class="health-card-desc">Cooling airflow. A fan commanded on but not spinning usually means a stuck bearing, blocked blade, or bad connector.</p>`;
+  const anyActive=list.some(fanIsActive);
+  const rows=list.map(fanReadingRow).join("");
+  if(!anyActive){
+    return `<div class="health-card"><div class="health-card-hdr">Fans</div>${desc}`+
+      `<p class="settings-help" id="healthFansSummary">${list.length} fans, all stopped <button type="button" class="btn ghost btn-sm" id="healthFansExpand">Show all</button></p>`+
+      `<div class="health-fans-detail" id="healthFansDetail" style="display:none">${rows}</div>`+
+    `</div>`;
+  }
+  return `<div class="health-card"><div class="health-card-hdr">Fans</div>${desc}${rows}</div>`;
+}
+// Recent Faults: exception_manager's per-entry field shape was never
+// confirmed live (every printer checked had zero entries) — rendered
+// defensively, trying a few plausible field names before falling back to a
+// raw compact dump, rather than assuming a shape that was never observed.
+// The one entry whose shape IS known is the "current active error" folded
+// in by fetchFaultsSection from the probe result.
+function renderFaultEntry(f){
+  if(f.current) return `<div class="health-fault-row"><span class="health-fault-badge">Active</span><span class="health-fault-text">${esc(f.errorCode?`[${f.errorCode}] `:"")}${esc(f.message||"Unknown error")}</span></div>`;
+  const guess=["message","msg","reason","description","code"].map(k=>f[k]).find(v=>v!=null&&v!=="");
+  return `<div class="health-fault-row"><span class="health-fault-text">${esc(guess!=null?String(guess):JSON.stringify(f))}</span></div>`;
+}
+function renderFaultsCard(d){
+  const f=d.faults;
+  if(!f||!f.available) return `<div class="health-card"><div class="health-card-hdr">Recent faults</div><p class="settings-help">Fault data unavailable${f&&f.reason?": "+esc(f.reason):""}.</p></div>`;
+  if(!f.list.length) return `<div class="health-card"><div class="health-card-hdr">Recent faults</div><p class="settings-help">No recent faults.</p></div>`;
+  return `<div class="health-card"><div class="health-card-hdr">Recent faults</div>`+f.list.map(renderFaultEntry).join("")+`</div>`;
+}
+function renderServiceHistoryCard(maint){
+  const entries=(maint&&maint.entries)||[];
+  const header=`<div class="health-card-hdr-row"><div class="health-card-hdr">Service history</div><button type="button" class="btn ghost btn-sm" id="healthAddService">Add service record</button></div>`;
+  if(!entries.length) return `<div class="health-card">${header}<p class="settings-help">No service recorded yet.</p></div>`;
+  const rows=entries.slice().reverse().map(e=>`<div class="health-service-row"><span class="health-service-date">${esc(fmtMaintDate(e.date))}</span><span class="health-service-component">${esc(e.component||"—")}</span><span class="health-service-comment">${esc(e.comment||"")}</span><span class="health-service-cost">${e.cost?esc(CURRENCY)+Number(e.cost).toFixed(2):""}</span></div>`).join("");
+  return `<div class="health-card">${header}${rows}</div>`;
+}
+
+// ---- Inline service form ("not a modal", per spec) — one static instance
+// in #healthPage, shown/hidden rather than a popup. Reuses the Maintenance
+// modal's own shared constants/helpers (MAINT_FREQ_SPEC, MAINT_FREQ_MAP,
+// addDaysClient/addMonthsClient, fmtMaintDate, fmtHours) so the next-due
+// preview math and default-frequency suggestion stay identical to the
+// modal's — only the markup/element ids and the "inline, not popup" framing
+// differ. POSTs to the same /api/maintenance the modal uses. ----
+let HEALTH_SVC_COMPONENT="", HEALTH_SVC_HOURS_SEC=null;
+function currentHealthSvcComponent(){
+  return $("healthSvcComponentOther").value.trim()||HEALTH_SVC_COMPONENT;
+}
+function syncHealthSvcSaveEnabled(){
+  $("healthSvcSave").disabled=!currentHealthSvcComponent();
+}
+function renderHealthSvcChips(){
+  const wrap=$("healthSvcChips");
+  if(!wrap) return;
+  const comps=(HEALTH_MAINT&&HEALTH_MAINT.components)||[];
+  wrap.innerHTML=comps.map(c=>`<button type="button" class="maint-chip${c===HEALTH_SVC_COMPONENT?" active":""}" data-comp="${esc(c)}">${esc(c)}</button>`).join("");
+  wrap.querySelectorAll("[data-comp]").forEach(b=>{
+    b.addEventListener("click",()=>{
+      HEALTH_SVC_COMPONENT=b.dataset.comp;
+      $("healthSvcComponentOther").value="";
+      const known=MAINT_FREQ_MAP[HEALTH_SVC_COMPONENT];
+      if(known) $("healthSvcFrequency").value=known;
+      renderHealthSvcChips();
+      updateHealthNextDuePreview();
+      syncHealthSvcSaveEnabled();
+    });
+  });
+}
+function updateHealthNextDuePreview(){
+  const spec=MAINT_FREQ_SPEC[$("healthSvcFrequency").value];
+  const date=$("healthSvcDate").value;
+  const component=currentHealthSvcComponent();
+  if(!spec){
+    $("healthSvcNextDue").textContent="Not scheduled";
+    $("healthSvcNextHint").textContent="No reminder will be set for this component.";
+    return;
+  }
+  const next=spec.unit==="days"?addDaysClient(date,spec.amount):addMonthsClient(date,spec.amount);
+  $("healthSvcNextDue").textContent=next?fmtMaintDate(next):"—";
+  $("healthSvcNextHint").textContent=date?`Based on ${fmtMaintDate(date)} + ${spec.label}${component?` for ${component}`:""}.`:"";
+}
+function openHealthServiceForm(prefillComponent){
+  const wrap=$("healthServiceForm");
+  if(!wrap||HEALTH_PRINTER_ID==null) return;
+  wrap.style.display="";
+  $("healthSvcDate").value=new Date().toISOString().slice(0,10);
+  $("healthSvcComponentOther").value="";
+  HEALTH_SVC_COMPONENT=prefillComponent||"";
+  $("healthSvcFrequency").value=MAINT_FREQ_MAP[HEALTH_SVC_COMPONENT]||"monthly";
+  $("healthSvcCost").value="0.00";
+  $("healthSvcPart").value="";
+  $("healthSvcComment").value="";
+  $("healthSvcStatus").textContent="";
+  const p=FLEET.find(f=>f.id===HEALTH_PRINTER_ID);
+  $("healthSvcOffline").checked=!!(p&&p.state==="maintenance");
+  renderHealthSvcChips();
+  updateHealthNextDuePreview();
+  syncHealthSvcSaveEnabled();
+  HEALTH_SVC_HOURS_SEC=null;
+  $("healthSvcHours").textContent="loading…";
+  getJSON("/api/printer-hours?printer="+HEALTH_PRINTER_ID).then(d=>{
+    HEALTH_SVC_HOURS_SEC=d.totalSeconds!=null?d.totalSeconds:null;
+    $("healthSvcHours").textContent=HEALTH_SVC_HOURS_SEC!=null?fmtHours(HEALTH_SVC_HOURS_SEC):"unavailable";
+  }).catch(()=>{ $("healthSvcHours").textContent="unavailable"; });
+  wrap.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+function closeHealthServiceForm(){
+  const wrap=$("healthServiceForm");
+  if(wrap) wrap.style.display="none";
+}
+async function toggleHealthOffline(){
+  const chk=$("healthSvcOffline");
+  const st=$("healthSvcStatus");
+  const offline=chk.checked;
+  chk.disabled=true;
+  st.className="pstatus work"; st.textContent=offline?"Taking offline…":"Bringing online…";
+  try{
+    const r=await postJSON("/api/maintenance-mode",{printer:HEALTH_PRINTER_ID,offline});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent=d.maintenanceMode?"Printer taken offline":"Printer back online";
+    chk.checked=!!d.maintenanceMode;
+    loadFleet();
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; chk.checked=!offline; }
+  finally{ chk.disabled=false; }
+}
+async function saveHealthService(){
+  const st=$("healthSvcStatus");
+  const date=$("healthSvcDate").value;
+  if(!date){ st.className="pstatus err"; st.textContent="Pick a date"; return; }
+  const component=currentHealthSvcComponent();
+  if(!component){ st.className="pstatus err"; st.textContent="Pick or type a component"; return; }
+  const pid=HEALTH_PRINTER_ID;
+  const entry={
+    date, comment:$("healthSvcComment").value.trim(), part:$("healthSvcPart").value.trim(),
+    hours:HEALTH_SVC_HOURS_SEC!=null?fmtHours(HEALTH_SVC_HOURS_SEC):"—", totalSeconds:HEALTH_SVC_HOURS_SEC,
+    component, frequency:$("healthSvcFrequency").value,
+    cost:parseFloat($("healthSvcCost").value)||0
+  };
+  $("healthSvcSave").disabled=true;
+  st.className="pstatus work"; st.textContent="Saving…";
+  try{
+    const r=await postJSON("/api/maintenance",{printer:pid,entry});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent="Saved";
+    closeHealthServiceForm();
+    loadHealthData(); // full re-fetch so Overview/Needs Attention/Service History all reflect the new entry
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+  finally{ $("healthSvcSave").disabled=!currentHealthSvcComponent(); }
+}
+// "Timelapse" was the originally-assumed storage category, but Moonraker's
+// real /server/files/roots on a live U1 has no dedicated timelapse root
+// (only config/logs/gcodes/camera). Camera and timelapse both live under
+// the same "camera" root on the U1, so they stay one category, labeled
+// plainly "Camera."
+const HEALTH_STORAGE_CATS=[
+  { key:"gcodes", label:"G-code", color:"var(--storage-gcode)" },
+  { key:"logs", label:"Logs", color:"var(--storage-logs)" },
+  { key:"camera", label:"Camera", color:"var(--storage-camera)" }
+];
+function storageLegendRow(label,color,extra,valueText,title){
+  return `<div class="storage-legend-row"${title?` title="${esc(title)}"`:""}>`+
+    `<span class="storage-legend-dot" style="background:${color}"></span>`+
+    `<span class="storage-legend-label">${esc(label)}${extra||""}</span>`+
+    `<span class="storage-legend-value">${esc(valueText)}</span>`+
+  `</div>`;
+}
+// ---- Logs/Camera/G-code sync ----
+// Client-side cache of the last known status per printer+root, keyed
+// separately from HEALTH_DATA so it survives the full-body re-render a
+// completed sync itself triggers (to pick up any disk-usage change from
+// retention cleanup) without losing track of "still running."
+const HEALTH_SYNC_STATE={};
+const HEALTH_SYNC_TIMERS={};
+const SYNC_ROOT_LABEL={logs:"Logs",camera:"Camera",gcodes:"G-code"};
+function syncKey(printerId,root){ return printerId+"|"+root; }
+function syncRunning(st){ return st&&(st.phase==="listing"||st.phase==="downloading"||st.phase==="cleaning-up"); }
+// Progress fraction (0-100) for baking directly into the button's own fill
+// gradient (see syncBtn() in renderStorageCard) — same "the button itself
+// is the progress bar" idiom as the existing file-upload buttons
+// (setBtnFill in the print-queue code). null means "no fill" (idle/error).
+function syncProgressPct(st){
+  if(!st) return null;
+  if(st.phase==="listing") return 0;
+  if(st.phase==="downloading") return st.total?Math.round((st.completed||0)/st.total*100):0;
+  if(st.phase==="cleaning-up") return 100;
+  return null;
+}
+function syncStatusText(root,st){
+  if(!st) return "";
+  const label=SYNC_ROOT_LABEL[root]||root;
+  if(st.phase==="listing") return `${label}: listing files…`;
+  if(st.phase==="downloading") return `${label}: syncing ${st.completed} of ${st.total}${st.currentFile?" · "+st.currentFile:""}`;
+  if(st.phase==="cleaning-up") return `${label}: cleaning up printer storage…`;
+  if(st.phase==="error") return `${label}: sync failed — ${st.lastError||"unknown error"}`;
+  if(st.phase==="idle"&&st.lastSyncAt) return `${label}: ${st.downloaded} downloaded, ${st.skipped} skipped${st.failed?`, ${st.failed} failed`:""}${st.deletedFromSource?`, ${st.deletedFromSource} removed from printer`:""}`;
+  return "";
+}
+async function startSync(printerId,root){
+  const key=syncKey(printerId,root);
+  try{
+    const r=await postJSON("/api/sync?printer="+printerId+"&root="+root,{});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    HEALTH_SYNC_STATE[key]={phase:"listing"};
+    if(HEALTH_PRINTER_ID===printerId) renderHealthBody();
+    pollSyncStatus(printerId,root);
+  }catch(e){
+    HEALTH_SYNC_STATE[key]={phase:"error",lastError:e.message};
+    if(HEALTH_PRINTER_ID===printerId) renderHealthBody();
+  }
+}
+async function pollSyncStatus(printerId,root){
+  const key=syncKey(printerId,root);
+  clearTimeout(HEALTH_SYNC_TIMERS[key]);
+  let st;
+  try{ st=await getJSON("/api/sync-status?printer="+printerId+"&root="+root); }
+  catch{ HEALTH_SYNC_TIMERS[key]=setTimeout(()=>pollSyncStatus(printerId,root),1500); return; }
+  HEALTH_SYNC_STATE[key]=st;
+  if(syncRunning(st)){
+    if(HEALTH_PRINTER_ID===printerId) renderHealthBody();
+    HEALTH_SYNC_TIMERS[key]=setTimeout(()=>pollSyncStatus(printerId,root),1500);
+  } else if(HEALTH_PRINTER_ID===printerId){
+    loadHealthData(); // full refresh — picks up any disk-usage change from retention cleanup
+  }
+}
+function renderStorageCard(d,printerId){
+  const s=d.storage;
+  if(!s||!s.available) return `<div class="health-card"><div class="health-card-hdr">Storage</div><p class="settings-help">Storage data unavailable${s&&s.reason?": "+esc(s.reason):""}.</p></div>`;
+  const du=s.diskUsage, total=du.total||1;
+  const critical=du.free<du.total*DISK_CRITICAL_PCT||du.free<DISK_CRITICAL_BYTES;
+  const segs=HEALTH_STORAGE_CATS.map(c=>({...c, bytes:(s.categories[c.key]&&s.categories[c.key].bytes)||0}));
+  // Only the three named categories get a segment — the rest of the track
+  // (everything else on disk, including free space) is left unfilled and
+  // unlabeled on purpose, per spec: no "Other," no "Free" row here (Free
+  // space already has its own metric card at the top of the page).
+  const barHtml=segs.map(c=>`<span class="health-storage-seg" style="width:${Math.max(0,c.bytes/total*100).toFixed(2)}%;background:${c.color}" title="${esc(c.label)}: ${fmtBytes(c.bytes)}"></span>`).join("");
+  const legendHtml=segs.map(c=>{
+    if(c.key!=="gcodes"||!s.categories.gcodes) return storageLegendRow(c.label,c.color,"",fmtBytes(c.bytes));
+    const gc=s.categories.gcodes;
+    let extra=` · ${gc.fileCount} files`, title=null;
+    if(gc.unusedCount!=null){
+      extra+=` (Unused ${gc.unusedCount})`;
+      title=`Not printed in the last ${gc.unusedThresholdDays} day${gc.unusedThresholdDays===1?"":"s"} — per the G-code sync retention setting.`;
+    }
+    return storageLegendRow(c.label,c.color,extra,fmtBytes(c.bytes),title);
+  }).join("");
+  const syncFolders=d.syncFolders||{};
+  const syncStates={logs:HEALTH_SYNC_STATE[syncKey(printerId,"logs")], camera:HEALTH_SYNC_STATE[syncKey(printerId,"camera")], gcodes:HEALTH_SYNC_STATE[syncKey(printerId,"gcodes")]};
+  // The button itself is the progress bar — same idiom as the existing
+  // file-upload buttons elsewhere in the app (a hard-edged two-tone
+  // gradient baked into the inline style, not a separate bar element).
+  // Baked into the rendered HTML from HEALTH_SYNC_STATE on every pass
+  // (rather than an imperative setBtnFill() call) because renderHealthBody()
+  // fully rebuilds this markup on every poll tick, which would otherwise
+  // orphan any direct DOM reference to the button.
+  const syncBtn=(root)=>{
+    const st=syncStates[root], running=syncRunning(st), configured=syncFolders[root];
+    const disabled=!d.syncSupported||!configured||running;
+    const label=SYNC_ROOT_LABEL[root];
+    const title=!d.syncSupported?"This printer's connector doesn't support file sync."
+      :!configured?`Configure a ${label} folder in Settings first.`
+      :running?"A sync is already running."
+      :"";
+    const text=running?`Syncing ${label.toLowerCase()}…`:`Sync ${label.toLowerCase()}`;
+    const pct=syncProgressPct(st);
+    const fill=pct!=null?`background:linear-gradient(to right, rgba(167,139,250,0.55) ${pct}%, rgba(167,139,250,0.13) ${pct}%);`:"";
+    return `<button type="button" class="btn ghost" style="${fill}" ${disabled?"disabled":""} ${title?`title="${esc(title)}"`:""} data-sync="${root}" data-syncprinter="${printerId}">${esc(text)}</button>`;
+  };
+  const statusText=["logs","camera","gcodes"].map(r=>syncStatusText(r,syncStates[r])).filter(Boolean).join(" · ");
+  return `<div class="health-card">
+    <div class="health-card-hdr">Storage</div>
+    <p class="health-card-desc">Disk usage by category. Uploads and prints can fail confusingly once free space runs low.</p>
+    ${critical?`<div class="health-critical-banner">Free space is critically low — uploads can fail confusingly once the disk fills.</div>`:""}
+    <div class="health-storage-bar">${barHtml}</div>
+    ${legendHtml}
+    <div class="health-diag-vals health-storage-totals">total ${fmtBytes(du.total)} · used ${fmtBytes(du.used)} · free ${fmtBytes(du.free)}</div>
+    <div class="health-storage-actions">
+      ${syncBtn("logs")}
+      ${syncBtn("camera")}
+      ${syncBtn("gcodes")}
+    </div>
+    ${statusText?`<div class="settings-help" style="margin-top:8px">${esc(statusText)}</div>`:""}
+  </div>`;
+}
+function renderHealthBody(){
+  const body=$("healthBody");
+  if(!body) return;
+  if(HEALTH_PRINTER_ID==null){ body.innerHTML=`<div class="settings-help">No printer selected.</div>`; closeHealthServiceForm(); return; }
+  const d=HEALTH_DATA;
+  const p=FLEET.find(f=>f.id===HEALTH_PRINTER_ID);
+  const name=p?p.name:"Printer";
+  if(!d){ body.innerHTML=`<div class="settings-help">Loading ${esc(name)}'s health data…</div>`; closeHealthServiceForm(); return; }
+  if(d.skipped){
+    body.innerHTML=`<div class="health-unsupported"><h3>${esc(name)}</h3><p>Health data not available for this connector.</p>${d.reason?`<p class="settings-help">${esc(d.reason)}</p>`:""}</div>`;
+    closeHealthServiceForm();
+    return;
+  }
+  const hist=d.history&&d.history.available?d.history:null;
+  const printTime=hist?fmtDuration(hist.totalPrintTime):"—";
+  const recent=hist&&hist.recent;
+  const recentPctTxt=recent&&recent.sampleSize?Math.round(recent.completed/recent.sampleSize*100)+"%":"—";
+  const recentSub=recent&&recent.sampleSize?`${recent.completed} / ${recent.sampleSize} jobs`:"";
+  const storage=d.storage&&d.storage.available?d.storage:null;
+  const freeTxt=storage?fmtBytes(storage.diskUsage.free):"—";
+  const metricsHtml=`<div class="health-metrics">`+
+    `<div class="health-metric"><span class="health-metric-label">Print time</span><span class="health-metric-val">${printTime}</span></div>`+
+    `<div class="health-metric"><span class="health-metric-label">Recent success</span><span class="health-metric-val">${recentPctTxt}</span>${recentSub?`<span class="health-metric-sub">${recentSub}</span>`:""}</div>`+
+    `<div class="health-metric"><span class="health-metric-label">Free space</span><span class="health-metric-val">${freeTxt}</span></div>`+
+    `<div class="health-metric"><span class="health-metric-label">Last service</span><span class="health-metric-val">${esc(lastServiceText(HEALTH_MAINT))}</span></div>`+
+  `</div>`;
+  const cards=[renderAttentionList(d),renderToolheadsCard(p),renderHeatersCard(d),renderControllerCard(d),renderSystemCard(d),renderFansCard(d),renderStorageCard(d,HEALTH_PRINTER_ID),renderFaultsCard(d),renderServiceHistoryCard(HEALTH_MAINT)].filter(Boolean).join("");
+  body.innerHTML=`<h3 class="health-printer-name">${esc(name)}</h3>`+metricsHtml+`<div class="health-grid">${cards}</div>`;
+  body.querySelectorAll("[data-sync]").forEach(b=>{
+    b.addEventListener("click",()=>startSync(parseInt(b.dataset.syncprinter,10),b.dataset.sync));
+  });
+  body.querySelectorAll("[data-logfix]").forEach(b=>{
+    b.addEventListener("click",()=>openHealthServiceForm(b.dataset.logfix));
+  });
+  const addBtn=$("healthAddService");
+  if(addBtn) addBtn.addEventListener("click",()=>openHealthServiceForm());
+  const fansExpand=$("healthFansExpand");
+  if(fansExpand) fansExpand.addEventListener("click",()=>{
+    $("healthFansDetail").style.display="";
+    $("healthFansSummary").style.display="none";
+  });
+  closeHealthServiceForm(); // switching printers/refreshing always closes any open form — never leave it pointed at stale printer state
 }
 async function refreshQueueDashboard(){
   try{
@@ -1522,11 +2357,7 @@ function printerQueueCategory(p){
 function queueLocalDateKey(ts){ const d=new Date(ts); return d.getFullYear()+"-"+d.getMonth()+"-"+d.getDate(); }
 function isToday(ts){ return ts!=null && queueLocalDateKey(ts)===queueLocalDateKey(Date.now()); }
 function fmtElapsedSince(ts){
-  const secs=Math.max(0, Math.round((Date.now()-ts)/1000));
-  const h=Math.floor(secs/3600), m=Math.floor((secs%3600)/60);
-  if(h>0) return h+"h "+m+"m";
-  if(m>0) return m+"m";
-  return secs+"s";
+  return fmtDuration((Date.now()-ts)/1000);
 }
 
 function computeQueueStats(){
@@ -2193,8 +3024,54 @@ function parseTimeToHours(s){
   const sc=s.match(/(\d+)\s*s/i); if(sc) h+=parseInt(sc[1])/3600;
   return h;
 }
-function fmtClock(s){if(s==null)return'—';s=Math.round(s);const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return(h?h+'h ':'')+String(m).padStart(2,'0')+'m '+String(sec).padStart(2,'0')+'s';}
-function fmtRemaining(elapsed,progress){if(!elapsed||!progress||progress<=0)return'—';const total=elapsed/progress;const rem=Math.max(0,total-elapsed);return fmtClock(rem);}
+// Shared duration formatter — elapsed/remaining/job-duration displays all
+// route through this. Seconds are dropped once the total reaches an hour
+// (false precision on a long estimate) but kept below that, since they
+// matter on a short print.
+function fmtDuration(s){
+  if(s==null)return'—';
+  s=Math.max(0,Math.round(s));
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
+  if(h)return h+'h '+String(m).padStart(2,'0')+'m';
+  if(m)return m+'m '+String(sec).padStart(2,'0')+'s';
+  return sec+'s';
+}
+function fmtRemaining(elapsed,progress){if(!elapsed||!progress||progress<=0)return'—';const total=elapsed/progress;const rem=Math.max(0,total-elapsed);return fmtDuration(rem);}
+
+// Klipper's current_layer only advances when a NEW layer's gcode starts, so
+// the final layer of a print never triggers a "next layer" bump — it stays
+// one behind total_layer forever, even once the print is 100% done. Once we
+// know the print is complete every layer is done by definition, so show
+// total/total instead of the firmware's permanently-stuck N-1/total.
+function layerDisplay(p){
+  if(!p.layer) return null;
+  return p.state==='complete' ? { current:p.layer.total, total:p.layer.total } : p.layer;
+}
+function fmtFinishedTime(ts){ return ts?new Date(ts).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):'—'; }
+
+// Hotend/bed mini-bar: fill represents progress from a fixed ambient
+// baseline to target, so sitting exactly at target reads as full (the old
+// formula measured against target+N and never actually reached 100%, even
+// holding steady at target). No target set means nothing to heat toward —
+// the bar stays empty rather than rendering in a color.
+const HEAT_BAR_AMBIENT_C=20;
+// Continuous blue -> yellow -> red across the 0-100% span, built from the
+// app's existing tokens (--busy blue, --signal amber/yellow, --bad red)
+// rather than new hardcoded hex — color-mix() interpolates between whichever
+// pair straddles the current percentage.
+function heatBarColor(pct){
+  if(pct<=50) return `color-mix(in srgb, var(--signal) ${(pct/50*100).toFixed(0)}%, var(--busy))`;
+  return `color-mix(in srgb, var(--bad) ${((pct-50)/50*100).toFixed(0)}%, var(--signal))`;
+}
+function heatBarInfo(actual,target){
+  if(!target||target<=0) return { pct:0, bg:null, targetTxt:'—' };
+  const span=Math.max(target-HEAT_BAR_AMBIENT_C,1);
+  const pct=Math.min(100,Math.max(0,((actual-HEAT_BAR_AMBIENT_C)/span)*100));
+  return { pct, bg:heatBarColor(pct), targetTxt: target+'°' };
+}
+function heatBarFillStyle(bar){
+  return `width:${bar.pct}%`+(bar.bg?`;background:${bar.bg};box-shadow:0 0 6px ${bar.bg}`:'');
+}
 
 function renderSkeletonFleet(){
   if(!PRINTERS_CFG||!PRINTERS_CFG.length) return;
@@ -2247,7 +3124,14 @@ async function loadFleet(){
     if(body!==FLEET_PREV_BODY){ // unchanged payload → the DOM already shows this state
       FLEET_PREV_BODY=body;
       FLEET=JSON.parse(body);
-      renderFleet();
+      // The one call site that opts into incremental rendering — see
+      // reconcileFleetCards()/cardSignature(). Every other renderFleet()
+      // call site (sort/filter/view-mode/etc. changes) keeps full-rebuild
+      // behavior. loadFleet() itself has many callers beyond the poll timer
+      // (manual refresh, post-action refreshes, tab-visibility-regain) —
+      // all of them represent "refetch from server and reconcile," so all
+      // of them benefit from diffing here, not just the timer tick.
+      renderFleet({ incremental: true });
       updateAllPrinterRowStatuses();
     }
   }
@@ -2349,7 +3233,16 @@ function spoolSvg(color,active,uid){
   <path d="M6.89 19.22 A25.5 25.5 0 0 1 29.11 4.52" fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="3" stroke-linecap="round"/>
 </svg>`;
 }
-function afcLanesHtml(heads,activeExt,printerId,canUnload){
+// An empty head is a hollow dashed ring, not a filled spool in a muted color
+// — the shape itself should read "nothing here" at a glance, without having
+// to compare colors against the loaded slots next to it.
+function emptySpoolSvg(){
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 60 60">
+  <circle cx="30" cy="30" r="27" fill="none" stroke="var(--ink-faint)" stroke-width="2" stroke-dasharray="5 5" opacity="0.5"/>
+  <circle cx="30" cy="30" r="9" fill="none" stroke="var(--ink-faint)" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.4"/>
+</svg>`;
+}
+function afcLanesHtml(heads,activeExt,printerId,canUnload,finished){
   const cards=(heads||[]).map((h,i)=>{
     const loaded=h&&h.loaded;
     const active=loaded&&activeExt===i;
@@ -2364,19 +3257,21 @@ function afcLanesHtml(heads,activeExt,printerId,canUnload){
     // wired to anything actionable; showing it anyway would just surface a
     // "does not support filament unload" error for something that's meant to
     // be read-only status.
-    const spoolInner=spoolSvg(color,active,uid);
-    // No unload support (e.g. Creality CFS, status-only): a plain, full-
-    // opacity indicator with no click affordance — NOT `.inert-action`,
-    // which dims + shows a "not-allowed" cursor for a temporarily blocked
-    // permission, the wrong signal for something that was never clickable.
-    const spool=canUnload
-      ? `<span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="Unload ${headLabel(i)}">${spoolInner}</span>`
+    const spoolInner=loaded?spoolSvg(color,active,uid):emptySpoolSvg();
+    // No unload support (e.g. Creality CFS, status-only), and an empty slot
+    // either way: a plain, full-opacity indicator with no click affordance —
+    // NOT `.inert-action`, which dims + shows a "not-allowed" cursor for a
+    // temporarily blocked permission, the wrong signal for something that
+    // was never clickable. An empty head has nothing to act on regardless of
+    // permission — the dialog never opens for it at all.
+    const spool=(canUnload&&loaded)
+      ? `<span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="${esc(headLabel(i))}">${spoolInner}</span>`
       : `<span title="${headLabel(i)}">${spoolInner}</span>`;
-    return `<div class="afc-lane-card ${active?'active':'idle'}" ${cardStyle}>
+    return `<div class="afc-lane-card ${active?'active':loaded?'idle':'empty'}" ${cardStyle}>
       <div class="afc-lane-hdr" ${hdrStyle}>T${i+1}${material&&material!=='—'?' '+esc(material):''}</div>
       <div class="afc-spool-area">
         ${spool}
-        ${active?`<div class="afc-active-label" style="color:${color}cc">ACTIVE</div>`:''}
+        ${active?`<div class="afc-active-label" style="color:${color}cc">${finished?'LAST USED':'ACTIVE'}</div>`:''}
         ${loaded&&!active?`<div class="afc-active-label" style="color:var(--ink-faint)">LOADED</div>`:''}
       </div>
     </div>`;
@@ -2420,53 +3315,57 @@ function thumbRetry(img){
 // /orca/<printer> mode: narrow any printer list down to just that one printer.
 const urlFilterFleet = arr => URL_PRINTER_FILTER ? arr.filter(p=>(p.name||'').trim().toLowerCase()===URL_PRINTER_FILTER) : arr;
 
-function renderFleet(){
-  const need=neededColors();
-  const wrap=$("fleet"); wrap.innerHTML="";
-  let online=0;
-  const q=($("fleetSearch")||{value:""}).value.trim().toLowerCase();
-  const all=sortedFleet();
-  // Reachable-but-in-maintenance shouldn't read as "online" here — it can't
-  // take a job right now, which is what this count is meant to signal.
-  all.forEach(p=>{ if(p.online&&p.state!=="maintenance") online++; });
-  const pctMatch=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
-  const isColor=q in COLOR_FAMILIES;
-  const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
-    : !q ? all : all.filter(p=>{
-    if(pctMatch){
-      if(!p.online||p.progress==null) return false;
-      const pct=p.progress*100, val=parseFloat(pctMatch[2]), op=pctMatch[1];
-      return op==='>'?pct>val:op==='>='?pct>=val:op==='<'?pct<val:pct<=val;
-    }
-    if(isColor) return matchesColorFamily(p.heads, q);
-    const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
-    return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
+// ---- Fleet card cache + diffing (see the reviewed plan: per-card diffing
+// for the fleet grid — C:\Users\ebz\.claude\plans\harmonic-mapping-treehouse.md
+// at time of writing) ----
+// printer id -> { sig, el }. Always represents the currently-mounted card
+// set, regardless of whether the last pass was incremental or a forced full
+// rebuild — reconcileFleetCards() refreshes an entry for every card it
+// touches either way, so an incremental pass always starts from a state
+// that matches what's actually in the DOM.
+const CARD_CACHE = new Map();
+// cardSignature() is a CORRECTNESS CONTRACT with buildCardHtml(), not an
+// isolated optimization — read both together. Every dynamic field
+// buildCardHtml() reads from `p` to produce visible output MUST also be
+// represented here. A field present in the template but missing from this
+// signature doesn't fail loudly: it produces silently stale UI (the card
+// just never updates for that field), which is a worse failure mode than a
+// crash, since nothing surfaces it short of a human noticing a card didn't
+// update. If you add a field to buildCardHtml(), add it here too.
+//
+// The DOM rebuild buildCardHtml() performs is the expensive operation this
+// whole mechanism exists to skip — comparing a signature is not a
+// meaningful cost at any fleet size this app will realistically see, so
+// this deliberately favors a plain, obviously-correct JSON.stringify of the
+// relevant fields over hand-flattening primitives for speed.
+//
+// Two fields are deliberately excluded, both because calling their real
+// source function here "just to check" would corrupt state:
+//   - thumbToken(p, stem) (below) mutates the module-level THUMB_TOKENS map
+//     on every call. Its own newJob check depends only on `stem` and
+//     `state`, both already included below — signature-equality on those
+//     implies thumbToken() would return the same token anyway. It's only
+//     ever actually called from inside buildCardHtml(), same as before.
+//   - The MAPSEL self-heal write inside buildCardHtml()'s mapHtml block is a
+//     one-time default-fill side effect, not part of what a signature
+//     should represent.
+function cardSignature(p){
+  const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
+  const stem=queuedReady?queuedReady.name:(p.filename||"");
+  return JSON.stringify({
+    online:p.online, state:p.state, name:p.name, brand:p.brand, url:p.url,
+    filename:p.filename, progress:p.progress, elapsed:p.elapsed,
+    filamentUsed:p.filamentUsed, completedAt:p.completedAt,
+    errorCode:p.errorCode, message:p.message, plate:p.plate,
+    activeExt:p.activeExt, forceDefaults:p.forceDefaults,
+    heads:p.heads, capabilities:p.capabilities, tags:p.tags,
+    queuedFile:p.queuedFile, layer:p.layer, stem
   });
-  // Status tabs + tag filter are shared by camera/list view only — tab
-  // counts/tag options are computed from `fleet` (respects the search box
-  // above) before this stage narrows further, so switching views never
-  // leaves a stale filter silently hiding printers in regular/compact.
-  const camRefreshMs=(parseInt(($("setCameraRefresh")||{value:""}).value,10)||6)*1000;
-  let camFleet=fleet;
-  if(gridToolbarActive()){
-    renderCamToolbar(fleet);
-    camFleet=fleet.filter(p=>{
-      if(CAM_TAB!=='all' && camBucket(p)!==CAM_TAB) return false;
-      if(CAM_TAG_FILTER && !(p.tags||[]).includes(CAM_TAG_FILTER)) return false;
-      return true;
-    });
-  }
-  if(VIEW_MODE==='list'){
-    renderFleetListRows(camFleet, wrap, camRefreshMs);
-  } else {
-  // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
-  // /api/config, which is admin-only server-side — gate on isAdmin(), not
-  // canAct(), or a Regular user's drag would silently 403 and revert with
-  // no visible feedback (Settings, where the error would surface, is hidden
-  // from them entirely).
-  const camFiltered=gridToolbarActive()&&(CAM_TAB!=='all'||!!CAM_TAG_FILTER);
-  const dragEnabled=SORT_MODE==='none'&&!q&&!camFiltered&&isAdmin();
-  camFleet.forEach(p=>{
+}
+// Builds one printer's card element. `need` (neededColors()) and
+// `dragEnabled` are per-render-pass context, not per-card state — see
+// reconcileFleetCards(), which computes them once and passes them down.
+function buildCardHtml(p, need, dragEnabled){
     const card=document.createElement("div");
     card.className="pcard"+(p.online?"":" offline");
     card.dataset.pid=p.id;
@@ -2522,7 +3421,7 @@ function renderFleet(){
       }
     }
     card.innerHTML=`
-      <div class="top">${VIEW_MODE==='camera'?`<label class="cam-select"><input type="checkbox" class="cam-chk" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Web Interface"><img src="/fluidd-pill.svg" alt="Web Interface"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="Eject"><img src="/eject-pill.svg" alt="Eject"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="Open Web Interface"><img src="/fluidd-pill.svg" alt="Web Interface"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?' draggable="true" title="Drag to reorder"':''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
       ${VIEW_MODE==='camera'?(!p.online
           ? `<div class="cam-shot-placeholder"><span>Offline</span></div>`
@@ -2543,9 +3442,9 @@ function renderFleet(){
       ${p.online&&!(p.errorCode||p.message)?(()=>{
         const extA=p.hotend?Math.round(p.hotend.temp):0, extT=p.hotend?Math.round(p.hotend.target):0;
         const bedA=p.bed?Math.round(p.bed.temp):0, bedT=p.bed?Math.round(p.bed.target):0;
-        const cold=extT===0&&bedT===0;
-        const extPct=Math.min(100,Math.max(0,(extA/Math.max(extT+10,1))*100));
-        const bedPct=Math.min(100,Math.max(0,(bedA/Math.max(bedT+5,1))*100));
+        const layer=layerDisplay(p);
+        const hotendBar=heatBarInfo(extA,extT);
+        const bedBar=heatBarInfo(bedA,bedT);
         // The real filename, unmodified — Moonraker's own thumbnail-path
         // convention (stripping the extension for its "<stem>-300x300.png"
         // cache) is a Klipper-specific detail that belongs inside that
@@ -2561,9 +3460,9 @@ function renderFleet(){
           ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" tabindex="0" role="button" title="Click to enlarge"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
-          `<div class="stats-cell"><div class="stats-cell-label">HOTEND</div><div class="stats-cell-val">${extA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':extT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'hot-fill'}" style="width:${extPct}%"></div></div></div>`+
-          `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="Click to set bed temp"><div class="stats-cell-label">BED</div><div class="stats-cell-val">${bedA}°<span class="stats-sep">/</span><span class="stats-inline-target">${cold?'—':bedT+'°'}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill ${cold?'cool-fill':'warm-fill'}" style="width:${bedPct}%"></div></div></div>`+
-          `<div class="stats-cell"><div class="stats-cell-label">LAYER</div><div class="stats-cell-val">${p.layer?p.layer.current:'—'}<span class="stats-inline-target">${p.layer?'/'+p.layer.total:''}</span></div></div>`+
+          `<div class="stats-cell"><div class="stats-cell-label">HOTEND</div><div class="stats-cell-val">${extA}°<span class="stats-sep">/</span><span class="stats-inline-target">${hotendBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" style="${heatBarFillStyle(hotendBar)}"></div></div></div>`+
+          `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="Click to set bed temp"><div class="stats-cell-label">BED</div><div class="stats-cell-val">${bedA}°<span class="stats-sep">/</span><span class="stats-inline-target">${bedBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" style="${heatBarFillStyle(bedBar)}"></div></div></div>`+
+          `<div class="stats-cell"><div class="stats-cell-label">LAYER</div><div class="stats-cell-val">${layer?layer.current:'—'}<span class="stats-inline-target">${layer?'/'+layer.total:''}</span></div></div>`+
           thumbCell+
           `</div>`;
       })():""}
@@ -2571,8 +3470,7 @@ function renderFleet(){
         const pct=(p.progress*100).toFixed(1);
         const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
         const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
-        const fillCls=pctCls, dotCls=p.state==='paused'?'amber':'';
-        const showDot=p.state!=='complete';
+        const fillCls=pctCls;
         const camView=VIEW_MODE==='camera';
         // Camera view has no room for the temps/thumbnail stats-bar (hidden
         // entirely — see body.camview CSS) and no use for filament meters
@@ -2580,7 +3478,8 @@ function renderFleet(){
         // layer progress is the one stat from that row worth keeping, and
         // the thumbnail moves up alongside the filename instead.
         const filM=p.filamentUsed!=null?(p.filamentUsed/1000).toFixed(1)+'m':'—';
-        const layerTxt=p.layer?p.layer.current+'/'+p.layer.total:'—';
+        const layer=layerDisplay(p);
+        const layerTxt=layer?layer.current+'/'+layer.total:'—';
         // A file loaded/queued but not yet started (see statusColorText's
         // "Loaded" state) takes over this slot instead of the printer's own
         // last-printed filename — it's the more relevant "what's up next",
@@ -2594,7 +3493,7 @@ function renderFleet(){
         // for camera view, where the thumbnail spans both the filename row
         // and this row via CSS grid (see .cam-prog-file in style.css).
         const progRowHtml=`<div class="prog-row"><span class="prog-pct ${pctCls}">${pct}%</span>`+
-          `<div class="prog-track ${trackCls}"><div class="prog-fill ${fillCls}" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div>${showDot?`<div class="prog-dot ${dotCls}" style="left:${pct}%"></div>`:''}</div></div>`;
+          `<div class="prog-track ${trackCls}"><div class="prog-fill ${fillCls}" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div></div></div>`;
         // The progress bar itself always renders, error or not (unchanged
         // from before this camera-view work) — only the filename/thumbnail
         // part is hidden on error, in favor of the klipper-err-panel above
@@ -2612,14 +3511,16 @@ function renderFleet(){
         return `<div class="progress-section">`+
           fileSection+
           (p.errorCode||p.message?'':`<div class="prog-times">`+
-          `<div class="prog-time-cell"><span class="prog-time-label">Elapsed</span><span class="prog-time-val">${fmtClock(p.elapsed)}</span></div>`+
+          `<div class="prog-time-cell"><span class="prog-time-label">${p.state==='complete'?'Total time':'Elapsed'}</span><span class="prog-time-val">${fmtDuration(p.elapsed)}</span></div>`+
           `<div class="prog-time-sep"></div>`+
           `<div class="prog-time-cell center"><span class="prog-time-label">${camView?'Layer':'Filament'}</span><span class="prog-time-val">${camView?layerTxt:filM}</span></div>`+
           `<div class="prog-time-sep"></div>`+
-          `<div class="prog-time-cell end"><span class="prog-time-label">Remaining</span><span class="prog-time-val">${fmtRemaining(p.elapsed,p.progress)}</span></div>`+
+          (p.state==='complete'
+            ? `<div class="prog-time-cell end"><span class="prog-time-label">Finished</span><span class="prog-time-val">${fmtFinishedTime(p.completedAt)}</span></div>`
+            : `<div class="prog-time-cell end"><span class="prog-time-label">Remaining</span><span class="prog-time-val">${fmtRemaining(p.elapsed,p.progress)}</span></div>`)+
           `</div>`)+`</div>`;
       })():""}
-      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament):''}
+      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'):''}
       ${mapHtml}
       <div class="foot${busy?'':' foot-idle'}">
         ${busy
@@ -2632,82 +3533,101 @@ function renderFleet(){
           : `<button class="btn-chip" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?"Printer is in maintenance mode":"Upload to printer"}"><img src="/upload-file.svg" alt=""><span>Upload</span></button>`
             + `<button class="btn-chip" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?"Printer is in maintenance mode":SELECTED?"Print the selected file":"Pick a file already on the printer"}"><img src="/print-icon.svg" alt=""><span>Print</span></button>`
             + `<button class="btn-chip" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/preheat-icon.svg" alt=""><span>Preheat</span></button>`
+            + (p.state==='complete'&&p.filename?`<button class="btn-chip" ${canAct()?"":"disabled"} data-reprint="${p.id}" title="Reprint ${esc(p.filename)}"><img src="/reprint-icon.svg" alt=""><span>Reprint</span></button>`:"")
         }
       </div>
       <div class="pstatus" id="pst-${p.id}"></div>`;
-    if(VIEW_MODE==='camera' && p.online && p.capabilities?.camera){
-      const slot=card.querySelector('.cam-shot-slot[data-camslot="'+p.id+'"]');
+    return card;
+}
+// Replaces the old wrap.innerHTML=""+forEach full rebuild for the card-grid
+// path. When `incremental` is false (every renderFleet() call except the
+// poll/refresh path — see renderFleet() below), the caller has already
+// cleared `wrap` and CARD_CACHE, so every card takes the "rebuild" branch
+// below and behavior is identical to the old code. When `incremental` is
+// true, a card whose cardSignature() matches its cached entry is reused
+// untouched (no innerHTML write, no listener work — delegation in
+// wireFleetCardEvents() means reused nodes don't need rebinding either);
+// changed/new cards rebuild. Every card is appended unconditionally for
+// ordering — appendChild on a node already in the right position is a
+// cheap no-op, only actually moving nodes that changed rank (see
+// wireFleetDrag's own use of the same "read order back from the DOM"
+// pattern at drop time, which this keeps compatible with).
+function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremental){
+  const need=neededColors();
+  const seen=new Set();
+  camFleet.forEach(p=>{
+    seen.add(p.id);
+    const sig=cardSignature(p);
+    const cached=CARD_CACHE.get(p.id);
+    let el, rebuilt=true;
+    if(incremental && cached && cached.sig===sig){ el=cached.el; rebuilt=false; }
+    else { el=buildCardHtml(p, need, dragEnabled); CARD_CACHE.set(p.id, { sig, el }); }
+    if(rebuilt && VIEW_MODE==='camera' && p.online && p.capabilities?.camera){
+      const slot=el.querySelector('.cam-shot-slot[data-camslot="'+p.id+'"]');
       if(slot) mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
     }
-    wrap.appendChild(card);
+    wrap.appendChild(el);
   });
+  for(const [id, entry] of [...CARD_CACHE]){
+    if(!seen.has(id)){ entry.el.remove(); CARD_CACHE.delete(id); }
+  }
+}
+// `incremental` is only ever true from loadFleet()'s own render call — every
+// other call site (view mode change, sort change, search keystroke, camera
+// tab/tag filter, file selection change, camera retry click, login/role
+// refresh, initial load, list-view sort) calls renderFleet() with no
+// arguments and gets today's full-rebuild behavior, unchanged.
+function renderFleet({incremental}={}){
+  const wrap=$("fleet");
+  let online=0;
+  const q=($("fleetSearch")||{value:""}).value.trim().toLowerCase();
+  const all=sortedFleet();
+  // Reachable-but-in-maintenance shouldn't read as "online" here — it can't
+  // take a job right now, which is what this count is meant to signal.
+  all.forEach(p=>{ if(p.online&&p.state!=="maintenance") online++; });
+  const pctMatch=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
+  const isColor=q in COLOR_FAMILIES;
+  const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
+    : !q ? all : all.filter(p=>{
+    if(pctMatch){
+      if(!p.online||p.progress==null) return false;
+      const pct=p.progress*100, val=parseFloat(pctMatch[2]), op=pctMatch[1];
+      return op==='>'?pct>val:op==='>='?pct>=val:op==='<'?pct<val:pct<=val;
+    }
+    if(isColor) return matchesColorFamily(p.heads, q);
+    const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
+    return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
+  });
+  // Status tabs + tag filter are shared by camera/list view only — tab
+  // counts/tag options are computed from `fleet` (respects the search box
+  // above) before this stage narrows further, so switching views never
+  // leaves a stale filter silently hiding printers in regular/compact.
+  const camRefreshMs=(parseInt(($("setCameraRefresh")||{value:""}).value,10)||6)*1000;
+  let camFleet=fleet;
+  if(gridToolbarActive()){
+    renderCamToolbar(fleet);
+    camFleet=fleet.filter(p=>{
+      if(CAM_TAB!=='all' && camBucket(p)!==CAM_TAB) return false;
+      if(CAM_TAG_FILTER && !(p.tags||[]).includes(CAM_TAG_FILTER)) return false;
+      return true;
+    });
+  }
+  if(VIEW_MODE==='list'){
+    wrap.innerHTML=""; CARD_CACHE.clear();
+    renderFleetListRows(camFleet, wrap, camRefreshMs);
+  } else {
+  // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
+  // /api/config, which is admin-only server-side — gate on isAdmin(), not
+  // canAct(), or a Regular user's drag would silently 403 and revert with
+  // no visible feedback (Settings, where the error would surface, is hidden
+  // from them entirely).
+  const camFiltered=gridToolbarActive()&&(CAM_TAB!=='all'||!!CAM_TAG_FILTER);
+  const dragEnabled=SORT_MODE==='none'&&!q&&!camFiltered&&isAdmin();
+  if(!incremental){ wrap.innerHTML=""; CARD_CACHE.clear(); }
+  reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, !!incremental);
   }
   $("fleetcount").textContent=online+"/"+FLEET.length+" online";
-  wrap.querySelectorAll("button[data-id]").forEach(b=>{
-    b.addEventListener("click",()=>{
-      const id=parseInt(b.dataset.id,10), start=b.dataset.start==="1";
-      const p=FLEET.find(f=>f.id===id)||{};
-      const qf=p.queuedFile;
-      // Print already has a file loaded/queued on the printer itself (see
-      // queuedFileBannerHtml) — print THAT rather than uploading whatever
-      // happens to be selected in SnapCon's own file manager, which would
-      // otherwise silently replace it.
-      if(start&&qf&&qf.status==='ready'){
-        if(p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)) openQuickPrintModal(id,'queued',qf.name);
-        else printQueuedFile(id, qf.name);
-        return;
-      }
-      // Print with no file selected in SnapCon: offer the printer's own files.
-      if(start&&!SELECTED){ openPrinterFiles(id); return; }
-      if(start&&p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)){ openQuickPrintModal(id,'push'); return; }
-      pushTo(id, start);
-    });
-  });
-  wrap.querySelectorAll(".hs-sq").forEach(b=>{
-    b.addEventListener("click",()=>{
-      const {card,pi,hi}=b.dataset;
-      MAPSEL[card+":"+pi]=hi;
-      wrap.querySelectorAll(`.hs-sq[data-card="${card}"][data-pi="${pi}"]`).forEach(x=>x.classList.remove("selected"));
-      b.classList.add("selected");
-    });
-  });
-  wrap.querySelectorAll("button[data-ctl]").forEach(b=>{
-    b.addEventListener("click",()=>ctl(parseInt(b.dataset.ctl,10), b.dataset.act));
-  });
-  wrap.querySelectorAll("button[data-plate]").forEach(b=>{
-    b.addEventListener("click",()=>openPlate(parseInt(b.dataset.plate,10)));
-  });
-  wrap.querySelectorAll("[data-thumb]").forEach(el=>{
-    el.addEventListener("click",()=>openThumb(parseInt(el.dataset.thumb,10)));
-    el.addEventListener("keydown",e=>{
-      if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openThumb(parseInt(el.dataset.thumb,10)); }
-    });
-  });
-  wrap.querySelectorAll("[data-snap]").forEach(el=>{
-    el.addEventListener("click",()=>openSnapshot(parseInt(el.dataset.snap,10)));
-  });
-  wrap.querySelectorAll("[data-eject]").forEach(el=>{
-    el.addEventListener("click",()=>ejectFile(parseInt(el.dataset.eject,10)));
-  });
-  wrap.querySelectorAll("[data-setbed]").forEach(el=>{
-    el.addEventListener("click",()=>openBedModal(parseInt(el.dataset.setbed,10)));
-  });
-  wrap.querySelectorAll(".spool-click").forEach(el=>{
-    el.addEventListener("click",()=>openUnload(parseInt(el.dataset.unloadPrinter,10), parseInt(el.dataset.unloadExt,10)));
-  });
-  wrap.querySelectorAll("button[data-estop]").forEach(b=>{
-    b.addEventListener("click",()=>doEstop(parseInt(b.dataset.estop,10)));
-  });
-  wrap.querySelectorAll("button[data-preheat]").forEach(b=>{
-    b.addEventListener("click",()=>openPreheat(parseInt(b.dataset.preheat,10)));
-  });
-  wrap.querySelectorAll(".cam-chk").forEach(el=>{
-    el.addEventListener("change",()=>{
-      const id=parseInt(el.dataset.camsel,10);
-      if(el.checked) CAM_SELECTED.add(id); else CAM_SELECTED.delete(id);
-      updateCamToolbar();
-    });
-  });
+  updateHealthBadge();
   if(gridToolbarActive()) updateCamToolbar();
 }
 
@@ -2722,12 +3642,13 @@ function renderCamToolbar(preTabFleet){
   preTabFleet.forEach(p=>{ counts[camBucket(p)]++; });
   document.querySelectorAll("#camTabs button[data-camtab]").forEach(b=>{
     const key=b.dataset.camtab;
-    b.textContent=`${CAM_TAB_LABELS[key]} (${counts[key]})`;
+    b.textContent=`${CAM_TAB_LABELS[key]} ${counts[key]}`;
     b.classList.toggle("active", CAM_TAB===key);
+    b.classList.toggle("zero", counts[key]===0);
   });
   const sel=$("camTagFilter");
   if(sel){
-    const tags=[...new Set(FLEET.flatMap(p=>p.tags||[]))].sort();
+    const tags=[...new Set(FLEET.flatMap(p=>p.tags||[]).filter(t=>!isColorTag(t)))].sort();
     sel.innerHTML=`<option value="">All tags</option>`+tags.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join("");
     sel.value=tags.includes(CAM_TAG_FILTER)?CAM_TAG_FILTER:"";
     CAM_TAG_FILTER=sel.value;
@@ -2737,23 +3658,36 @@ function renderCamToolbar(preTabFleet){
 // matches the current filter scrolling out of the DOM — prune against the
 // live fleet before computing bulk-button eligibility so a stale id never
 // silently counts toward "N selected".
+const BULK_ACT_DEFS=[
+  { act:"pause", verb:"Pause", test:p=>p.state==="printing", reason:"None of the selected printers are printing" },
+  { act:"resume", verb:"Resume", test:p=>p.state==="paused", reason:"None of the selected printers are paused" },
+  { act:"cancel", verb:"Cancel", test:p=>p.state==="printing"||p.state==="paused", reason:"None of the selected printers are printing or paused" },
+];
 function updateCamToolbar(){
   for(const id of CAM_SELECTED){ if(!FLEET.some(f=>f.id===id)) CAM_SELECTED.delete(id); }
   for(const id of CAM_SHOT_CACHE.keys()){ if(!FLEET.some(f=>f.id===id)) CAM_SHOT_CACHE.delete(id); }
-  const cnt=$("camSelCount"); if(cnt) cnt.textContent=CAM_SELECTED.size+" selected";
+  const n=CAM_SELECTED.size;
+  const cnt=$("camSelCount");
+  if(cnt){ cnt.textContent = n>0 ? n+" selected" : "Select all"; cnt.classList.toggle("has-selection", n>0); }
   const selPrinters=[...CAM_SELECTED].map(id=>FLEET.find(f=>f.id===id)).filter(Boolean);
-  const eligibleFor=act=>selPrinters.some(p=>
-    act==='pause' ? p.state==='printing' :
-    act==='resume' ? p.state==='paused' :
-    p.state==='printing'||p.state==='paused' // cancel
-  );
-  if($("camBulkPause")) $("camBulkPause").disabled=!eligibleFor('pause');
-  if($("camBulkResume")) $("camBulkResume").disabled=!eligibleFor('resume');
-  if($("camBulkCancel")) $("camBulkCancel").disabled=!eligibleFor('cancel');
+  // Pause/Resume/Cancel only exist in the DOM once something's selected —
+  // that's where the row's vertical space comes from when nothing is picked.
+  const actionsWrap=$("camBulkActions");
+  if(actionsWrap){
+    actionsWrap.innerHTML = n===0 ? "" : BULK_ACT_DEFS.map(d=>{
+      const eligible=selPrinters.some(d.test);
+      return `<button type="button" class="btn ghost" data-bulkact="${d.act}"${eligible?"":` disabled title="${esc(d.reason)}"`}>${d.verb} (${n})</button>`;
+    }).join("");
+    actionsWrap.querySelectorAll("[data-bulkact]").forEach(b=>{
+      b.addEventListener("click",()=>bulkCtl(b.dataset.bulkact));
+    });
+  }
   const selAll=$("camSelectAll");
   if(selAll){
     const chks=[...document.querySelectorAll(".cam-chk")];
-    selAll.checked = chks.length>0 && chks.every(c=>c.checked);
+    const numChecked=chks.filter(c=>c.checked).length;
+    selAll.checked = chks.length>0 && numChecked===chks.length;
+    selAll.indeterminate = numChecked>0 && numChecked<chks.length;
   }
 }
 const BULK_ACT_LABELS = { pause:"paused", resume:"resumed", cancel:"cancelled" };
@@ -2764,7 +3698,10 @@ async function bulkCtl(act){
     return act==='pause' ? p.state==='printing' : act==='resume' ? p.state==='paused' : p.state==='printing'||p.state==='paused';
   });
   if(!eligible.length) return;
-  if(act==='cancel' && !confirm(`Cancel ${eligible.length} selected print${eligible.length>1?'s':''}? This can't be undone.`)) return;
+  if(act==='cancel'){
+    const names=eligible.map(id=>{ const p=FLEET.find(f=>f.id===id); return p?p.name:id; });
+    if(!confirm(`Cancel ${eligible.length} print${eligible.length>1?'s':''}? This can't be undone.\n\n`+names.join("\n"))) return;
+  }
   const msg=$("camBulkMsg");
   if(msg){ msg.className="pstatus work"; msg.textContent="Working…"; }
   const results=await Promise.allSettled(eligible.map(async id=>{
@@ -2791,8 +3728,14 @@ function openTagsEditor(){
     return `<div class="tags-row" data-tagsrow="${p.id}">`+
       `<span class="tags-row-name">${esc(p.name)}</span>`+
       `<input type="text" class="field tags-row-input" data-tagsorig="${esc(val)}" value="${esc(val)}" placeholder="comma-separated tags">`+
+      `<span class="tags-row-swatch">${colorTagSwatchHtml(val)}</span>`+
       `</div>`;
   }).join("");
+  wrap.querySelectorAll(".tags-row-input").forEach(inp=>{
+    inp.addEventListener("input",()=>{
+      inp.closest(".tags-row").querySelector(".tags-row-swatch").innerHTML=colorTagSwatchHtml(inp.value);
+    });
+  });
   $("tagsmodal").classList.add("show");
 }
 function closeTagsModal(){ $("tagsmodal").classList.remove("show"); }
@@ -2839,15 +3782,23 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
   // one another regardless of screen size; that's what let Actions visually
   // crowd into Filament's space before. Progress is 8% here (was ~16%),
   // halved per feedback; the rest of that share went to Actions/Filament.
+  // Printer's <col> is calc(25ch + cell padding) instead of a % — 25ch
+  // matches the name field's own maxlength (Settings > Printers), and ch
+  // resolves against the table's own inherited font (13px, --sans — the
+  // same font .hdr-name renders in), so it tracks that rule instead of a
+  // hardcoded px guess. The 20px is this table's actual td padding
+  // (8px 10px, i.e. 10px each side) — without it, real text would truncate
+  // a few characters short of the full 25 the column is sized for. Freed
+  // from the % pool entirely, its old 19% share goes to File below.
   table.innerHTML=`<colgroup>`+
-      `<col style="width:32px"><col style="width:19%"><col style="width:9%">`+
-      `<col style="width:19%"><col style="width:13%"><col style="width:8%">`+
-      `<col style="width:16%"><col style="width:13%">`+
+      `<col style="width:32px"><col style="width:calc(25ch + 20px)"><col style="width:9%">`+
+      `<col style="width:34%"><col style="width:13%"><col style="width:36px">`+
+      `<col style="width:8%"><col style="width:76px"><col style="width:14%"><col style="width:13%">`+
     `</colgroup>`+
     `<thead><tr>`+
     `<th class="list-th-chk"></th>`+
     `<th class="list-th-sort" data-listsort="name">Printer <span class="list-sort-arrow">${sortArrow}</span></th>`+
-    `<th>Tags</th><th>File</th><th>Status</th><th>Progress</th><th>Filament</th><th>Actions</th>`+
+    `<th>Tags</th><th>File</th><th>Status</th><th class="list-th-cam"></th><th>Progress</th><th>Layers</th><th>Filament</th><th>Actions</th>`+
     `</tr></thead><tbody></tbody>`;
   const tbody=table.querySelector("tbody");
   rows.forEach(p=>{
@@ -2867,21 +3818,32 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
     const pct=p.online&&p.progress!=null?p.progress*100:null;
     const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
     const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
+    const listLayer=layerDisplay(p);
+    // Second line only means something while there's an active countdown or a
+    // finish time to report — idle/error/cancelled rows already say so via
+    // the 0% (or frozen %) above; a "—" placeholder there just adds noise.
+    const progressMeta = p.state==='complete' ? fmtFinishedTime(p.completedAt)
+      : (p.state==='printing'||p.state==='paused') ? fmtRemaining(p.elapsed,p.progress)
+      : '';
     const progressCell=pct!=null
       ? `<div class="list-progress">`+
           `<div class="list-progress-row"><span class="list-progress-pct ${pctCls}">${pct.toFixed(0)}%</span>`+
           `<div class="prog-track list-progress-track ${trackCls}"><div class="prog-fill list-progress-fill ${pctCls}" style="width:${pct}%"></div></div></div>`+
-          `<div class="list-progress-meta">${fmtRemaining(p.elapsed,p.progress)}${p.layer?` <span class="list-progress-sep">·</span> L${p.layer.current}/${p.layer.total}`:''}</div>`+
+          (progressMeta?`<div class="list-progress-meta">${progressMeta}</div>`:'')+
         `</div>`
       : `<span class="list-file-empty">—</span>`;
+    const layersCell = pct!=null && listLayer ? `${listLayer.current} / ${listLayer.total}` : '—';
     // Bambu-style [PLA] chip: material name on a background of its own
-    // color, one per LOADED toolhead only (unlike the card view's full
-    // head grid, an empty-slot placeholder here would just be clutter).
+    // color, one per toolhead — empty heads render as a hollow chip (same
+    // fixed box as a loaded one) rather than being skipped, so the row's
+    // chips stay aligned against neighboring rows regardless of which heads
+    // are actually loaded.
     const filamentCell=p.capabilities?.filamentHeads
-      ? ((p.heads||[]).slice(0,4).filter(h=>h&&h.loaded).map(h=>{
+      ? ((p.heads||[]).slice(0,4).map(h=>{
+          if(!h||!h.loaded) return `<span class="list-filament-chip empty" title="Empty"></span>`;
           const hex=h.hex||'#3a3f49';
           const dark=needsDarkText(hex);
-          return `<span class="list-filament-chip" style="background:${esc(hex)};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,6))}</span>`;
+          return `<span class="list-filament-chip" style="background:${esc(hex)};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,4))}</span>`;
         }).join("")) || `<span class="list-file-empty">—</span>`
       : `<span class="list-file-empty">—</span>`;
     const actionsCell=busy
@@ -2895,12 +3857,14 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
         + `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="Preheat"><img src="/preheat-icon.svg" alt=""></button>`;
     const tr=document.createElement("tr");
     tr.className="list-row"+(p.online?"":" offline");
-    tr.innerHTML=`<td class="list-th-chk"><label class="cam-select"><input type="checkbox" class="cam-chk" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label></td>`+
-      `<td class="list-printer-cell"><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></td>`+
-      `<td>${(p.tags||[]).map(t=>`<span class="list-tag">${esc(t)}</span>`).join("")||'<span class="list-file-empty">—</span>'}</td>`+
+    tr.innerHTML=`<td class="list-th-chk"><label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label></td>`+
+      `<td class="list-printer-cell"><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name" title="${esc(p.name)}">${esc(p.name)}</div></td>`+
+      `<td>${(p.tags||[]).filter(t=>!isColorTag(t)).map(t=>`<span class="list-tag">${esc(t)}</span>`).join("")||'<span class="list-file-empty">—</span>'}</td>`+
       `<td>${fileCell}</td>`+
-      `<td><span class="status-badge" style="--status-color:${statusColor}">${statusTxt}</span>${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm list-status-cam" data-snap="${p.id}" title="Camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}</td>`+
+      `<td><span class="status-badge" style="--status-color:${statusColor}">${statusTxt}</span></td>`+
+      `<td class="list-th-cam">${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm list-status-cam" data-snap="${p.id}" title="View ${esc(p.name)}'s camera"><img src="/camera-pill.svg" alt="Camera"></button>`:''}</td>`+
       `<td>${progressCell}</td>`+
+      `<td class="list-layers-cell">${layersCell}</td>`+
       `<td><div class="list-filament-cell">${filamentCell}</div></td>`+
       `<td><div class="list-actions-cell">${actionsCell}</div></td>`;
     tbody.appendChild(tr);
@@ -2940,6 +3904,17 @@ async function printQueuedFile(printerId, filename, prefs){
   }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
   loadFleet();
   return ok;
+}
+
+// Reprint: the file is already sitting on the printer from the job that just
+// finished (p.filename) — same "already on the printer" path printQueuedFile
+// uses for a staged queued file, just triggered from a plain completed card
+// instead of a queued-file banner.
+function doReprint(printerId){
+  const p=FLEET.find(f=>f.id===printerId);
+  if(!p||!p.filename) return;
+  if(p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)) openQuickPrintModal(printerId,'queued',p.filename);
+  else printQueuedFile(printerId,p.filename);
 }
 
 // ---- Quick print options popup ("Force default behavior" off) ----
@@ -3088,6 +4063,91 @@ async function doQuickPrint(){
   }
 }
 
+// ---- Fleet card click/change/keydown handling, delegated on #fleet ----
+// Bound ONCE at startup (alongside wireFleetDrag() below, same shape: one
+// listener on the container, resolved via e.target.closest() at event time)
+// rather than re-bound to every card on every render. This is what makes
+// per-card diffing in reconcileFleetCards() safe — a card's DOM node can now
+// persist unchanged across many renders without needing to track, per node,
+// whether it already has listeners attached.
+function wireFleetCardEvents(){
+  const wrap=$("fleet");
+  wrap.addEventListener("click", e=>{
+    const idBtn=e.target.closest("button[data-id]");
+    if(idBtn){
+      const id=parseInt(idBtn.dataset.id,10), start=idBtn.dataset.start==="1";
+      const p=FLEET.find(f=>f.id===id)||{};
+      const qf=p.queuedFile;
+      // Print already has a file loaded/queued on the printer itself (see
+      // queuedFileBannerHtml) — print THAT rather than uploading whatever
+      // happens to be selected in SnapCon's own file manager, which would
+      // otherwise silently replace it.
+      if(start&&qf&&qf.status==='ready'){
+        if(p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)) openQuickPrintModal(id,'queued',qf.name);
+        else printQueuedFile(id, qf.name);
+        return;
+      }
+      // Print with no file selected in SnapCon: offer the printer's own files.
+      if(start&&!SELECTED){ openPrinterFiles(id); return; }
+      if(start&&p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)){ openQuickPrintModal(id,'push'); return; }
+      pushTo(id, start);
+      return;
+    }
+    const hsBtn=e.target.closest(".hs-sq");
+    if(hsBtn){
+      const {card,pi,hi}=hsBtn.dataset;
+      MAPSEL[card+":"+pi]=hi;
+      wrap.querySelectorAll(`.hs-sq[data-card="${card}"][data-pi="${pi}"]`).forEach(x=>x.classList.remove("selected"));
+      hsBtn.classList.add("selected");
+      return;
+    }
+    const ctlBtn=e.target.closest("button[data-ctl]");
+    if(ctlBtn){ ctl(parseInt(ctlBtn.dataset.ctl,10), ctlBtn.dataset.act); return; }
+    const plateBtn=e.target.closest("button[data-plate]");
+    if(plateBtn){ openPlate(parseInt(plateBtn.dataset.plate,10)); return; }
+    const thumbEl=e.target.closest("[data-thumb]");
+    if(thumbEl){ openThumb(parseInt(thumbEl.dataset.thumb,10)); return; }
+    const snapEl=e.target.closest("[data-snap]");
+    if(snapEl){ openSnapshot(parseInt(snapEl.dataset.snap,10)); return; }
+    const ejectEl=e.target.closest("[data-eject]");
+    if(ejectEl){ ejectFile(parseInt(ejectEl.dataset.eject,10)); return; }
+    const setbedEl=e.target.closest("[data-setbed]");
+    if(setbedEl){ openBedModal(parseInt(setbedEl.dataset.setbed,10)); return; }
+    const spoolEl=e.target.closest(".spool-click");
+    if(spoolEl){ openUnload(parseInt(spoolEl.dataset.unloadPrinter,10), parseInt(spoolEl.dataset.unloadExt,10)); return; }
+    const estopBtn=e.target.closest("button[data-estop]");
+    if(estopBtn){ doEstop(parseInt(estopBtn.dataset.estop,10)); return; }
+    const preheatBtn=e.target.closest("button[data-preheat]");
+    if(preheatBtn){ openPreheat(parseInt(preheatBtn.dataset.preheat,10)); return; }
+    const reprintBtn=e.target.closest("button[data-reprint]");
+    if(reprintBtn){ doReprint(parseInt(reprintBtn.dataset.reprint,10)); return; }
+    // Card selection (camera view only — the checkbox only renders there):
+    // the checkbox alone is too small a target to scan/click across a grid
+    // of cards, so the whole header toggles it too. Excludes the checkbox
+    // itself (already toggles natively — re-toggling here would cancel it
+    // back out) and anything else interactive in the header (eject/camera/
+    // webUI pills, the status badge, which doubles as a drag handle).
+    const top=e.target.closest(".pcard .top");
+    if(top){
+      if(e.target.closest(".cam-select, .pill-btn, a, .status-badge")) return;
+      const chk=top.querySelector(".cam-chk");
+      if(!chk) return;
+      chk.checked=!chk.checked;
+      chk.dispatchEvent(new Event("change"));
+    }
+  });
+  wrap.addEventListener("keydown", e=>{
+    const thumbEl=e.target.closest("[data-thumb]");
+    if(thumbEl&&(e.key==="Enter"||e.key===" ")){ e.preventDefault(); openThumb(parseInt(thumbEl.dataset.thumb,10)); }
+  });
+  wrap.addEventListener("change", e=>{
+    const chk=e.target.closest(".cam-chk");
+    if(!chk) return;
+    const id=parseInt(chk.dataset.camsel,10);
+    if(chk.checked) CAM_SELECTED.add(id); else CAM_SELECTED.delete(id);
+    updateCamToolbar();
+  });
+}
 // ---- Fleet card reordering by drag (status pill = drag handle, "No Sort" only) ----
 // Polling must not touch the DOM while a drag is live (it'd yank the dragged
 // node out from under the browser's native drag and abort the gesture), and
@@ -3304,7 +4364,7 @@ function renderSendList(){
     const statusTxt=p.online?(p.state||'online'):'offline';
     return `<label class="send-row">
       <div class="send-row-fill" data-fill="${esc(p.id)}"></div>
-      <input type="checkbox" class="send-chk" data-id="${esc(p.id)}" ${idle?'checked':''}>
+      <input type="checkbox" class="send-chk checkbox-input" data-id="${esc(p.id)}" ${idle?'checked':''}>
       <span class="send-dot" style="background:${dot}"></span>
       <span class="send-name">${esc(p.name)}</span>
       <span class="send-status-txt" data-rst="${esc(p.id)}">${esc(statusTxt)}</span>
@@ -3395,7 +4455,7 @@ function renderPfileInfo(){
   wrap.innerHTML=`<div class="pfi-card">`+
     `<img class="pfi-thumb" src="${thumb}" onerror="this.style.display='none'" alt="">`+
     `<div class="pfi-stats">`+
-    (timeSec>0?`<div class="pfi-row"><span class="pfi-lbl">Print Time</span><span class="pfi-val">${fmtClock(timeSec)}</span></div>`:'')+
+    (timeSec>0?`<div class="pfi-row"><span class="pfi-lbl">Print Time</span><span class="pfi-val">${fmtDuration(timeSec)}</span></div>`:'')+
     (totalGrams>0?`<div class="pfi-row"><span class="pfi-lbl">Filament</span><span class="pfi-val">${totalGrams.toFixed(1)} g</span></div>`:'')+
     (totalCost>0?`<div class="pfi-row"><span class="pfi-lbl">Est. Cost</span><span class="pfi-val">$${totalCost.toFixed(2)}</span></div>`:'')+
     `</div></div>`;
@@ -3600,97 +4660,12 @@ function openThumb(printerId){
 }
 function closeThumb(){ $("thumbmodal").classList.remove("show"); }
 
-// ---- Unload filament ----
-function openUnload(printerId,ext){
-  const p=FLEET.find(f=>f.id===printerId);
-  if(!p||!p.online) return;
-  $("unloadtitle").textContent="Unload filament — "+p.name;
-  $("unloadmsg").textContent="Are you sure you want to unload T"+ext+"?";
-  $("unloadStatus").textContent="";
-  $("unloadYes").onclick=()=>doUnload(printerId,[ext]);
-  $("unloadAll").onclick=()=>doUnload(printerId,[0,1,2,3]);
-  // Only some connectors can write a slot's color/material label back to the
-  // printer itself — the button stays hidden for everything else rather
-  // than pretending it works. Two different UIs share capabilities.setColor:
-  // a connector with a fixed icon palette (AD5X's material station — only
-  // ever offers exactly those icons, no arbitrary hex) gets the small inline
-  // grid below; anything else (U1's SET_PRINT_FILAMENT_CONFIG, which takes
-  // arbitrary RGBA) gets the bigger dedicated picker (openSpoolColorModal)
-  // instead, since a plain hex/native-input inline section is too little UI
-  // for a real named-palette + custom-hex workflow.
-  const hasFixedPalette=Array.isArray(p.colorPalette)&&p.colorPalette.length;
-  const supportsColor=!!(p.capabilities&&p.capabilities.setColor)&&hasFixedPalette;
-  const supportsBigPicker=!!(p.capabilities&&p.capabilities.setColor)&&!hasFixedPalette;
-  $("unloadColorPicker").style.display="none";
-  $("unloadColorGrid").style.display="none";
-  $("unloadColorGeneric").style.display="none";
-  $("unloadColorBtn").style.display=supportsColor?"":"none";
-  if(supportsColor){
-    let current=((p.heads&&p.heads[ext]&&p.heads[ext].hex)||"#FFFFFF").toUpperCase();
-    // <input type="color"> silently rejects anything without a leading "#"
-    // (falling back to black) rather than erroring — guard here too, not
-    // just at the connector, since a stray unprefixed hex anywhere upstream
-    // would otherwise show as "you picked X but got black" with no clue why.
-    if(current[0]!=="#") current="#"+current;
-    $("unloadColorBtn").onclick=()=>{ $("unloadColorPicker").style.display="block"; };
-    // AD5X (so far the only connector with a fixed palette): the printer
-    // only has icons for a fixed color set, so the picker only ever offers
-    // exactly those — no arbitrary hex entry, nothing to snap.
-    const grid=$("unloadColorGrid");
-    grid.innerHTML=p.colorPalette.map(c=>{
-      const hex=c.hex.toUpperCase();
-      return `<button class="color-swatch${hex===current?' active':''}" style="background:${esc(c.hex)}" title="${esc(c.name)}" data-hex="${esc(c.hex)}"></button>`;
-    }).join("");
-    grid.style.display="grid";
-    grid.querySelectorAll(".color-swatch").forEach(btn=>{
-      btn.addEventListener("click",()=>doSetColor(printerId,ext,btn.dataset.hex));
-    });
-  }
-  $("unloadSpoolColorBtn").style.display=supportsBigPicker?"":"none";
-  if(supportsBigPicker){
-    $("unloadSpoolColorBtn").onclick=()=>openSpoolColorModal(printerId,ext);
-  }
-  $("unloadmodal").classList.add("show");
-}
-function closeUnload(){ $("unloadmodal").classList.remove("show"); }
-async function doUnload(printerId,extruders){
-  const st=$("unloadStatus");
-  st.className="pstatus work"; st.textContent="Unloading…";
-  try{
-    const r=await postJSON("/api/unload",{printer:printerId,extruders});
-    const d=await r.json();
-    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-    st.className="pstatus ok"; st.textContent="Unload command sent";
-    setTimeout(()=>{ closeUnload(); loadFleet(); },1500);
-  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-}
-async function doSetColor(printerId,ext,hex){
-  let v=(hex||"").trim();
-  if(v && v[0]!=="#") v="#"+v;
-  const st=$("unloadStatus");
-  if(!/^#[0-9a-fA-F]{6}$/.test(v)){ st.className="pstatus err"; st.textContent="Enter a valid color, e.g. #FF0000"; return; }
-  st.className="pstatus work"; st.textContent="Saving color…";
-  try{
-    const r=await postJSON("/api/filament-color",{printer:printerId,extruder:ext,hex:v});
-    const d=await r.json();
-    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
-    // The printer may snap to its own supported palette (e.g. AD5X's
-    // touchscreen only has icons for a fixed color set) — say so rather than
-    // implying the exact pick was applied when it might not have been.
-    const applied=(d.hex||v).toUpperCase();
-    if(applied!==v.toUpperCase()){
-      st.className="pstatus ok"; st.textContent="Closest supported color applied: "+applied;
-    } else {
-      st.className="pstatus ok"; st.textContent="Color updated";
-    }
-    setTimeout(()=>{ closeUnload(); loadFleet(); },applied!==v.toUpperCase()?2200:1200);
-  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-}
-
-// ---- Spool color picker (capabilities.setColor — a real printer write, via
-// the same /api/filament-color route and the same doSetColor()-style flow
-// as AD5X's inline Color button above, just a bigger dedicated UI for U1's
-// larger named-palette + custom-hex use case). ----
+// ---- Unload confirmation + inline color editing ----
+// Clicking a loaded spool opens this dialog directly — Change Color lives
+// inside it (the "Edit color" button on the spool card), not as a separate
+// up-front choice. Only ever opened for a head that actually has filament —
+// an empty slot has nothing to act on, so afcLanesHtml() never wires a click
+// target for one.
 // A general-purpose named filament-color list — unlike flashforge-ad5x.js's
 // COLOR_PALETTE (which only lists exactly what THAT printer's own
 // touchscreen can display), this isn't tied to any one connector's fixed
@@ -3712,40 +4687,182 @@ function nameForHex(hex){
   return m?m.name:null;
 }
 
-let SPOOL_MODAL_PRINTER=null, SPOOL_MODAL_EXT=null, SPOOL_MODAL_CURRENT=null, SPOOL_MODAL_PENDING=null, SPOOL_MODAL_TAB="palette";
+// Small inline glyphs, currentColor-based, matching the QUEUE_OFFLINE_ICON
+// convention already used elsewhere — decorative alongside text that already
+// says what they mean, so aria-hidden.
+const UNLOAD_WARN_ICON=`<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true"><path d="M7 1.5 L13 12.5 L1 12.5 Z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><rect x="6.3" y="5" width="1.4" height="4" rx="0.4" fill="currentColor"/><circle cx="7" cy="10.3" r="0.9" fill="currentColor"/></svg>`;
+const UNLOAD_LOCK_ICON=`<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true"><rect x="3" y="6.5" width="8" height="6" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M4.5 6.5 V4.5 a2.5 2.5 0 0 1 5 0 V6.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`;
 
-function openSpoolColorModal(printerId,ext){
+// SPOOL_MODAL_* names are kept from when this state belonged only to the old
+// standalone color-picker modal — it's now the unload dialog's own state
+// (target head, current vs pending color, which palette source applies).
+let SPOOL_MODAL_PRINTER=null, SPOOL_MODAL_EXT=null, SPOOL_MODAL_CURRENT=null, SPOOL_MODAL_PENDING=null,
+    SPOOL_MODAL_TAB="palette", SPOOL_MODAL_FIXED_PALETTE=null, SPOOL_MODAL_DIRTY=false;
+let UNLOAD_DIALOG_MODE="unload"; // "unload" | "color" — mutually exclusive views sharing one dialog
+
+function openUnload(printerId,ext){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p||!p.online) return;
   const h=(p.heads&&p.heads[ext])||null;
-  const currentHex=h&&h.hex?h.hex.toUpperCase():null;
-  const currentName=currentHex&&nameForHex(currentHex);
+  if(!h||!h.loaded) return; // nothing to unload — empty heads have no click target at all
+
   SPOOL_MODAL_PRINTER=printerId; SPOOL_MODAL_EXT=ext;
+  UNLOAD_DIALOG_MODE="unload";
+  $("unloadModeBody").style.display="";
+  $("unloadColorMode").style.display="none";
+  $("unloadYes").style.display="";
+  $("unloadSaveColorBtn").style.display="none";
+
+  $("unloadtitle").textContent="Spool on "+headLabel(ext);
+  $("unloadSubtitle").textContent=p.name+".";
+  $("unloadmsg").textContent="Are you sure you want to unload "+headLabel(ext)+"?";
+  $("unloadStatus").textContent="";
+
+  const currentHex=h.hex?h.hex.toUpperCase():null;
+  const currentName=currentHex&&nameForHex(currentHex);
+  $("unloadSwatch").style.background=h.hex||"#383a4a";
+
+  // An official Snapmaker RFID spool reports its color from the tag itself —
+  // firmware refuses a color write for one outright (see setFilamentColor),
+  // so this dialog doesn't offer to try. isRfid overrides capabilities.setColor
+  // entirely, not just the fixed-vs-arbitrary palette choice below it.
+  const isRfid=!!h.official;
+  const hasFixedPalette=Array.isArray(p.colorPalette)&&p.colorPalette.length;
+  const canEditColor=!!(p.capabilities&&p.capabilities.setColor)&&!isRfid;
+  SPOOL_MODAL_FIXED_PALETTE=hasFixedPalette?p.colorPalette:null;
+
+  $("unloadEditColorBtn").style.display=canEditColor?"":"none";
+  $("unloadRfidBadge").innerHTML=isRfid?(UNLOAD_LOCK_ICON+"RFID"):"";
+  $("unloadRfidBadge").style.display=isRfid?"":"none";
+  $("unloadColorTabs").style.display=hasFixedPalette?"none":"";
+
+  if(isRfid){
+    $("unloadLine1").textContent=(h.material||"Unknown material")+(currentHex?" · "+currentHex:"");
+    $("unloadRfidNote").textContent="This is an official Snapmaker spool — its color comes from the RFID tag and can't be changed here.";
+    $("unloadRfidNote").style.display="";
+  } else {
+    $("unloadLine1").textContent=(currentName||"Custom")+" · "+(h.material||"Unknown material");
+    $("unloadRfidNote").style.display="none";
+  }
+
   SPOOL_MODAL_CURRENT={hex:currentHex,name:currentName};
   SPOOL_MODAL_PENDING={hex:currentHex||"#FFFFFF",name:currentName||"Custom"};
   SPOOL_MODAL_TAB="palette";
-  $("sccSubtitle").textContent=headLabel(ext)+" · "+p.name;
-  $("sccStatus").textContent="";
-  renderSpoolColorTabs();
-  renderSpoolColorCompare();
-  renderSpoolPaletteGrid();
-  syncCustomFieldsFromPending();
-  $("spoolColorModal").classList.add("show");
-}
-function closeSpoolColorModal(){ $("spoolColorModal").classList.remove("show"); }
+  SPOOL_MODAL_DIRTY=false;
 
-function renderSpoolColorCompare(){
-  const nowHex=SPOOL_MODAL_CURRENT.hex;
-  $("sccNowSwatch").style.background=nowHex||"#2a2d36";
-  $("sccNowSwatch").style.opacity=nowHex?"1":".5";
-  $("sccPendingSwatch").style.background=SPOOL_MODAL_PENDING.hex;
-  $("sccPendingName").textContent=SPOOL_MODAL_PENDING.name||"Custom";
-  $("sccPendingHex").textContent=SPOOL_MODAL_PENDING.hex;
+  renderUnloadPrintWarning(p);
+
+  // Only worth offering "unload everything" when some OTHER head also has
+  // something loaded — three empty heads alongside the target isn't a
+  // decision, it's a no-op dressed up as one.
+  const n=(p.heads||[]).length;
+  const otherLoaded=(p.heads||[]).filter((hh,i)=>i!==ext&&hh&&hh.loaded).length;
+  $("unloadAllCheck").checked=false;
+  $("unloadAllRow").style.display=otherLoaded>0?"":"none";
+  $("unloadAllLabel").textContent="Unload all "+n+" heads instead";
+  updateUnloadConfirmLabel();
+
+  $("unloadYes").onclick=()=>{
+    const checked=$("unloadAllCheck").checked;
+    const extruders=checked?[...Array(n).keys()]:[ext];
+    doUnload(printerId,extruders);
+  };
+
+  $("unloadmodal").classList.add("show");
 }
-function renderSpoolColorTabs(){
-  $("sccPalettePane").style.display=SPOOL_MODAL_TAB==="palette"?"":"none";
-  $("sccCustomPane").style.display=SPOOL_MODAL_TAB==="custom"?"":"none";
-  document.querySelectorAll(".scc-tab").forEach(b=>b.classList.toggle("active",b.dataset.scctab===SPOOL_MODAL_TAB));
+function closeUnload(){ $("unloadmodal").classList.remove("show"); }
+// Cancel is mode-aware: backs out of color mode (discarding any pending pick)
+// rather than closing the whole dialog when a color edit is in progress.
+function unloadCancelClicked(){
+  if(UNLOAD_DIALOG_MODE==="color") exitColorMode();
+  else closeUnload();
+}
+
+function updateUnloadConfirmLabel(){
+  const p=FLEET.find(f=>f.id===SPOOL_MODAL_PRINTER);
+  const n=(p&&p.heads)?p.heads.length:0;
+  const checked=$("unloadAllCheck").checked;
+  $("unloadYes").textContent=checked?("Unload all "+n+" heads"):("Unload "+headLabel(SPOOL_MODAL_EXT));
+}
+
+function renderUnloadPrintWarning(p){
+  const el=$("unloadPrintWarning");
+  if(p.state==="printing"||p.state==="paused"){
+    const pct=(typeof p.progress==="number")?Math.round(p.progress*100):null;
+    const msg="This printer is "+p.state+(pct!=null?" ("+pct+"%)":"")+" — unloading will ruin the job if it uses this head.";
+    el.innerHTML=UNLOAD_WARN_ICON+`<span>${esc(msg)}</span>`;
+    el.style.display="";
+  } else {
+    el.style.display="none"; el.innerHTML="";
+  }
+}
+
+async function doUnload(printerId,extruders){
+  // Color mode owns the only way to end up with an unsaved pending pick, and
+  // both of its own exits (Apply, Cancel) resolve it before this is ever
+  // reachable — Apply saves-and-closes the whole dialog, Cancel discards and
+  // returns here with SPOOL_MODAL_DIRTY reset. So there's never a pending
+  // change sitting around by the time Unload can be clicked.
+  const st=$("unloadStatus");
+  st.className="pstatus work"; st.textContent="Unloading…";
+  try{
+    const r=await postJSON("/api/unload",{printer:printerId,extruders});
+    const d=await r.json();
+    if(!r.ok||d.error) throw new Error(d.error||"HTTP "+r.status);
+    st.className="pstatus ok"; st.textContent="Unload command sent";
+    setTimeout(()=>{ closeUnload(); loadFleet(); },1500);
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
+}
+
+// ---- Color mode: a full-focus view that replaces the unload body entirely
+// while active — no unload confirmation, checkbox, or Unload button visible
+// alongside it. Entered via "Edit color", exited via Cancel (discard, back to
+// the unload view) or Apply (save, close the whole dialog). ----
+function enterColorMode(){
+  UNLOAD_DIALOG_MODE="color";
+  const p=FLEET.find(f=>f.id===SPOOL_MODAL_PRINTER);
+  $("unloadtitle").textContent="Spool color";
+  $("unloadSubtitle").textContent="Head "+headLabel(SPOOL_MODAL_EXT)+" on "+((p&&p.name)||"")+".";
+  $("unloadModeBody").style.display="none";
+  $("unloadColorMode").style.display="";
+  $("unloadYes").style.display="none";
+  $("unloadSaveColorBtn").style.display="";
+  $("unloadStatus").textContent="";
+
+  // Always starts fresh from the last-saved value — an unsaved pick from a
+  // previous visit to this mode is gone, matching "Cancel discards it".
+  SPOOL_MODAL_PENDING={hex:SPOOL_MODAL_CURRENT.hex||"#FFFFFF",name:SPOOL_MODAL_CURRENT.name||"Custom"};
+  SPOOL_MODAL_TAB="palette";
+  SPOOL_MODAL_DIRTY=false;
+  $("unloadSaveColorBtn").disabled=true;
+
+  updateUnloadCompareSwatches();
+  renderUnloadColorTabs();
+  renderUnloadPaletteGrid();
+  syncCustomFieldsFromPending();
+}
+function exitColorMode(){
+  UNLOAD_DIALOG_MODE="unload";
+  const p=FLEET.find(f=>f.id===SPOOL_MODAL_PRINTER);
+  $("unloadtitle").textContent="Spool on "+headLabel(SPOOL_MODAL_EXT);
+  $("unloadSubtitle").textContent=((p&&p.name)||"")+".";
+  $("unloadColorMode").style.display="none";
+  $("unloadModeBody").style.display="";
+  $("unloadSaveColorBtn").style.display="none";
+  $("unloadYes").style.display="";
+  $("unloadStatus").textContent="";
+}
+function updateUnloadCompareSwatches(){
+  $("unloadNowSwatch").style.background=SPOOL_MODAL_CURRENT.hex||"#2a2d36";
+  $("unloadNowSwatch").style.opacity=SPOOL_MODAL_CURRENT.hex?"1":".5";
+  $("unloadPendingSwatch").style.background=SPOOL_MODAL_PENDING.hex;
+  $("unloadPendingName").textContent=SPOOL_MODAL_PENDING.name||"Custom";
+  $("unloadPendingHex").textContent=SPOOL_MODAL_PENDING.hex;
+}
+function renderUnloadColorTabs(){
+  $("unloadPalettePane").style.display=SPOOL_MODAL_TAB==="palette"?"":"none";
+  $("unloadCustomPane").style.display=SPOOL_MODAL_TAB==="custom"?"":"none";
+  document.querySelectorAll("#unloadColorTabs .scc-tab").forEach(b=>b.classList.toggle("active",b.dataset.scctab===SPOOL_MODAL_TAB));
 }
 
 // hex/name: the color to move to. opts.skip{HexField,Native,Rgb}: which
@@ -3755,12 +4872,14 @@ function setPendingColor(hex,name,opts){
   opts=opts||{};
   hex=hex.toUpperCase();
   SPOOL_MODAL_PENDING={hex,name:name||"Custom"};
-  renderSpoolColorCompare();
-  renderSpoolPaletteGrid();
-  if(!opts.skipHexField) $("sccHexField").value=hex;
-  if(!opts.skipNative) $("sccColorInput").value=hex;
-  if(!opts.skipRgb){ const rgb=hexRGB(hex)||[255,255,255]; $("sccR").value=rgb[0]; $("sccG").value=rgb[1]; $("sccB").value=rgb[2]; }
-  $("sccHexError").style.display="none";
+  SPOOL_MODAL_DIRTY=true;
+  renderUnloadPaletteGrid();
+  updateUnloadCompareSwatches();
+  $("unloadSaveColorBtn").disabled=false;
+  if(!opts.skipHexField) $("unloadHexField").value=hex;
+  if(!opts.skipNative) $("unloadColorInput").value=hex;
+  if(!opts.skipRgb){ const rgb=hexRGB(hex)||[255,255,255]; $("unloadR").value=rgb[0]; $("unloadG").value=rgb[1]; $("unloadB").value=rgb[2]; }
+  $("unloadHexError").style.display="none";
 }
 function selectSpoolColor(hex,name){ setPendingColor(hex,name); }
 
@@ -3768,8 +4887,8 @@ function swatchHtmlFor(c){
   const isLight=needsDarkText(c.hex);
   const selected=SPOOL_MODAL_PENDING&&SPOOL_MODAL_PENDING.hex===c.hex.toUpperCase();
   return `<button type="button" class="color-swatch${selected?' selected':''}${isLight?' light':''}" `+
-    `style="background:${esc(c.hex)}" role="button" tabindex="0" `+
-    `title="${esc(c.name)} (${esc(c.hex.toUpperCase())})" data-scchex="${esc(c.hex)}" data-sccname="${esc(c.name)}"></button>`;
+    `style="background:${esc(c.hex)}" aria-pressed="${selected}" `+
+    `title="${esc(c.name)} (${esc(c.hex.toUpperCase())})" aria-label="${esc(c.name)}" data-scchex="${esc(c.hex)}" data-sccname="${esc(c.name)}"></button>`;
 }
 function wireSwatchGrid(gridEl){
   gridEl.querySelectorAll(".color-swatch").forEach(btn=>{
@@ -3779,9 +4898,20 @@ function wireSwatchGrid(gridEl){
     });
   });
 }
-function renderSpoolPaletteGrid(){
-  $("sccPaletteGrid").innerHTML=SPOOL_COLOR_PALETTE.map(c=>swatchHtmlFor(c)).join("");
-  wireSwatchGrid($("sccPaletteGrid"));
+function renderUnloadPaletteGrid(){
+  // AD5X (so far the only connector with a fixed palette): the printer only
+  // has icons for a fixed color set, so the grid only ever offers exactly
+  // those — no arbitrary hex entry, nothing to snap, and no "recent" section
+  // (a 6-8 icon fixed set doesn't need a shortcut to itself).
+  const source=SPOOL_MODAL_FIXED_PALETTE||SPOOL_COLOR_PALETTE;
+  $("unloadPaletteGrid").innerHTML=source.map(c=>swatchHtmlFor(c)).join("");
+  wireSwatchGrid($("unloadPaletteGrid"));
+  if(SPOOL_MODAL_FIXED_PALETTE){
+    $("unloadRecentHdr").style.display="none";
+    $("unloadRecentGrid").style.display="none";
+    $("unloadRecentGrid").innerHTML="";
+    return;
+  }
 
   // "Recent on this fleet": distinct colors currently loaded anywhere in the
   // fleet, deduped by hex, capped at 6 — there's no persisted apply-history
@@ -3797,7 +4927,7 @@ function renderSpoolPaletteGrid(){
       }
     }
   }
-  const hdr=$("sccRecentHdr"), grid=$("sccRecentGrid");
+  const hdr=$("unloadRecentHdr"), grid=$("unloadRecentGrid");
   if(recent.length){
     hdr.style.display=""; grid.style.display="";
     grid.innerHTML=recent.map(c=>swatchHtmlFor(c)).join("");
@@ -3817,16 +4947,16 @@ function normalizeHexInput(raw){
 }
 function syncCustomFieldsFromPending(){
   const hex=SPOOL_MODAL_PENDING.hex;
-  $("sccHexField").value=hex;
-  $("sccColorInput").value=hex;
-  $("sccHexError").style.display="none";
+  $("unloadHexField").value=hex;
+  $("unloadColorInput").value=hex;
+  $("unloadHexError").style.display="none";
   const rgb=hexRGB(hex)||[255,255,255];
-  $("sccR").value=rgb[0]; $("sccG").value=rgb[1]; $("sccB").value=rgb[2];
+  $("unloadR").value=rgb[0]; $("unloadG").value=rgb[1]; $("unloadB").value=rgb[2];
 }
 function applyCustomHex(raw){
   const norm=normalizeHexInput(raw);
   if(!norm){
-    const err=$("sccHexError");
+    const err=$("unloadHexError");
     err.textContent='Enter a 3- or 6-digit hex color, with or without "#".';
     err.style.display="block";
     return; // invalid input is never silently reset — it stays exactly as typed
@@ -3835,28 +4965,29 @@ function applyCustomHex(raw){
 }
 function applyCustomRgb(){
   const clamp=v=>Math.max(0,Math.min(255,Math.round(Number(v))||0));
-  const r=clamp($("sccR").value), g=clamp($("sccG").value), b=clamp($("sccB").value);
-  $("sccR").value=r; $("sccG").value=g; $("sccB").value=b;
+  const r=clamp($("unloadR").value), g=clamp($("unloadG").value), b=clamp($("unloadB").value);
+  $("unloadR").value=r; $("unloadG").value=g; $("unloadB").value=b;
   const hex="#"+[r,g,b].map(n=>n.toString(16).padStart(2,"0")).join("");
   setPendingColor(hex,"Custom",{skipRgb:true});
 }
 function applyNativeColor(){
-  setPendingColor($("sccColorInput").value,"Custom",{skipNative:true});
+  setPendingColor($("unloadColorInput").value,"Custom",{skipNative:true});
 }
-async function doApplySpoolColor(){
-  const st=$("sccStatus");
-  st.textContent="Saving…";
+async function doApplyUnloadColor(){
+  const st=$("unloadStatus");
+  const requestedHex=SPOOL_MODAL_PENDING.hex;
+  st.className="pstatus work"; st.textContent="Saving color…";
   try{
     // Real printer write (see connectors/snapmaker-u1-klipper.js's
-    // setFilamentColor) — the same generic route AD5X's Color button already
-    // uses. The palette/custom "name" picked in this modal is a client-side
+    // setFilamentColor) — the same generic route AD5X's Color button used to
+    // call directly. The palette/custom "name" picked here is a client-side
     // display convenience only (nameForHex()); there's no printer-side field
     // for it, so it's never sent.
-    const r=await postJSON("/api/filament-color",{printer:SPOOL_MODAL_PRINTER,extruder:SPOOL_MODAL_EXT,hex:SPOOL_MODAL_PENDING.hex});
+    const r=await postJSON("/api/filament-color",{printer:SPOOL_MODAL_PRINTER,extruder:SPOOL_MODAL_EXT,hex:requestedHex});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
-    st.textContent="Saved";
-    setTimeout(()=>{ closeSpoolColorModal(); loadFleet(); },700);
-  }catch(e){ st.textContent=e.message; }
+    loadFleet();
+    closeUnload(); // saved — exit the color picker and the unload dialog together
+  }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
 }
 
 // ---- Bed temperature modal ----
@@ -3922,7 +5053,7 @@ function bulkheatRowHtml(p){
   const maxT=(p.capabilities&&Number.isFinite(p.capabilities.maxBedTemp))?p.capabilities.maxBedTemp:120;
   const curBed=(p.bed&&typeof p.bed.temp==="number")?p.bed.temp+"°":"—";
   return `<label class="bulkheat-row${disabled?' disabled':''}">`+
-    `<input type="checkbox" class="bulkheat-chk" data-bulkheatid="${p.id}"${checked?' checked':''}${disabled?' disabled':''}>`+
+    `<input type="checkbox" class="bulkheat-chk checkbox-input" data-bulkheatid="${p.id}"${checked?' checked':''}${disabled?' disabled':''}>`+
     `<span class="bulkheat-dot" style="--status-color:${st.statusColor}"></span>`+
     `<span class="bulkheat-name">${esc(p.name)}</span>`+
     `<span class="bulkheat-model">${esc(p.brand||'Printer')}</span>`+
@@ -4084,7 +5215,11 @@ async function doBulkHeat(){
 }
 
 // ---- Folder browser ----
-function openBrowse(){ $("browsemodal").classList.add("show"); navigateBrowse(null); }
+// Shared by every "Browse…" button in Settings (gcode folder, and now the
+// Printer sync Logs/Camera folders) — one modal, whichever field id opened
+// it is where browseok writes the chosen path back to.
+let BROWSE_TARGET_FIELD="setFolder";
+function openBrowse(targetFieldId){ BROWSE_TARGET_FIELD=targetFieldId||"setFolder"; $("browsemodal").classList.add("show"); navigateBrowse(null); }
 function closeBrowse(){ $("browsemodal").classList.remove("show"); }
 async function navigateBrowse(p){
   const list=$("browselist");
@@ -4407,10 +5542,10 @@ function renderPlate(){
     el.addEventListener("mouseenter",()=>setPlateHover(el.dataset.obj,true));
     el.addEventListener("mouseleave",()=>setPlateHover(el.dataset.obj,false));
   });
-  // #platelist renders real <button>s (keyboard-operable natively — adding a
-  // second keydown handler there would double-toggle on Enter/Space). Only
-  // the SVG <g> shapes in #platewrap need a manual keyboard equivalent, since
-  // SVG groups aren't focusable/activatable by default.
+  // #platelist renders real checkbox inputs (keyboard-operable natively —
+  // adding a second keydown handler there would double-toggle on Space).
+  // Only the SVG <g> shapes in #platewrap need a manual keyboard equivalent,
+  // since SVG groups aren't focusable/activatable by default.
   document.querySelectorAll("#platewrap [data-obj]").forEach(el=>{
     el.tabIndex=0; el.setAttribute("role","button");
     el.addEventListener("keydown",e=>{
@@ -4439,11 +5574,12 @@ function plateListHTML(d,numberOf){
     const isEx=ex.has(o.name), isSel=PLATE_SELECTED.has(o.name), n=numberOf.get(o.name);
     const cls="plate-item"+(isEx?" ex":"")+(isSel?" sel":"");
     const chip=isEx?'<span class="pi-chip">Skipped</span>':isSel?'<span class="pi-chip stop">Will stop</span>':'<span class="pi-chip">Printing</span>';
-    return `<button class="${cls}" ${isEx?"disabled":`data-obj="${esc(o.name)}"`}>`+
+    return `<label class="${cls}" ${isEx?"":`data-obj="${esc(o.name)}"`}>`+
+      `<input type="checkbox" class="checkbox-input" ${isEx?"disabled":""}${isSel?" checked":""}>`+
       `<span class="pi-num">${n}</span>`+
       `<span class="pi-text"><span class="pi-label">Object ${n}</span><span class="pi-objid" title="${esc(o.name)}">${esc(o.name)}</span></span>`+
       chip+
-      `</button>`;
+      `</label>`;
   }).join("");
 }
 function togglePlateSel(name){
@@ -4498,10 +5634,12 @@ function plateSVG(d,numberOf){
 
 // ---- settings / discovery ----
 $("gear").addEventListener("click",()=>{
-  // Fleet, Settings, and Queue Management are mutually exclusive — opening
-  // Settings on top of an open Queue dashboard closes it first (clearing its
-  // refresh timer), never leaves it running hidden underneath.
+  // Fleet, Settings, Queue Management, and Health are mutually exclusive —
+  // opening Settings on top of either of the other two closes it first
+  // (clearing its refresh timer, for Queue), never leaves it running hidden
+  // underneath.
   closeQueueDashboard();
+  closeHealthPage();
   const open=$("setup").classList.toggle("show");
   document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display=open?"none":"");
   $("gear").querySelector("img").src = open ? "/back.svg" : "/gear.svg";
@@ -4512,6 +5650,7 @@ $("gear").addEventListener("click",()=>{
   $("filesBtn").style.display = open ? "none" : "";
   if($("bulkHeatBtn")) $("bulkHeatBtn").style.display = open ? "none" : "";
   if($("maintBtn")) $("maintBtn").style.display = open ? "none" : "";
+  if($("healthBtn")) $("healthBtn").style.display = open ? "none" : "";
   if($("queueBtn")) $("queueBtn").style.display = "none"; // re-shown by applyRoleUI() below once Settings' own state is settled
   if(open){
     document.body.classList.remove("showfiles"); loadGroupsUI().then(loadUsersUI); loadQueueManagementUI();
@@ -4758,7 +5897,7 @@ async function loadFirmware(){
     wrap.innerHTML=rows.map(r=>{
       if(r.skipped){
         const why=r.online?("skipped — "+(r.reason||"busy")):("offline"+(r.reason?" — "+r.reason:""));
-        return `<div class="fwrow"><input type="checkbox" class="fwchk" id="fwchk-${r.id}" data-id="${r.id}" disabled>`+
+        return `<div class="fwrow"><input type="checkbox" class="fwchk checkbox-input" id="fwchk-${r.id}" data-id="${r.id}" disabled>`+
                `<div><label for="fwchk-${r.id}" class="fwline1"><b>${esc(r.name)}</b></label><div class="fwskip">${esc(why)}</div></div></div>`;
       }
       // All MCUs usually share one version — collapse to one entry. If any
@@ -4779,7 +5918,7 @@ async function loadFirmware(){
           outliers.map(m=>` · <span class="fwdiff">⚠ ${esc(m.name)}: ${esc(m.version||"—")}</span>`).join("");
       }
       const fwTxt="FW "+(r.firmware||"—")+(r.software&&r.software!==r.firmware?" / SW "+r.software:"")+" · Klipper "+(r.klipper||"—");
-      return `<div class="fwrow"><input type="checkbox" class="fwchk" id="fwchk-${r.id}" data-id="${r.id}">`+
+      return `<div class="fwrow"><input type="checkbox" class="fwchk checkbox-input" id="fwchk-${r.id}" data-id="${r.id}">`+
         `<div><label for="fwchk-${r.id}" class="fwline1"><b>${esc(r.name)}</b><span>${esc(fwTxt)}</span></label>`+
         `<div class="fwline2">${mcuHtml}${r.os?esc(" · "+r.os):""}</div></div></div>`;
     }).join("");
@@ -5070,7 +6209,10 @@ function generalTabValues(){
   return {
     folder:$("setFolder").value.trim(), refresh:$("setRefresh").value, currency:$("setCurrency").value,
     filamentCost:$("setFilamentCost").value, electricityRate:$("setElectricityRate").value,
-    allowMapping:$("setAllowMapping").checked, suggestMatching:$("setSuggestMatching").checked
+    allowMapping:$("setAllowMapping").checked, suggestMatching:$("setSuggestMatching").checked,
+    logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(),
+    logsRetentionDays:$("setLogsRetentionDays").value, cameraRetentionDays:$("setCameraRetentionDays").value,
+    gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), gcodeSyncRetentionDays:$("setGcodeSyncRetentionDays").value
   };
 }
 function setGeneralTabValues(v){
@@ -5081,6 +6223,12 @@ function setGeneralTabValues(v){
   $("setElectricityRate").value=v.electricityRate;
   $("setAllowMapping").checked=v.allowMapping;
   $("setSuggestMatching").checked=v.suggestMatching;
+  $("setLogsFolder").value=v.logsFolder||"";
+  $("setCameraFolder").value=v.cameraFolder||"";
+  $("setLogsRetentionDays").value=v.logsRetentionDays||"";
+  $("setCameraRetentionDays").value=v.cameraRetentionDays||"";
+  $("setGcodeSyncFolder").value=v.gcodeSyncFolder||"";
+  $("setGcodeSyncRetentionDays").value=v.gcodeSyncRetentionDays||"";
   syncAutoMatchNesting();
 }
 registerSettingsTab("general",generalTabValues,setGeneralTabValues);
@@ -5127,6 +6275,12 @@ async function loadConfigUI(){
     const c=await getJSON("/api/config");
     $("setFolder").value=c.gcodeFolder||"";
     scheduleFolderCheck();
+    $("setLogsFolder").value=c.logsFolder||"";
+    $("setCameraFolder").value=c.cameraFolder||"";
+    $("setLogsRetentionDays").value=c.logsRetentionDays||"";
+    $("setCameraRetentionDays").value=c.cameraRetentionDays||"";
+    $("setGcodeSyncFolder").value=c.gcodeSyncFolder||"";
+    $("setGcodeSyncRetentionDays").value=c.gcodeSyncRetentionDays||"";
     $("setRefresh").value=c.refreshInterval||2;
     CURRENCY=c.currency||"$";
     // The select is a fixed preset list — if a previously-saved currency
@@ -5268,6 +6422,23 @@ function switchHtml(id,checked,label,description,disabled){
     `<input type="checkbox" role="switch" id="${esc(id)}" class="switch-input"${checked?' checked':''}${disabled?' disabled':''}>`+
     `<span class="switch-text"><span class="switch-label">${esc(label)}</span>`+
     (description?`<span class="switch-desc">${esc(description)}</span>`:'')+
+    `</span>`+
+  `</label>`;
+}
+// ---- Checkbox: reusable multi-select control ----
+// Same shape as switchHtml above (real <input type="checkbox">, styled
+// directly, whole row is the <label>) — a Switch means a setting that's on
+// or off by itself; a Checkbox means this item is one of several being
+// picked for an action. `attrs` is a raw extra-attributes string (e.g.
+// `data-id="3"`) for call sites that need to identify which row this is on
+// change. `indeterminate` isn't a param — there's no HTML attribute for it,
+// only a DOM property — set `el.indeterminate = true` on the rendered
+// element after insertion, same as any other imperative DOM write.
+function checkboxHtml(id,checked,label,description,disabled,attrs){
+  return `<label class="checkbox-row${disabled?' disabled':''}" for="${esc(id)}">`+
+    `<input type="checkbox" id="${esc(id)}" class="checkbox-input"${checked?' checked':''}${disabled?' disabled':''}${attrs?' '+attrs:''}>`+
+    `<span class="checkbox-text"><span class="checkbox-label">${esc(label)}</span>`+
+    (description?`<span class="checkbox-desc">${esc(description)}</span>`:'')+
     `</span>`+
   `</label>`;
 }
@@ -5475,7 +6646,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     `</div>`+
     `<div class="maint-row2" style="margin-top:10px">`+
     `<div class="maint-field"><label class="fl">Brand</label><input class="field pbrand" disabled value="${esc(brandLabel)}"></div>`+
-    `<div class="maint-field"><label class="fl">Tags <span class="hint">comma-separated — e.g. filter Camera View, or /red/ to tint the card</span></label><input class="field ptags" maxlength="200" placeholder="e.g. garage, /red/" value="${esc((opts.tags||[]).join(", "))}"></div>`+
+    `<div class="maint-field"><label class="fl">Tags <span class="hint">comma-separated — e.g. filter Camera View, or /red/ to tint the card</span></label><div class="tags-field-row"><input class="field ptags" maxlength="200" placeholder="e.g. garage, /red/" value="${esc((opts.tags||[]).join(", "))}"><span class="tags-row-swatch">${colorTagSwatchHtml((opts.tags||[]).join(", "))}</span></div></div>`+
     `</div>`+
     `</div>`+
 
@@ -5605,6 +6776,8 @@ function addPrinterRow(name,url,opts,autoOpen){
   nameEl.addEventListener("input",()=>{ sumName.textContent=nameEl.value.trim()||"New Printer"; });
   urlEl.addEventListener("input",()=>{ sumIp.textContent=urlEl.value.replace(/^https?:\/\//,"").replace(/\/+$/,"")||"—"; });
   wireSecretField(row.querySelector(".secret-field"));
+  const tagsEl=row.querySelector(".ptags"), tagsSwatch=row.querySelector(".tags-row-swatch");
+  if(tagsEl&&tagsSwatch) tagsEl.addEventListener("input",()=>{ tagsSwatch.innerHTML=colorTagSwatchHtml(tagsEl.value); });
 
   // Overflow menu — stop the click from also toggling the <details> open/closed.
   const menuBtn=row.querySelector(".prow-menu-btn"), menu=row.querySelector(".prow-menu");
@@ -5908,7 +7081,7 @@ function checkedGroupIds(){
 function renderGroupsCheckList(selected){
   const sel=new Set(selected||[]);
   $("groupsCheckList").innerHTML = GROUPS.length
-    ? GROUPS.map(g=>`<label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" class="groups-chk" value="${esc(g.id)}" ${sel.has(g.id)?"checked":""}> ${esc(g.name)}</label>`).join("")
+    ? GROUPS.map(g=>`<label class="checkbox-row" for="groupschk-${esc(g.id)}"><input type="checkbox" id="groupschk-${esc(g.id)}" class="groups-chk checkbox-input" value="${esc(g.id)}" ${sel.has(g.id)?"checked":""}><span class="checkbox-text"><span class="checkbox-label">${esc(g.name)}</span></span></label>`).join("")
     : `<div class="settings-help">No groups yet — add one below.</div>`;
 }
 function renderGroupsManageList(){
@@ -5959,7 +7132,7 @@ function renderGroupsManageList(){
 function groupsChecklistHtml(selected){
   const sel=new Set((selected&&selected.length)?selected:[GROUP_EVERYONE_ID]);
   if(!GROUPS.length) return `<div class="settings-help">No groups yet — add one from the Users tab.</div>`;
-  return GROUPS.map(g=>`<label style="display:inline-flex;align-items:center;gap:5px;margin:2px 14px 2px 0;cursor:pointer"><input type="checkbox" class="pgroups-chk" value="${esc(g.id)}" ${sel.has(g.id)?"checked":""}> ${esc(g.name)}</label>`).join("");
+  return GROUPS.map(g=>`<label class="checkbox-row" style="display:inline-flex;margin:2px 14px 2px 0"><input type="checkbox" class="pgroups-chk checkbox-input" value="${esc(g.id)}" ${sel.has(g.id)?"checked":""}><span class="checkbox-text"><span class="checkbox-label">${esc(g.name)}</span></span></label>`).join("");
 }
 
 function gatherPrinters(){
@@ -6089,7 +7262,10 @@ async function saveConfig(){
   CAM_STAGGER=$("setCameraStagger").checked;
   ALT_DISPLAY=$("setAltDisplay").value;
   CURRENCY=$("setCurrency").value.trim()||"$";
-  const body={ gcodeFolder:$("setFolder").value.trim(), refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, defaultView:$("setDefaultView").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
+  const logsRetentionDays=parseInt($("setLogsRetentionDays").value,10);
+  const cameraRetentionDays=parseInt($("setCameraRetentionDays").value,10);
+  const gcodeSyncRetentionDays=parseInt($("setGcodeSyncRetentionDays").value,10);
+  const body={ gcodeFolder:$("setFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:tn||undefined, defaultView:$("setDefaultView").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     otp:{

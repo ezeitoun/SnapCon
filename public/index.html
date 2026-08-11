@@ -93,6 +93,7 @@
       <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
       <button class="gear" id="bulkHeatBtn" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" alt="Heat"></button>
       <button class="gear" id="maintBtn" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" alt="Maintenance"></button>
+      <button class="gear" id="healthBtn" title="Printer health" aria-label="Printer health"><img src="/health.svg" class="topbar-icon" alt="Printer health"><span class="health-badge" id="healthBadge" style="display:none"></span></button>
       <!-- Placeholder icon — a real one is coming later; shown only when Queue Management is enabled. -->
       <button class="gear" id="queueBtn" title="Queue Management" style="display:none">
         <svg width="22.1" height="22.1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topbar-icon"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="12" height="4" rx="1"/></svg>
@@ -132,6 +133,57 @@
                 <button class="btn ghost" id="browseBtn" style="flex:none;white-space:nowrap">Browse…</button>
               </div>
               <div class="settings-help" id="folderCheckStatus"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Destinations for the Health page's "Sync logs"/"Sync camera"
+             buttons (still disabled — see those buttons' titles). Each
+             printer gets its own subfolder here, named after the printer.
+             Retention is per-folder on purpose (logs and camera/timelapse
+             have very different natural lifetimes) and only ever deletes a
+             file from the PRINTER after it's confirmed synced here first —
+             never by age alone. -->
+        <div class="settings-section">
+          <div class="settings-section-title">Printer sync</div>
+          <div class="settings-section-desc">Where synced printer logs, camera/timelapse, and g-code files land on this SnapCon host. Each printer gets its own subfolder here, named after the printer.</div>
+          <div class="settings-section-body">
+            <div class="settings-field">
+              <label class="settings-label" for="setLogsFolder">Logs folder</label>
+              <div style="display:flex;gap:8px">
+                <input class="field" id="setLogsFolder" placeholder="e.g. C:/Users/you/snapcon-logs" style="flex:1" />
+                <button class="btn ghost" id="browseLogsBtn" style="flex:none;white-space:nowrap">Browse…</button>
+              </div>
+              <div class="settings-field" style="margin-top:10px">
+                <label class="settings-label" for="setLogsRetentionDays">Delete from printer after sync, older than (days)</label>
+                <input class="field" id="setLogsRetentionDays" type="number" min="1" step="1" placeholder="Never" style="max-width:140px" />
+                <div class="settings-help">Only files already confirmed synced to the folder above are ever deleted from the printer. Leave blank to never delete.</div>
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top:20px">
+              <label class="settings-label" for="setCameraFolder">Camera folder</label>
+              <div style="display:flex;gap:8px">
+                <input class="field" id="setCameraFolder" placeholder="e.g. C:/Users/you/snapcon-camera" style="flex:1" />
+                <button class="btn ghost" id="browseCameraBtn" style="flex:none;white-space:nowrap">Browse…</button>
+              </div>
+              <div class="settings-field" style="margin-top:10px">
+                <label class="settings-label" for="setCameraRetentionDays">Delete from printer after sync, older than (days)</label>
+                <input class="field" id="setCameraRetentionDays" type="number" min="1" step="1" placeholder="Never" style="max-width:140px" />
+                <div class="settings-help">Only files already confirmed synced to the folder above are ever deleted from the printer. Leave blank to never delete.</div>
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top:20px">
+              <label class="settings-label" for="setGcodeSyncFolder">Synced g-code folder</label>
+              <div style="display:flex;gap:8px">
+                <input class="field" id="setGcodeSyncFolder" placeholder="e.g. C:/Users/you/snapcon-gcode-archive" style="flex:1" />
+                <button class="btn ghost" id="browseGcodeSyncBtn" style="flex:none;white-space:nowrap">Browse…</button>
+              </div>
+              <div class="settings-help">Not the same as the G-code folder under Files above — that's where SnapCon reads files from to offer for printing. This is a separate destination for archiving each printer's own g-code storage.</div>
+              <div class="settings-field" style="margin-top:10px">
+                <label class="settings-label" for="setGcodeSyncRetentionDays">Delete from printer after sync, older than (days)</label>
+                <input class="field" id="setGcodeSyncRetentionDays" type="number" min="1" step="1" placeholder="Never" style="max-width:140px" />
+                <div class="settings-help">Only files already confirmed synced to the folder above are ever deleted from the printer. Leave blank to never delete.</div>
+              </div>
             </div>
           </div>
         </div>
@@ -601,6 +653,48 @@
          layered on top of it. Content (sticky header, stat cards, Queue
          Status, Fleet Status, per-printer controls) is rendered by
          openQueueDashboard()/renderQueueDashboard() in app.js. -->
+    <!-- Health page: fifth mutually-exclusive full-page view (same show/hide
+         idiom as #queueDashboard above). No auto-polling — everything is
+         fetched once on open/printer-switch or via the Refresh button.
+         Content rendered by openHealthPage()/renderHealthPage() in app.js. -->
+    <div class="health-page" id="healthPage">
+      <div class="health-page-hdr">
+        <div class="health-picker" id="healthPicker"></div>
+        <span class="health-updated-at" id="healthUpdatedAt"></span>
+        <button class="btn ghost" id="healthRefreshBtn" title="Re-fetch this printer's health data">Refresh</button>
+      </div>
+      <div id="healthBody"></div>
+      <!-- Inline service form (not a modal, per spec) — one static instance,
+           shown/hidden and re-populated by openHealthServiceForm()/
+           closeHealthServiceForm() in app.js. Reuses the Maintenance modal's
+           own field-group classes (.maint-field/.maint-row2/.fl/.hint/
+           .maint-readonly/.maint-offline-check) for visual consistency. -->
+      <div class="health-card" id="healthServiceForm" style="display:none">
+        <div class="health-card-hdr">Log service</div>
+        <div class="maint-field"><label class="fl">Component</label>
+          <div class="health-svc-chips" id="healthSvcChips"></div>
+          <input class="field" id="healthSvcComponentOther" placeholder="Or type a new component" style="margin-top:6px">
+        </div>
+        <div class="maint-row2" style="margin-top:10px">
+          <div class="maint-field"><label class="fl">Date</label><input type="date" class="field" id="healthSvcDate"></div>
+          <div class="maint-field"><label class="fl">Remind me</label><select class="field" id="healthSvcFrequency"><option value="none">Don't remind</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option></select></div>
+        </div>
+        <div class="maint-field" style="margin-top:10px"><label class="fl">Next due</label><div class="field maint-readonly" id="healthSvcNextDue">—</div><span class="hint" id="healthSvcNextHint"></span></div>
+        <div class="maint-row2" style="margin-top:10px">
+          <div class="maint-field"><label class="fl">Cost</label><input type="number" class="field" id="healthSvcCost" step="0.01" value="0.00"></div>
+          <div class="maint-field"><label class="fl">Part or supplier (optional)</label><input class="field" id="healthSvcPart"></div>
+        </div>
+        <div class="maint-field" style="margin-top:10px"><label class="fl">Notes</label><textarea class="field" id="healthSvcComment"></textarea></div>
+        <label class="maint-offline-check" style="margin-top:10px"><input type="checkbox" id="healthSvcOffline"> Take printer offline</label>
+        <div class="settings-help" style="margin-top:6px">Printer hours at time of service: <span id="healthSvcHours">—</span></div>
+        <div class="pstatus" id="healthSvcStatus"></div>
+        <div class="unload-footer" style="margin-top:12px">
+          <button type="button" class="btn ghost" id="healthSvcCancel">Cancel</button>
+          <button type="button" class="btn primary" id="healthSvcSave" disabled>Save</button>
+        </div>
+      </div>
+    </div>
+
     <div class="queue-dashboard" id="queueDashboard">
       <div class="queue-stat-cards">
         <div class="queue-stat-card queue-stat-util"><span class="queue-stat-value" id="queueUtilPct">0%</span><span class="queue-stat-label">Fleet Utilization</span><span class="queue-stat-frac" id="queueUtilFrac">(0/0)</span></div>
@@ -637,23 +731,26 @@
     <div class="sechead"><h2>Fleet</h2><span class="count" id="fleetcount"></span></div>
     <div id="fleet-wrap">
       <div class="camtoolbar" id="camViewBar">
-        <div class="camtabs" id="camTabs">
-          <button data-camtab="all">All</button>
-          <button data-camtab="printing">Printing</button>
-          <button data-camtab="attention">Attention Needed</button>
-          <button data-camtab="idle">Idle</button>
-          <button data-camtab="offline">Offline</button>
-        </div>
         <div class="cambar">
-          <select id="camTagFilter"><option value="">All tags</option></select>
-          <label class="camselall"><input type="checkbox" id="camSelectAll"> Select All</label>
-          <span id="camSelCount">0 selected</span>
-          <button id="camBulkPause" class="btn ghost" disabled>Pause</button>
-          <button id="camBulkResume" class="btn ghost" disabled>Resume</button>
-          <button id="camBulkCancel" class="btn ghost" disabled>Cancel</button>
-          <button id="camEditTags" class="btn ghost">Edit Tags</button>
-          <span id="camBulkMsg" class="pstatus" aria-live="polite"></span>
+          <div class="camtabs" id="camTabs">
+            <button data-camtab="all">All</button>
+            <button data-camtab="printing">Printing</button>
+            <button data-camtab="attention">Attention Needed</button>
+            <button data-camtab="idle">Idle</button>
+            <button data-camtab="offline">Offline</button>
+            <span class="cambar-divider"></span>
+            <select id="camTagFilter"><option value="">All tags</option></select>
+          </div>
+          <div class="cambar-actions">
+            <label class="camselall" for="camSelectAll">
+              <input type="checkbox" id="camSelectAll" class="checkbox-input">
+              <span id="camSelCount">Select all</span>
+            </label>
+            <span id="camBulkActions"></span>
+            <button id="camEditTags" class="btn ghost">Edit Tags</button>
+          </div>
         </div>
+        <span id="camBulkMsg" class="pstatus" aria-live="polite"></span>
       </div>
       <div class="fleet" id="fleet"></div>
     </div>
@@ -689,74 +786,94 @@
     </div>
   </div>
 
+  <!-- Small floating menu anchored to a loaded spool: Unload / Change Color.
+       An empty head slot never opens this at all — nothing to act on. -->
   <div class="modal" id="unloadmodal">
-    <div class="modalbox" style="text-align:center;max-width:360px">
-      <div class="modalhdr"><span id="unloadtitle">Unload filament</span><button class="modalx" id="unloadx">✕</button></div>
-      <p style="color:var(--ink-dim);font-size:13px;margin:12px 0 18px" id="unloadmsg"></p>
-      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-        <button class="btn primary" id="unloadYes">Unload</button>
-        <button class="btn ghost" id="unloadNo">Cancel</button>
-        <button class="btn ghost" id="unloadAll">Unload All</button>
-        <button class="btn ghost" id="unloadColorBtn" style="display:none">Color</button>
-        <button class="btn ghost" id="unloadSpoolColorBtn" style="display:none">Change Color</button>
-      </div>
-      <div id="unloadColorPicker" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line-soft)">
-        <div id="unloadColorGrid" class="color-grid" style="display:none"></div>
-      </div>
-      <div class="pstatus" aria-live="polite" id="unloadStatus" style="margin-top:10px"></div>
-    </div>
-  </div>
-
-  <div class="modal" id="spoolColorModal">
-    <div class="modalbox" style="max-width:400px">
-      <div class="modalhdr"><span>Spool color</span><button class="modalx" id="sccX">✕</button></div>
-      <div class="scc-subtitle" id="sccSubtitle"></div>
-      <div class="scc-note">Used for head matching when sending prints. Written to the printer itself — an official Snapmaker RFID spool's color can't be changed.</div>
-
-      <div class="scc-compare">
-        <div class="scc-now-col">
-          <div class="scc-swatch-sm" id="sccNowSwatch"></div>
-          <div class="scc-compare-label">Now</div>
+    <div class="modalbox unload-box">
+      <div class="unload-hdr">
+        <div>
+          <div class="unload-title" id="unloadtitle">Spool on T3</div>
+          <div class="unload-subtitle" id="unloadSubtitle"></div>
         </div>
-        <div class="scc-arrow">→</div>
-        <div class="scc-pending-col">
-          <div class="scc-swatch-lg" id="sccPendingSwatch"></div>
-          <div class="scc-pending-text">
-            <div class="scc-pending-name" id="sccPendingName"></div>
-            <div class="scc-pending-hex" id="sccPendingHex"></div>
+        <button class="modalx" id="unloadx">✕</button>
+      </div>
+
+      <!-- Unload mode: default view on open. -->
+      <div id="unloadModeBody">
+        <div class="unload-spool-card">
+          <div class="unload-spool-row">
+            <div class="unload-spool-swatch" id="unloadSwatch"></div>
+            <div class="unload-spool-info">
+              <div class="unload-spool-line1" id="unloadLine1"></div>
+            </div>
+            <button type="button" class="btn ghost btn-sm" id="unloadEditColorBtn" style="display:none">Edit color</button>
+            <span class="unload-rfid-badge" id="unloadRfidBadge" style="display:none">RFID</span>
+          </div>
+        </div>
+
+        <p class="unload-rfid-note" id="unloadRfidNote" style="display:none"></p>
+        <div class="unload-note unload-print-warning" id="unloadPrintWarning" style="display:none"></div>
+        <p class="unload-confirm-msg" id="unloadmsg"></p>
+
+        <label class="unload-all-row" id="unloadAllRow" style="display:none">
+          <input type="checkbox" id="unloadAllCheck" class="checkbox-input">
+          <span id="unloadAllLabel"></span>
+        </label>
+      </div>
+
+      <!-- Color mode: entered via "Edit color", replaces the unload body
+           entirely — no unload controls visible while picking a color. -->
+      <div id="unloadColorMode" style="display:none">
+        <div class="unload-color-helper">Used for head matching when sending prints. Written to the printer itself.</div>
+        <div class="unload-compare">
+          <div class="unload-compare-now">
+            <div class="unload-compare-swatch-sm" id="unloadNowSwatch"></div>
+            <div class="unload-compare-label">Now</div>
+          </div>
+          <div class="unload-compare-arrow">→</div>
+          <div class="unload-compare-pending">
+            <div class="unload-compare-swatch-lg" id="unloadPendingSwatch"></div>
+            <div class="unload-compare-text">
+              <div class="unload-compare-name" id="unloadPendingName"></div>
+              <div class="unload-compare-hex" id="unloadPendingHex"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="scc-tabs" id="unloadColorTabs">
+          <button type="button" class="scc-tab active" data-scctab="palette">Palette</button>
+          <button type="button" class="scc-tab" data-scctab="custom">Custom</button>
+        </div>
+        <div class="scc-tabpane" id="unloadPalettePane">
+          <div class="color-grid scc-grid" id="unloadPaletteGrid"></div>
+          <div class="scc-recent-hdr" id="unloadRecentHdr" style="display:none">Recent on this fleet</div>
+          <div class="color-grid scc-grid" id="unloadRecentGrid"></div>
+        </div>
+        <div class="scc-tabpane" id="unloadCustomPane" style="display:none">
+          <div class="unload-field-label">Hex</div>
+          <div class="scc-custom-row">
+            <input class="field scc-hex-field" id="unloadHexField" placeholder="#RRGGBB" maxlength="7">
+            <input type="color" id="unloadColorInput" class="scc-native-color" title="Pick with the OS color picker">
+            <button type="button" class="btn ghost scc-eyedropper" id="unloadEyedropper" style="display:none" title="Pick a color from anywhere on screen">👁</button>
+          </div>
+          <div class="scc-hex-error" id="unloadHexError" style="display:none"></div>
+          <div class="unload-field-label">RGB</div>
+          <div class="scc-rgb-row">
+            <label>R<input type="number" min="0" max="255" step="1" id="unloadR"></label>
+            <label>G<input type="number" min="0" max="255" step="1" id="unloadG"></label>
+            <label>B<input type="number" min="0" max="255" step="1" id="unloadB"></label>
           </div>
         </div>
       </div>
 
-      <div class="scc-tabs">
-        <button type="button" class="scc-tab active" data-scctab="palette">Palette</button>
-        <button type="button" class="scc-tab" data-scctab="custom">Custom</button>
-      </div>
+      <div class="pstatus" aria-live="polite" id="unloadStatus"></div>
 
-      <div class="scc-tabpane" id="sccPalettePane">
-        <div class="color-grid scc-grid" id="sccPaletteGrid"></div>
-        <div class="scc-recent-hdr" id="sccRecentHdr" style="display:none">Recent on this fleet</div>
-        <div class="color-grid scc-grid" id="sccRecentGrid"></div>
-      </div>
-
-      <div class="scc-tabpane" id="sccCustomPane" style="display:none">
-        <div class="scc-custom-row">
-          <input type="color" id="sccColorInput" class="scc-native-color" title="Pick with the OS color picker">
-          <input class="field scc-hex-field" id="sccHexField" placeholder="#RRGGBB" maxlength="7">
-          <button type="button" class="btn ghost scc-eyedropper" id="sccEyedropper" style="display:none" title="Pick a color from anywhere on screen">👁</button>
+      <div class="unload-footer">
+        <button class="btn ghost" id="unloadNo">Cancel</button>
+        <div class="unload-footer-right">
+          <button class="btn primary" id="unloadSaveColorBtn" style="display:none" disabled>Apply</button>
+          <button class="btn danger-filled" id="unloadYes">Unload</button>
         </div>
-        <div class="scc-hex-error" id="sccHexError" style="display:none"></div>
-        <div class="scc-rgb-row">
-          <label>R<input type="number" min="0" max="255" step="1" id="sccR"></label>
-          <label>G<input type="number" min="0" max="255" step="1" id="sccG"></label>
-          <label>B<input type="number" min="0" max="255" step="1" id="sccB"></label>
-        </div>
-      </div>
-
-      <div class="send-footer">
-        <span class="send-footer-status" id="sccStatus"></span>
-        <button class="btn-base btn-cancel" id="sccCancel">Cancel</button>
-        <button class="btn-base btn-start" id="sccApply">Apply</button>
       </div>
     </div>
   </div>
@@ -812,7 +929,7 @@
       <div class="modalhdr"><span>Heat multiple printers</span><button class="modalx" id="bulkheatx">✕</button></div>
 
       <div class="bulkheat-toolbar">
-        <label class="bulkheat-selectall"><input type="checkbox" id="bulkheatSelectAll"> Select all</label>
+        <label class="bulkheat-selectall"><input type="checkbox" id="bulkheatSelectAll" class="checkbox-input"> Select all</label>
         <span class="bulkheat-count" id="bulkheatCount">0 of 0 selected</span>
       </div>
       <div class="bulkheat-list" id="bulkheatList"></div>

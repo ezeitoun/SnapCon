@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14" id="Activity-Pulse--SnapCon" height="14" width="14">
+  <desc>
+    Activity/pulse line — printer health
+  </desc>
+  <path id="pulse" d="M0.5 7h2.6l1.4 -4.6 2 9.2 1.6 -6.6 1.1 2h4.3" fill="none" stroke="#8fbffa" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>

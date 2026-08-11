@@ -47,6 +47,8 @@ services:
       # writes -wal/-shm sidecar files alongside it, which a single-file mount
       # would leave behind (and silently lose) on every container recreate.
       - ./audit-data:/app/audit-data                 # Settings > Logs audit trail
+      # Same WAL-sidecar-files reasoning as audit-data above.
+      - ./sync-data:/app/sync-data                   # Logs/Camera sync history (dedup + retention records)
       # A directory mount, not a single file — Queue Management's
       # queue-data.json is written via a temp-file-then-rename-with-backup
       # sequence (crash-safe atomic replace), which only works reliably when

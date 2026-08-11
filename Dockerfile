@@ -22,6 +22,7 @@ COPY server.js parser.js auth.js groupAccess.js ./
 COPY connectors ./connectors
 COPY remote-access ./remote-access
 COPY audit ./audit
+COPY sync ./sync
 COPY queue ./queue
 COPY public ./public
 

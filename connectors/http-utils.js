@@ -4,7 +4,8 @@
 // etc.) simply won't require this file.
 const fs = require("fs");
 const http = require("http");
-const { Transform } = require("stream");
+const path = require("path");
+const { Transform, Readable } = require("stream");
 const { parseGcodeMap, normHex } = require("../parser");
 
 const baseUrl = p => String(p.url).replace(/\/+$/, "");
@@ -131,6 +132,81 @@ async function getThumbnail(p, file) {
   const r = await fetchTimeout(url, 5000);
   if (!r.ok) { const e = new Error("HTTP " + r.status); e.status = r.status; throw e; }
   return { contentType: r.headers.get("content-type") || "image/png", buffer: Buffer.from(await r.arrayBuffer()) };
+}
+
+// ---- File sync (Logs/Camera Folder → SnapCon host) ----
+// Plain, unmodified Moonraker file-management endpoints (confirmed against
+// Moonraker's own web_api.md, not U1-specific) — generic across every
+// Klipper-family connector, so these live here rather than per-connector.
+// `list` recurses (unlike the Storage card's own top-level-only
+// /server/files/directory calls) — a relative path can include subdirs.
+async function queryRemoteFileList(base, root) {
+  const { ok, status, json } = await fetchJSONTimeout(base + "/server/files/list?root=" + encodeURIComponent(root), 8000);
+  if (!ok) throw new Error("Moonraker " + status);
+  return json.result || [];
+}
+function encodeRemotePath(relPath) {
+  return String(relPath).split("/").map(encodeURIComponent).join("/");
+}
+// Streams to a `.part` file, tracks bytes received, validates against both
+// the HTTP Content-Length and the size the file-listing reported (when
+// known) before the atomic rename — a partial/corrupt transfer never
+// replaces a good file, and never gets left behind under the final name.
+// The timeout is an IDLE timeout (reset on every chunk), not a total-time
+// cap — a large-but-healthy transfer over a slow LAN link shouldn't be
+// killed just for taking a while.
+async function downloadRemoteFile(base, root, relPath, destPath, expectedSize, idleTimeoutMs = 30000) {
+  const url = base + "/server/files/" + encodeURIComponent(root) + "/" + encodeRemotePath(relPath);
+  const ctrl = new AbortController();
+  let timer = setTimeout(() => ctrl.abort(), idleTimeoutMs);
+  const bump = () => { clearTimeout(timer); timer = setTimeout(() => ctrl.abort(), idleTimeoutMs); };
+  const tmp = destPath + ".part";
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    bump();
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const contentLength = Number(res.headers.get("content-length")) || 0;
+    await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
+    await fs.promises.rm(tmp, { force: true });
+    const out = fs.createWriteStream(tmp);
+    let received = 0;
+    await new Promise((resolve, reject) => {
+      const nodeStream = Readable.fromWeb(res.body);
+      nodeStream.on("data", chunk => { received += chunk.length; bump(); });
+      nodeStream.on("error", reject);
+      out.on("error", reject);
+      out.on("finish", resolve);
+      nodeStream.pipe(out);
+    });
+    if (expectedSize && received !== expectedSize) throw new Error(`Incomplete download: expected ${expectedSize} bytes, received ${received}`);
+    if (contentLength && received !== contentLength) throw new Error(`Incomplete download: expected ${contentLength} bytes, received ${received}`);
+    await fs.promises.rename(tmp, destPath);
+    return { size: received };
+  } catch (e) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+// The set of gcode filenames that appear in at least one print job since
+// `sinceSec` (a UNIX timestamp) — confirmed live that Moonraker's history
+// `filename` field is the exact same string as the file listing's `path`
+// (both plain root-relative paths), so this set can be checked directly
+// against fetchStorageSection's gcodes.fileNames with no translation.
+// Moonraker filters server-side via `since=`, so this stays cheap regardless
+// of how far back the printer's full history goes — confirmed live against
+// a printer with 233 total historical jobs, a 7-day window only returned 5.
+async function queryRecentlyPrintedFiles(base, sinceSec) {
+  const { ok, status, json } = await fetchJSONTimeout(base + "/server/history/list?since=" + sinceSec + "&limit=500&order=desc", 8000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const jobs = (json.result || {}).jobs || [];
+  return new Set(jobs.map(j => j.filename));
+}
+async function deleteRemoteFile(base, root, relPath) {
+  const res = await fetchTimeout(base + "/server/files/" + encodeURIComponent(root) + "/" + encodeRemotePath(relPath), 8000, { method: "DELETE" });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return true;
 }
 
 // Fallback slicer-comment parsing for gcode Moonraker's own scanner didn't
@@ -282,6 +358,208 @@ async function queryFirmwareInfo(p, st) {
   }
 }
 
+// ---- Health diagnostics: raw Moonraker/Klipper values only — no derived
+// scores, no synthetic "health %"/"load %"/"drift %". Six independent
+// sections, each wrapped so one section's failure/timeout never takes the
+// others down with it (a slow /server/files/directory must not blank out
+// MCU stats). `st` is an already-resolved probe() result, same convention
+// as queryFirmwareInfo above — no reason to probe twice. Unlike
+// queryFirmwareInfo (which only runs when the printer is idle), this only
+// requires `st.online`: MCU retransmits/throttle state matter most while a
+// print is actually running. ----
+async function healthSection(promise) {
+  try { return { available: true, ...(await promise) }; }
+  catch (e) { return { available: false, reason: e.message }; }
+}
+async function fetchSystemSection(base) {
+  const { ok, status, json } = await fetchJSONTimeout(base + "/machine/proc_stats", 5000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const r = json.result || {};
+  return {
+    throttledState: r.throttled_state ?? null,
+    cpuTemp: typeof r.cpu_temp === "number" ? r.cpu_temp : null,
+    cpuUsage: (r.system_cpu_usage && typeof r.system_cpu_usage.cpu === "number") ? r.system_cpu_usage.cpu : null,
+    uptimeSec: typeof r.system_uptime === "number" ? r.system_uptime : null,
+    memory: r.system_memory || null
+  };
+}
+// Discovers whichever "mcu"/"mcu e0".."e3" objects this printer actually
+// reports (same list-then-query approach queryFirmwareInfo already uses)
+// and queries only those — a 2-toolhead unit simply returns 3 entries, not
+// a fixed 4-entry shape with holes. `available:false` is reserved for the
+// query itself failing, never for a printer having fewer MCUs than another.
+async function fetchMcuSection(base, mcuNames) {
+  if (!mcuNames.length) return { list: [] };
+  const { ok, status, json } = await fetchJSONTimeout(base + "/printer/objects/query?" + mcuNames.map(encodeURIComponent).join("&"), 5000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const stq = (json.result || {}).status || {};
+  return {
+    list: mcuNames.map(n => {
+      const s = stq[n] || {};
+      const ls = s.last_stats || {};
+      return {
+        name: n === "mcu" ? "mainboard" : "toolhead " + n.replace(/^mcu\s*/, ""),
+        bytesRetransmit: ls.bytes_retransmit ?? null,
+        bytesInvalid: ls.bytes_invalid ?? null,
+        // bytesWrite is the denominator for a retransmit RATE (retransmits
+        // per bytes actually sent) rather than a bare cumulative total —
+        // the total alone means nothing without knowing how much traffic
+        // it happened against.
+        bytesWrite: ls.bytes_write ?? null,
+        srtt: ls.srtt ?? null,
+        rttvar: ls.rttvar ?? null,
+        freq: ls.freq ?? null,
+        mcuTaskAvg: ls.mcu_task_avg ?? null,
+        mcuTaskStddev: ls.mcu_task_stddev ?? null
+      };
+    })
+  };
+}
+async function fetchHeatersSection(base, heaterNames) {
+  if (!heaterNames.length) return { list: [] };
+  const { ok, status, json } = await fetchJSONTimeout(base + "/printer/objects/query?" + heaterNames.map(encodeURIComponent).join("&"), 5000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const stq = (json.result || {}).status || {};
+  return {
+    list: heaterNames.map(n => ({
+      name: n,
+      temperature: (stq[n] || {}).temperature ?? null,
+      target: (stq[n] || {}).target ?? null,
+      power: (stq[n] || {}).power ?? null
+    }))
+  };
+}
+// Standard `fan`/`heater_fan <name>`/`fan_generic <name>` objects report
+// {speed, rpm} — speed is the commanded 0-1 duty, rpm is measured (or
+// missing/null on fans with no tachometer wired — confirmed real on a live
+// U1: heater_fan power_fan reports rpm:null). `rpm` absent from the
+// response entirely is treated the same as an explicit null — both mean
+// "not measurable," never "stopped". The U1's `purifier` object is a
+// different shape (inner_fan_rpm / exhaust_fan.speed / inner_fan.speed);
+// its inner fan is folded into the same list under its own name so callers
+// don't need to special-case it.
+async function fetchFansSection(base, fanNames, hasPurifier) {
+  const queryNames = hasPurifier ? [...fanNames, "purifier"] : fanNames;
+  if (!queryNames.length) return { list: [] };
+  const { ok, status, json } = await fetchJSONTimeout(base + "/printer/objects/query?" + queryNames.map(encodeURIComponent).join("&"), 5000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const stq = (json.result || {}).status || {};
+  const list = fanNames.map(n => {
+    const s = stq[n] || {};
+    return { name: n, speed: typeof s.speed === "number" ? s.speed : null, rpm: typeof s.rpm === "number" ? s.rpm : null };
+  });
+  if (hasPurifier) {
+    const s = stq.purifier || {};
+    list.push({ name: "purifier inner fan", speed: (s.inner_fan && typeof s.inner_fan.speed === "number") ? s.inner_fan.speed : null, rpm: typeof s.inner_fan_rpm === "number" ? s.inner_fan_rpm : null });
+    // Confirmed live (U1 Purple): exhaust_fan.speed can be 1 (fully
+    // commanded on) while inner_fan is completely off — these are two
+    // independent fans, not one. No rpm field exists for it anywhere in the
+    // purifier object (unlike inner_fan_rpm), so it's never measurable.
+    list.push({ name: "purifier exhaust fan", speed: (s.exhaust_fan && typeof s.exhaust_fan.speed === "number") ? s.exhaust_fan.speed : null, rpm: null });
+  }
+  return { list };
+}
+// disk_usage is filesystem-level and read from ONE root (gcodes, always
+// present) — never summed across roots, since gcodes/logs/camera commonly
+// share one underlying filesystem and summing their individually-reported
+// disk_usage would double/triple-count the same disk. Per-category sizes
+// are a separate, shallow (top-level files only, not recursed into
+// subdirectories) sum of each root's own listing — a directory's own
+// reported `size` is its inode/entry-table size, not a recursive content
+// total, so recursing would be needed for a fully accurate category figure;
+// out of scope here. "Other" folds in both that gap and any genuinely
+// shared-filesystem overlap — the caller renders one tooltip explaining both.
+async function fetchStorageSection(base, roots) {
+  const catNames = roots.filter(r => ["gcodes", "logs", "camera"].includes(r));
+  const dirs = await Promise.all(catNames.map(root =>
+    fetchJSONTimeout(base + "/server/files/directory?path=" + encodeURIComponent(root), 8000)
+      .then(r => ({ root, ...r }))
+  ));
+  const gcodesDir = dirs.find(d => d.root === "gcodes");
+  if (!gcodesDir || !gcodesDir.ok) throw new Error("Moonraker " + (gcodesDir ? gcodesDir.status : "no gcodes root"));
+  const diskUsage = (gcodesDir.json.result || {}).disk_usage || null;
+  if (!diskUsage) throw new Error("no disk_usage reported");
+  const categories = {};
+  for (const d of dirs) {
+    if (!d.ok) { categories[d.root] = { bytes: 0, fileCount: 0, available: false }; continue; }
+    const files = (d.json.result || {}).files || [];
+    categories[d.root] = {
+      bytes: files.reduce((sum, f) => sum + (f.size || 0), 0),
+      fileCount: files.length,
+      available: true,
+      // Only gcodes needs individual names — server.js cross-references
+      // these against print history to compute an "unused" count, then
+      // strips this field before the response reaches the browser (the
+      // client only ever needs the final count, not the raw file list).
+      // /server/files/directory's file objects use `filename`, NOT `path`
+      // (confirmed live — `path` is undefined here; `path` is only what
+      // /server/files/list and history's `filename` field use instead).
+      ...(d.root === "gcodes" ? { fileNames: files.map(f => f.filename) } : {})
+    };
+  }
+  const knownBytes = Object.values(categories).reduce((sum, c) => sum + (c.bytes || 0), 0);
+  const otherBytes = Math.max(0, diskUsage.used - knownBytes);
+  return { diskUsage, categories, otherBytes };
+}
+async function fetchHistorySection(base) {
+  const [totalsR, listR] = await Promise.all([
+    fetchJSONTimeout(base + "/server/history/totals", 5000),
+    fetchJSONTimeout(base + "/server/history/list?limit=20&order=desc", 5000)
+  ]);
+  if (!totalsR.ok) throw new Error("Moonraker " + totalsR.status);
+  const totals = (totalsR.json.result || {}).job_totals || {};
+  const jobs = listR.ok ? ((listR.json.result || {}).jobs || []) : [];
+  const completed = jobs.filter(j => j.status === "completed").length;
+  return {
+    totalJobs: totals.total_jobs ?? null,
+    totalPrintTime: totals.total_print_time ?? null,
+    totalFilamentUsed: totals.total_filament_used ?? null,
+    // "Recent" on purpose — a window over the last `sampleSize` jobs, never
+    // implied to be a lifetime figure. Caller labels this "Recent Success".
+    recent: { completed, sampleSize: jobs.length }
+  };
+}
+async function fetchFaultsSection(base, st) {
+  const { ok, status, json } = await fetchJSONTimeout(base + "/printer/objects/query?exception_manager", 5000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const list = (((json.result || {}).status || {}).exception_manager || {}).exceptions || [];
+  // The printer's OWN current error (already decoded onto the probe result
+  // by the caller's normal probe() path) is folded in as the most recent
+  // entry when present, so an active fault shows up here even if
+  // exception_manager's own history hasn't recorded it yet.
+  const current = st.errorCode || st.message ? [{ current: true, errorCode: st.errorCode || null, message: st.message || null }] : [];
+  return { list: [...current, ...list] };
+}
+async function queryHealth(p, st) {
+  if (!st.online) return { online: false, skipped: true, reason: st.error || "offline" };
+  const base = baseUrl(p);
+  let objectNames = [];
+  try {
+    const ol = await fetchJSONTimeout(base + "/printer/objects/list", 5000);
+    if (ol.ok) objectNames = (ol.json.result || {}).objects || [];
+  } catch { /* MCU/heater sections below degrade to their own unavailable state */ }
+  const mcuNames = objectNames.filter(o => /^mcu(\s|$)/.test(o));
+  const heaterNames = objectNames.filter(o => /^(extruder\d*|heater_bed)$/.test(o));
+  const fanNames = objectNames.filter(o => o === "fan" || /^heater_fan\s/.test(o) || /^fan_generic\s/.test(o));
+  const hasPurifier = objectNames.includes("purifier");
+  let roots = ["gcodes", "logs", "camera"];
+  try {
+    const rr = await fetchJSONTimeout(base + "/server/files/roots", 5000);
+    if (rr.ok) roots = (rr.json.result || []).map(r => r.name);
+  } catch { /* storage section below degrades to its own unavailable state */ }
+
+  const [system, mcus, heaters, fans, storage, history, faults] = await Promise.all([
+    healthSection(fetchSystemSection(base)),
+    healthSection(fetchMcuSection(base, mcuNames)),
+    healthSection(fetchHeatersSection(base, heaterNames)),
+    healthSection(fetchFansSection(base, fanNames, hasPurifier)),
+    healthSection(fetchStorageSection(base, roots)),
+    healthSection(fetchHistorySection(base)),
+    healthSection(fetchFaultsSection(base, st))
+  ]);
+  return { online: true, skipped: false, system, mcus, heaters, fans, storage, history, faults };
+}
+
 // ---- Network inventory: name / IP / MAC, for DHCP reservations ----
 function pickIface(net) {
   let fallback = null;
@@ -300,7 +578,8 @@ module.exports = {
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile,
   getPlate, excludeObject,
   listFiles, getThumbnail, getFileMetadata,
-  queryFirmwareInfo, pickIface,
+  queryFirmwareInfo, queryHealth, pickIface,
+  queryRemoteFileList, downloadRemoteFile, deleteRemoteFile, queryRecentlyPrintedFiles,
   // exported for tests only
   _internal: { assertSafeGcodeArg, parseFallbackStats }
 };

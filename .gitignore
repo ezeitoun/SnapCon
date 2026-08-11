@@ -9,6 +9,7 @@ users.json
 queued-files.json
 remote-access-data/
 audit-data/
+sync-data/
 data/
 .claude/
 .agents/
@@ -17,5 +18,6 @@ CLAUDE.md
 CODE_REVIEW.md
 SECURITY_REVIEW.md
 VERIFIED_CODE_REVIEW.md
+CODE_AUDIT.md
 queue-management-design.md
 queue-management-implementation-plan.md

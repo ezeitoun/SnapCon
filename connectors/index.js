@@ -3,6 +3,7 @@
 // here — nothing else in the app should need to change.
 const REGISTRY = {
   "snapmaker-u1-klipper": () => require("./snapmaker-u1-klipper"),
+  "snapmaker-u1-klipper-ws": () => require("./snapmaker-u1-klipper-ws"),
   "klipper-moonraker": () => require("./klipper-moonraker"),
   "creality-klipper": () => require("./creality-klipper"),
   "flashforge-adventurer": () => require("./flashforge-adventurer"),

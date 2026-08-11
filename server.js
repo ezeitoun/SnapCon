@@ -18,6 +18,7 @@ const { getConnector, listConnectorTypes, getCapabilities, CONNECTOR_TYPES, DEFA
 const connHttp = require("./connectors/http-utils");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 const { createAuditLog } = require("./audit/AuditLog");
+const { createSyncEngine } = require("./sync/SyncEngine");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -61,6 +62,13 @@ function loadConfig() {
   FOLDER = path.resolve(BASE_DIR, CFG.gcodeFolder || "./gcode");
   PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
   try { fs.mkdirSync(FOLDER, { recursive: true }); } catch {}
+  // Logs/Camera Folder are opt-in (no default, unlike gcodeFolder) — only
+  // create them once the user has actually pointed at a path. Best-effort:
+  // a bad path here shouldn't block the rest of config from loading, same
+  // as the gcodeFolder mkdir above.
+  if (CFG.logsFolder) { try { fs.mkdirSync(path.resolve(BASE_DIR, CFG.logsFolder), { recursive: true }); } catch {} }
+  if (CFG.cameraFolder) { try { fs.mkdirSync(path.resolve(BASE_DIR, CFG.cameraFolder), { recursive: true }); } catch {} }
+  if (CFG.gcodeSyncFolder) { try { fs.mkdirSync(path.resolve(BASE_DIR, CFG.gcodeSyncFolder), { recursive: true }); } catch {} }
 }
 loadConfig();
 const PORT = CFG.port || 4545;
@@ -305,6 +313,10 @@ const auditLog = createAuditLog({ baseDir: BASE_DIR, retentionDaysFn: () => CFG.
 setInterval(() => auditLog.prune(CFG.auditRetentionDays), 24 * 60 * 60 * 1000).unref();
 auditLog.prune(CFG.auditRetentionDays);
 
+// Logs/Camera sync — the only module the routes below talk to for it. Same
+// "one entry point" shape as remoteAccess/auditLog above.
+const syncEngine = createSyncEngine({ baseDir: BASE_DIR, getConnector });
+
 // Never attributes an action to the implicit admin (usersEnabled:false) —
 // there's no real account behind it, just the historical "everyone's an
 // admin" back-compat behavior. A route firing while usersEnabled is off logs
@@ -326,6 +338,13 @@ app.get("/", (req, res) => {
 // /orca/<printer name> (case-insensitive, "_" = space) — same page; the client
 // reads the path and filters the fleet down to just that one printer's card.
 app.get(/^\/orca\/.+$/i, (req, res) => {
+  try { res.type("html").send(fs.readFileSync(path.join(ASSET_DIR, "public", "index.html"), "utf8")); }
+  catch (e) { res.status(500).send("index.html not found"); }
+});
+// /health or /health/<printer id> — same page; the client reads the path on
+// load and via pushState as the printer picker changes (the Health page's
+// own router, not a general SPA catch-all — every other path still 404s).
+app.get(/^\/health(\/.*)?$/i, (req, res) => {
   try { res.type("html").send(fs.readFileSync(path.join(ASSET_DIR, "public", "index.html"), "utf8")); }
   catch (e) { res.status(500).send("index.html not found"); }
 });
@@ -847,6 +866,22 @@ function stabilizeTemp(key, incoming) {
   return { temp: st.shown, target: incoming.target };
 }
 
+// Connectors report progress/duration for a completed print but no wall-clock
+// end time — Klipper's print_stats has nothing like it. Stamp one the first
+// time a probe observes a printer land on "complete", so the fleet card can
+// show "Finished <time>" instead of a stale "Remaining 00m 00s". Cleared the
+// moment the printer leaves the complete state so the next print gets its
+// own fresh stamp rather than showing a previous job's finish time.
+const completedAtCache = new Map(); // printer url -> timestamp
+function stampCompletedAt(p, result) {
+  if (result.state === "complete") {
+    if (!completedAtCache.has(p.url)) completedAtCache.set(p.url, Date.now());
+    return { ...result, completedAt: completedAtCache.get(p.url) };
+  }
+  completedAtCache.delete(p.url);
+  return result;
+}
+
 async function probeCached(p) {
   const hit = offlineCache.get(p.url);
   let result;
@@ -858,6 +893,7 @@ async function probeCached(p) {
   }
   if (result.online) {
     result = { ...result, bed: stabilizeTemp(p.url + ":bed", result.bed), hotend: stabilizeTemp(p.url + ":hotend", result.hotend) };
+    result = stampCompletedAt(p, result);
   }
   // Checked fresh every call, independent of the reachability cache above —
   // maintenanceMode can flip without a new probe cycle needing to happen.
@@ -1120,10 +1156,21 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // Lightweight enough for every fleet-card poll — the full queue (files,
     // history, dispatch snapshots) is only ever fetched on demand via
     // GET /api/queue/:printerId, not repeated here on every 2s tick.
+    let queueAttention = false;
     if (p.printerPoolId) {
       const qs = queueStore.getPrinterState(p.id);
-      row.queueSummary = { queueState: qs.queueState, pendingCount: qs.queue.length, requiresAttention: qs.queueState === "queue_attention_required", paused: qs.queuePaused, stopped: qs.queueStopped };
+      queueAttention = qs.queueState === "queue_attention_required";
+      row.queueSummary = { queueState: qs.queueState, pendingCount: qs.queue.length, requiresAttention: queueAttention, paused: qs.queuePaused, stopped: qs.queueStopped };
     }
+    // Cheap, fleet-wide attention flag for the Health topbar badge — only
+    // ever data already in memory (maintenance schedule + queue state), no
+    // new I/O. Deliberately does NOT reach into per-printer Health
+    // diagnostics (throttling/disk/faults) — that richer picture only
+    // exists once a printer's own Health page has actually been opened and
+    // fetched; see /api/health.
+    const attentionReasons = computeMaintenanceAttention(p);
+    if (queueAttention) attentionReasons.push({ severity: "critical", title: "Needs attention", detail: "Queue dispatch is waiting on a human (bed clear, resolve, etc.)" });
+    if (attentionReasons.length) { row.needsAttention = true; row.attentionReasons = attentionReasons; }
     return row;
   }));
   res.json(out.filter(Boolean));
@@ -1350,6 +1397,224 @@ app.get("/api/firmware", requireAuth, async (req, res) => {
   res.json(out);
 });
 
+// ---- Health diagnostics: single-printer, on-demand only (the Health page
+// has no auto-polling — every request here is a real "give me fresh data
+// right now", so this is deliberately uncached, same as /api/firmware
+// above; no probeCached-style wrapper exists for anything but probe()
+// itself). Sectioned response (system/mcus/heaters/storage/history/faults)
+// — see connectors/http-utils.js's queryHealth for why each section is
+// independently isolated against failure. ----
+// Critical disk threshold: <5% free OR <2GB free, whichever triggers first
+// — the only threshold defined for Phase 1 (a separate warning-level
+// threshold is left for later rather than guessed now).
+const DISK_CRITICAL_PCT = 0.05;
+const DISK_CRITICAL_BYTES = 2 * 1024 * 1024 * 1024;
+// The richer, per-printer half of the two-tier attention design (see
+// computeMaintenanceAttention above for the cheap fleet-wide half this
+// extends) — only ever computed against a health object that's already
+// been fetched for this one printer, never triggered fleet-wide. MCU
+// retransmit/invalid-byte counters are deliberately NOT a trigger here:
+// they're cumulative-since-boot with no defensible threshold or "recent
+// increase" detection built, so surfacing them as attention items would be
+// exactly the false-confidence failure mode this design avoids — they stay
+// diagnostics-only (still visible in health.mcus) until real trend-based
+// alerting exists.
+// "Commanded but not spinning" only becomes an attention signal once it's
+// been observed on two checks in a row — Health has no continuous polling
+// to time a startup-transient delay against, so persistence across separate
+// manual checks is the only signal available. First observation just
+// records itself and does not flag (covers a normal spin-up transient
+// landing on the one check that happens to sample it); only a mismatch
+// still present on a LATER check flags. A check that finds the fan fine
+// clears the record immediately, so recovery resets the count right away.
+const fanMismatchSeen = new Map(); // "printerId|fanName" -> true (mismatched last check)
+const FAN_COMMANDED_THRESHOLD = 0.1; // speed above this = "meaningfully commanded on"
+const FAN_STOPPED_RPM_THRESHOLD = 50; // rpm below this while commanded = "not spinning"
+function checkFanMismatch(p, health) {
+  const reasons = [];
+  const fans = (health.fans && health.fans.available) ? health.fans.list : [];
+  for (const f of fans) {
+    const key = p.id + "|" + f.name;
+    // rpm===null means no tachometer wired (confirmed real on this fleet) —
+    // "not measurable", never treated as "stopped".
+    const measurable = typeof f.rpm === "number";
+    const commanded = typeof f.speed === "number" && f.speed > FAN_COMMANDED_THRESHOLD;
+    const mismatched = measurable && commanded && f.rpm < FAN_STOPPED_RPM_THRESHOLD;
+    if (mismatched) {
+      if (fanMismatchSeen.get(key)) {
+        reasons.push({ severity: "warning", title: "Fan not spinning", detail: `${f.name} is commanded on but reporting ${Math.round(f.rpm)} RPM.`, suggestedComponent: "Fans" });
+      } else {
+        fanMismatchSeen.set(key, true);
+      }
+    } else {
+      fanMismatchSeen.delete(key);
+    }
+  }
+  return reasons;
+}
+// Heater duty is only a trustworthy signal once a reading has held near
+// target for a little while — a heater ramping up legitimately sits at
+// ~100% duty, and a head cooling down from a previous job reports a real
+// power number that has nothing to do with health (confirmed live:
+// "extruder 118° / 65° target · power 0%" is just a cooling head, not a
+// fault). Band and dwell below are starting points, same "unvalidated
+// against real degraded hardware" caveat as every other threshold on this
+// page: within 3°C of target counts as "at target," and it has to stay
+// there for 30 real (wall-clock) seconds before duty is trusted enough to
+// color-judge. A wall-clock dwell is the only way to time this at all given
+// Health's manual-refresh-only cadence — tracked per printer+heater across
+// refreshes in a session-lifetime Map (same pattern as fanMismatchSeen
+// below). Any observation that drops back out of band clears the timer, so
+// a heater has to re-earn the dwell after every overshoot/undershoot.
+// Duty-threshold coloring itself (warn/crit %) stays client-side in app.js,
+// matching how MCU/fan thresholds are applied — this function only decides
+// which of idle/heating/cooling/settling/stable a reading is in, since only
+// that classification needs cross-request memory.
+const HEATER_TARGET_BAND_C = 3;
+const HEATER_DWELL_MS = 30000;
+const heaterStableSince = new Map(); // "printerId|heaterName" -> ms timestamp first seen in-band
+function annotateHeaterStates(p, health) {
+  if (!health.heaters || !health.heaters.available) return;
+  const now = Date.now();
+  for (const h of health.heaters.list) {
+    const key = p.id + "|" + h.name;
+    if (!h.target) { h.state = "idle"; heaterStableSince.delete(key); continue; }
+    const inBand = h.temperature != null && Math.abs(h.temperature - h.target) <= HEATER_TARGET_BAND_C;
+    if (!inBand) {
+      h.state = (h.temperature != null && h.temperature < h.target) ? "heating" : "cooling";
+      heaterStableSince.delete(key);
+      continue;
+    }
+    let since = heaterStableSince.get(key);
+    if (!since) { since = now; heaterStableSince.set(key, since); }
+    h.state = (now - since >= HEATER_DWELL_MS) ? "stable" : "settling";
+  }
+}
+// "Unused" is defined entirely by the G-code sync retention setting — if
+// gcodeSyncRetentionDays isn't configured, there's no threshold to judge by,
+// so this stays undefined and the client simply doesn't show a count rather
+// than inventing a default window. Cross-references the gcodes file listing
+// (already fetched by the storage section) against print history filtered
+// to that same window — confirmed live that history's `filename` field is
+// the exact same string as the file listing's `path`, and that Moonraker's
+// own `since=` filtering keeps this cheap regardless of the printer's full
+// history depth. `fileNames` is deleted from the response afterward — the
+// client only ever needs the final count, not the raw list.
+async function annotateGcodeUnusedCount(p, health) {
+  const gcodes = health.storage && health.storage.available && health.storage.categories && health.storage.categories.gcodes;
+  if (!gcodes || !CFG.gcodeSyncRetentionDays || !Array.isArray(gcodes.fileNames)) return;
+  try {
+    const base = connHttp.baseUrl(p);
+    const sinceSec = Date.now() / 1000 - CFG.gcodeSyncRetentionDays * 86400;
+    const recent = await connHttp.queryRecentlyPrintedFiles(base, sinceSec);
+    gcodes.unusedCount = gcodes.fileNames.filter(name => !recent.has(name)).length;
+    gcodes.unusedThresholdDays = CFG.gcodeSyncRetentionDays;
+  } catch (e) {
+    // Best-effort — leave unusedCount undefined, the client just won't show it.
+  } finally {
+    delete gcodes.fileNames;
+  }
+}
+function computeHealthAttention(p, health) {
+  const reasons = computeMaintenanceAttention(p);
+  if (health.system && health.system.available && health.system.throttledState) {
+    // {bits, flags:[...]} is the real Moonraker shape (confirmed via source/
+    // docs research — it was never observed non-null live, since this
+    // fleet's U1 hardware isn't the Raspberry Pi this check is built for).
+    // A non-array flags falls through to the old generic behavior, so an
+    // unexpected shape degrades safely rather than silently saying nothing.
+    const flags = Array.isArray(health.system.throttledState.flags) ? health.system.throttledState.flags : [];
+    if (flags.includes("Under-Voltage Detected")) {
+      reasons.push({ severity: "critical", title: "Undervoltage", detail: "The printer's controller is reporting a power under-voltage condition right now.", suggestedComponent: "Power Supply" });
+    } else {
+      reasons.push({ severity: "critical", title: "Throttled", detail: "The printer's controller is reporting a throttle condition (power or thermal) right now." });
+    }
+  }
+  if (health.storage && health.storage.available) {
+    const du = health.storage.diskUsage;
+    if (du && (du.free < du.total * DISK_CRITICAL_PCT || du.free < DISK_CRITICAL_BYTES)) {
+      reasons.push({ severity: "critical", title: "Low disk space", detail: "Uploads can fail confusingly once the disk fills — free up space soon." });
+    }
+  }
+  if (health.faults && health.faults.available && health.faults.list.length) {
+    reasons.push({ severity: "warning", title: "Recent fault", detail: "The printer has reported at least one recent error — see the fault log." });
+  }
+  reasons.push(...checkFanMismatch(p, health));
+  return reasons;
+}
+app.get("/api/health", requireAuth, async (req, res) => {
+  const idx = parseInt(req.query.printer, 10);
+  const p = PRINTERS[idx];
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  const c = getConnector(p.connector);
+  if (!c.getHealth) return res.json({ id: p.id, name: p.name, online: true, skipped: true, reason: "not supported" });
+  const st = await probeCached(p);
+  const health = await c.getHealth(p, st);
+  if (!health.skipped) annotateHeaterStates(p, health);
+  if (!health.skipped) await annotateGcodeUnusedCount(p, health);
+  const attentionReasons = health.skipped ? [] : computeHealthAttention(p, health);
+  res.json({
+    id: p.id, name: p.name, ...health,
+    ...(attentionReasons.length ? { needsAttention: true, attentionReasons } : {}),
+    // Lets the Storage card decide whether Sync logs/Sync camera can be
+    // enabled at all, without a separate /api/config round-trip.
+    syncFolders: { logs: !!CFG.logsFolder, camera: !!CFG.cameraFolder, gcodes: !!CFG.gcodeSyncFolder },
+    syncSupported: !!c.querySyncFiles
+  });
+});
+
+// ---- Logs/Camera/G-code sync: fire-and-forget trigger + pollable status.
+// The route returns as soon as the sync is STARTED, not when it finishes —
+// the Health page polls GET /api/sync-status while phase isn't
+// "idle"/"error", same reasoning as Health's own "no auto-polling except
+// while something the user actually started is running" carve-out. ----
+function syncRootConfig(root) {
+  if (root === "logs") return { folder: CFG.logsFolder, retentionDays: CFG.logsRetentionDays, label: "Logs" };
+  if (root === "camera") return { folder: CFG.cameraFolder, retentionDays: CFG.cameraRetentionDays, label: "Camera" };
+  if (root === "gcodes") return { folder: CFG.gcodeSyncFolder, retentionDays: CFG.gcodeSyncRetentionDays, label: "Synced g-code" };
+  return null;
+}
+app.post("/api/sync", requireAdmin, async (req, res) => {
+  const idx = parseInt(req.query.printer, 10);
+  const p = PRINTERS[idx];
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  const root = String(req.query.root || "");
+  const rootCfg = syncRootConfig(root);
+  if (!rootCfg) return res.status(400).json({ error: "root must be 'logs', 'camera', or 'gcodes'" });
+  const destFolder = rootCfg.folder;
+  if (!destFolder) return res.status(400).json({ error: `Configure a ${rootCfg.label} folder in Settings first` });
+  const c = getConnector(p.connector);
+  if (!c.querySyncFiles) return res.status(400).json({ error: "This printer's connector doesn't support file sync" });
+  if (syncEngine.isRunning(p.id, root)) return res.status(409).json({ error: "A sync is already running for this printer" });
+  const retentionDays = rootCfg.retentionDays;
+  const resolvedDest = path.resolve(BASE_DIR, destFolder);
+  syncEngine.runSync(p, root, resolvedDest, retentionDays)
+    .then(summary => {
+      auditLog.log({
+        category: "sync", event: "sync-completed", ...actorFromReq(req),
+        printerId: p.id, printerName: p.name,
+        detail: { root, ...summary }
+      });
+    })
+    .catch(e => {
+      auditLog.log({
+        category: "sync", event: "sync-failed", ...actorFromReq(req),
+        printerId: p.id, printerName: p.name,
+        detail: { root, error: e.message }
+      });
+    });
+  res.json({ ok: true, started: true });
+});
+
+app.get("/api/sync-status", requireAdmin, (req, res) => {
+  const idx = parseInt(req.query.printer, 10);
+  const p = PRINTERS[idx];
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  const root = String(req.query.root || "");
+  if (!syncRootConfig(root)) return res.status(400).json({ error: "root must be 'logs', 'camera', or 'gcodes'" });
+  res.json(syncEngine.getStatus(p.id, root));
+});
+
 // ---- Filesystem browser (for folder picker) ----
 app.get("/api/browse", requireAdmin, (req, res) => {
   const isWin = process.platform === "win32";
@@ -1405,7 +1670,7 @@ app.get("/api/printer-hours", requireAuth, async (req, res) => {
 });
 
 // ---- Maintenance log per printer ----
-const DEFAULT_MAINT_COMPONENTS = ["Nozzle", "Timing Belt", "Bed Sheet", "Hotend", "PTFE Tube", "Extruder Gears", "Lead Screw", "Fans", "Lubrication", "Firmware", "Wiper"];
+const DEFAULT_MAINT_COMPONENTS = ["Nozzle", "Timing Belt", "Bed Sheet", "Hotend", "PTFE Tube", "Extruder Gears", "Lead Screw", "Fans", "Lubrication", "Firmware", "Wiper", "Power Supply"];
 // "date" entries compute nextScheduled the normal calendar way. hours250/500
 // are intentionally NOT date-computable (computeNextScheduled returns null
 // for them) — there's no stored per-printer hours history to compare a
@@ -1474,6 +1739,19 @@ function computeNextMaintenance(entries) {
     if (!best || e.nextScheduled < best.nextScheduled) best = e;
   }
   return best ? { date: best.nextScheduled, component: best.component } : null;
+}
+// The cheap half of the two-tier attention design (see /api/fleet's use of
+// this, and /api/health for the richer per-printer half) — maintenance data
+// only, already in memory, safe to run on every fleet poll for every
+// printer with no new I/O.
+function computeMaintenanceAttention(p) {
+  const entries = (CFG.maintenanceHistory && CFG.maintenanceHistory[p.id]) || [];
+  const next = computeNextMaintenance(entries);
+  if (!next) return [];
+  const daysUntil = Math.floor((new Date(next.date + "T00:00:00").getTime() - Date.now()) / 86400000);
+  if (daysUntil < 0) return [{ severity: "critical", title: "Maintenance overdue", detail: `${next.component} was due ${next.date}` }];
+  if (daysUntil <= 14) return [{ severity: "warning", title: "Maintenance due soon", detail: `${next.component} due ${next.date}` }];
+  return [];
 }
 
 app.get("/api/maintenance", requireAuth, (req, res) => {
@@ -1564,6 +1842,12 @@ function publicCfg(role) {
   const base = {
     gcodeFolder: CFG.gcodeFolder || "./gcode",
     folderResolved: FOLDER,
+    logsFolder: CFG.logsFolder || "",
+    cameraFolder: CFG.cameraFolder || "",
+    gcodeSyncFolder: CFG.gcodeSyncFolder || "",
+    logsRetentionDays: CFG.logsRetentionDays || null,
+    cameraRetentionDays: CFG.cameraRetentionDays || null,
+    gcodeSyncRetentionDays: CFG.gcodeSyncRetentionDays || null,
     refreshInterval: CFG.refreshInterval || 2,
     cameraViewRefreshInterval: CFG.cameraViewRefreshInterval || 6,
     cameraViewStagger: CFG.cameraViewStagger !== false,
@@ -1831,6 +2115,15 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     : (CFG.printers || []);
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
+    // Unlike gcodeFolder, an empty submission here is a valid, intentional
+    // "not configured yet" state — it clears the field rather than falling
+    // back to whatever was previously saved.
+    logsFolder: (typeof b.logsFolder === "string") ? b.logsFolder.trim() : (CFG.logsFolder || ""),
+    cameraFolder: (typeof b.cameraFolder === "string") ? b.cameraFolder.trim() : (CFG.cameraFolder || ""),
+    gcodeSyncFolder: (typeof b.gcodeSyncFolder === "string") ? b.gcodeSyncFolder.trim() : (CFG.gcodeSyncFolder || ""),
+    logsRetentionDays: (typeof b.logsRetentionDays === "number" && b.logsRetentionDays > 0) ? b.logsRetentionDays : undefined,
+    cameraRetentionDays: (typeof b.cameraRetentionDays === "number" && b.cameraRetentionDays > 0) ? b.cameraRetentionDays : undefined,
+    gcodeSyncRetentionDays: (typeof b.gcodeSyncRetentionDays === "number" && b.gcodeSyncRetentionDays > 0) ? b.gcodeSyncRetentionDays : undefined,
     refreshInterval: (typeof b.refreshInterval === "number" && b.refreshInterval >= 1 && b.refreshInterval <= 60) ? b.refreshInterval : (CFG.refreshInterval || 2),
     cameraViewRefreshInterval: (typeof b.cameraViewRefreshInterval === "number" && b.cameraViewRefreshInterval >= 3 && b.cameraViewRefreshInterval <= 60) ? b.cameraViewRefreshInterval : (CFG.cameraViewRefreshInterval || 6),
     // Defaults ON like allowMapping/suggestMatching below — absence must

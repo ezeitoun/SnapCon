@@ -16,6 +16,14 @@
        around, kept for its original alarm-adjacent meaning only). New CSS
        should reference --accent/--warn, not --busy/--signal directly. */
     --accent:var(--busy); --warn:var(--signal);
+    /* ReadingRow palette — a deliberately distinct, more muted set from the
+       badge/status colors above, exact values as specified for the Health
+       page's card system (not derived from --ok/--signal/--bad). */
+    --rr-card-bg:#1b1f27; --rr-card-border:rgba(255,255,255,0.09);
+    --rr-title:#E8EAED; --rr-desc:#9AA3AE; --rr-label:#E8EAED;
+    --rr-healthy:#3FB86B; --rr-warning:#E0A83C; --rr-critical:#D64545; --rr-neutral:#6B7480;
+    --rr-value-healthy:#9AA3AE; --rr-bar-track:rgba(255,255,255,0.09);
+    --storage-gcode:#2E7FE0; --storage-camera:#7B5FD8; --storage-logs:#2FA98C; --storage-track:rgba(255,255,255,0.08);
     --mono: ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
     --sans: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
   }
@@ -109,7 +117,8 @@
   .send-list{display:flex; flex-direction:column; gap:4px; margin:12px 0; max-height:320px; overflow:auto;}
   .send-row{position:relative; overflow:hidden; display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line-soft); border-radius:8px; cursor:pointer; user-select:none;}
   .send-row:hover{background:var(--panel-2);}
-  .send-row input[type=checkbox]{position:relative; margin:0; cursor:pointer; accent-color:var(--accent); width:14px; height:14px;}
+  .send-row:has(.checkbox-input:checked){background:color-mix(in srgb,var(--accent) 10%,transparent);}
+  .send-row .checkbox-input{position:relative;}
   .send-row-fill{position:absolute; inset:0; width:0%; background:color-mix(in srgb,var(--accent) 16%,transparent); transition:width .3s ease; pointer-events:none;}
   .send-row-fill.err{background:color-mix(in srgb,var(--bad) 18%,transparent);}
   .send-row-fill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);}
@@ -128,11 +137,12 @@
      class — blended rather than a flat fill, so status pills/text on top
      stay readable and it still reads as part of the same dark theme. */
   .pcard.tag-tinted{background:color-mix(in srgb, var(--panel) 72%, var(--tag-color) 28%);}
-  .pcard .top{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .pcard .top{display:flex; align-items:center; gap:8px;}
+  .pcard .top:has(.cam-chk){cursor:pointer;}
   .pcard .pn{display:flex; align-items:center; gap:8px;}
   .hdr-brand{font-size:9px; letter-spacing:0.2em; text-transform:uppercase; color:rgba(255,255,255,0.90); font-weight:600; line-height:1; margin-bottom:2px;}
   .hdr-name{font-size:15px; font-weight:800; color:#eaecff; letter-spacing:-0.01em; line-height:1;}
-  .prism-line{height:2px;margin-top:-12px;background:linear-gradient(90deg,transparent 0%,rgba(0,120,255,0.85) 15%,rgba(0,210,255,0.70) 38%,rgba(30,160,255,0.90) 58%,rgba(0,200,255,0.65) 80%,transparent 100%);box-shadow:0 0 10px rgba(0,180,255,0.45);}
+  .prism-line{height:2px;margin-top:-2px;background:linear-gradient(90deg,transparent 0%,rgba(0,120,255,0.85) 15%,rgba(0,210,255,0.70) 38%,rgba(30,160,255,0.90) 58%,rgba(0,200,255,0.65) 80%,transparent 100%);box-shadow:0 0 10px rgba(0,180,255,0.45);}
   .prism-line.err-line{background:linear-gradient(90deg,transparent 0%,#ff4f4f 15%,#ff8c6b 38%,#ff4f4f 58%,#bf3030 74%,#ff4f4f 88%,transparent 100%);box-shadow:0 0 10px rgba(255,79,79,0.45);}
   .prism-line.pause-line{background:linear-gradient(90deg,transparent 0%,#f59e0b 15%,#fbbf24 38%,#f59e0b 58%,#d97706 74%,#f59e0b 88%,transparent 100%);box-shadow:0 0 10px rgba(245,158,11,0.45);}
   .printer-icon-sm{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,color-mix(in srgb,var(--violet) 18%,transparent),rgba(0,229,255,0.1));border:1px solid color-mix(in srgb,var(--violet) 28%,transparent);display:flex;align-items:center;justify-content:center;color:var(--violet-soft);box-shadow:0 0 12px color-mix(in srgb,var(--violet) 18%,transparent);flex-shrink:0;text-decoration:none;cursor:pointer;transition:filter 0.15s;}
@@ -143,7 +153,7 @@
   .printer-icon-sm.cancelled-icon{background:linear-gradient(135deg,rgba(255,79,79,0.18),rgba(255,100,80,0.1));border-color:rgba(255,79,79,0.35);color:#ff6b6b;box-shadow:0 0 12px rgba(255,79,79,0.22);}
   .prism-line.complete-line{background:linear-gradient(90deg,transparent 0%,var(--ok) 15%,#6ee7b7 38%,var(--ok) 58%,#2d9e72 74%,var(--ok) 88%,transparent 100%);box-shadow:0 0 10px color-mix(in srgb,var(--ok) 45%,transparent);}
   .prism-line.cancelled-line{background:linear-gradient(90deg,transparent 0%,#ff4f4f 15%,#ff8c6b 38%,#ff4f4f 58%,#bf3030 74%,#ff4f4f 88%,transparent 100%);box-shadow:0 0 10px rgba(255,79,79,0.45);}
-  .card-right{display:flex; flex-direction:row; align-items:center; gap:6px; flex-shrink:0;}
+  .card-right{display:flex; flex-direction:row; align-items:center; gap:6px; flex-shrink:0; margin-left:auto;}
   .card-pills{display:flex; gap:5px; align-items:center;}
   .pill-btn{background:none; border:none; padding:0; cursor:pointer; display:block; text-decoration:none; transition:opacity .15s,transform .12s;}
   .pill-btn img{width:28px; height:28px; display:block;}
@@ -164,6 +174,12 @@
   .h .hm{font-size:10px; color:var(--ink-dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .pcard .foot{display:flex; align-items:center; gap:9px; justify-content:space-between;}
   .pcard .foot-idle{margin-top:10px;}
+  /* A printer with no filament-heads capability (e.g. Creality V3 Plus) skips
+     the whole .afc-section block — without this, the card grid's default row
+     stretch leaves that extra height as blank space right after the shorter
+     content, floating the footer above where a spool-showing sibling's
+     footer sits. Pin it to the bottom instead, matching that position. */
+  .pcard:not(:has(.afc-section)) .foot{margin-top:auto;}
   .pcard .matchline{font-size:11.5px; color:var(--ink-dim); flex:1;}
   .pcard .matchline .approx{color:var(--ink-faint); font-style:italic;}
   .stats-bar{display:flex;align-items:stretch;background:rgba(255,255,255,0.012);border-top:1px solid rgba(255,255,255,0.05);margin-top:-7px;}
@@ -182,15 +198,13 @@
      thumbnail load, not just a missing file, produces this exact swap). */
   .stats-thumb-empty{width:48px;height:48px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:15px;font-weight:700;opacity:0.3;}
   .stats-mini-bar{position:absolute;bottom:0;left:6px;right:6px;height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden;}
-  .stats-mini-fill{height:100%;border-radius:2px;transition:width 0.4s ease;}
-  .hot-fill{background:linear-gradient(0deg,#ff6b6b,#ff8c6b);box-shadow:0 0 6px rgba(255,107,107,0.5);}
-  .warm-fill{background:linear-gradient(0deg,#f59e0b,#fbbf24);box-shadow:0 0 6px rgba(251,191,36,0.4);}
-  .cool-fill{background:rgba(140,160,220,0.2);}
+  .stats-mini-fill{height:100%;border-radius:2px;transition:width 0.4s ease,background-color 0.4s ease,box-shadow 0.4s ease;}
   .afc-section{padding-top:0;}
   .afc-section-hdr{font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--ink-faint); margin-bottom:8px;}
   .afc-lanes{display:grid; grid-template-columns:repeat(4,1fr); gap:7px;}
   .afc-lane-card{border:1px solid var(--line); border-radius:10px; background:var(--panel-2); overflow:hidden; display:flex; flex-direction:column; transition:border-color .2s,box-shadow .2s;}
   .afc-lane-card.active{border-width:2px;}
+  .afc-lane-card.empty{border-style:dashed; opacity:0.55;}
   .afc-lane-hdr{font-size:10px; font-weight:700; text-align:center; padding:5px 4px; color:var(--ink-dim); background:rgba(255,255,255,.03); border-bottom:1px solid var(--line-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .afc-spool-area{display:flex; flex-direction:column; align-items:center; padding:8px 4px 6px; gap:4px; position:relative;}
   .afc-badge{font-size:7px; font-weight:700; letter-spacing:.1em; color:var(--ink-faint); background:rgba(255,255,255,.05); border:1px solid var(--line); border-radius:3px; padding:1px 4px; line-height:1.3;}
@@ -264,19 +278,9 @@
   .color-swatch:hover{transform:scale(1.08); border-color:var(--ink-faint);}
   .color-swatch.active{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
 
-  /* ---- Spool color picker (spoolColorModal) ---- */
+  /* ---- Spool color editor (reused inline inside #unloadmodal, and by the
+     Quick Print modal's own subtitle via .scc-subtitle) ---- */
   .scc-subtitle{font-size:12.5px; color:var(--ink-dim); margin-top:-4px;}
-  .scc-note{font-size:11.5px; color:var(--ink-faint); margin-top:4px; line-height:1.4;}
-  .scc-compare{display:flex; align-items:center; justify-content:center; gap:16px; margin:16px 0;}
-  .scc-now-col{display:flex; flex-direction:column; align-items:center; gap:6px; opacity:.75;}
-  .scc-swatch-sm{width:28px; height:28px; border-radius:7px; border:2px solid var(--line);}
-  .scc-compare-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint);}
-  .scc-arrow{color:var(--ink-faint); font-size:16px;}
-  .scc-pending-col{display:flex; align-items:center; gap:10px;}
-  .scc-swatch-lg{width:52px; height:52px; border-radius:10px; border:2px solid var(--line); flex:none;}
-  .scc-pending-text{display:flex; flex-direction:column; gap:2px;}
-  .scc-pending-name{font-size:13.5px; font-weight:600; color:var(--ink);}
-  .scc-pending-hex{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim);}
   .scc-tabs{display:flex; gap:6px; border-bottom:1px solid var(--line-soft); margin-bottom:12px;}
   .scc-tab{background:transparent; border:none; border-bottom:2px solid transparent; padding:7px 4px 9px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; margin-bottom:-1px;}
   .scc-tab:hover{color:var(--ink);}
@@ -286,7 +290,7 @@
   /* Selection ring: box-shadow, not the swatch's own border — a border
      change alone reads as barely different at this size, a ring around the
      outside is unambiguous even for a swatch already lighter than --accent. */
-  .scc-grid .color-swatch.selected{box-shadow:0 0 0 2px var(--panel), 0 0 0 4px var(--accent); border-color:transparent;}
+  .scc-grid .color-swatch.selected{box-shadow:0 0 0 2px var(--panel-2), 0 0 0 4px var(--accent); border-color:transparent;}
   /* White/natural/beige-family swatches: needsDarkText(hex) flags these in
      JS — the default --line border is tuned for mid/dark swatches and is
      too close in value to a light fill, so the swatch edge nearly
@@ -300,6 +304,53 @@
   .scc-rgb-row{display:flex; gap:8px; margin-top:12px;}
   .scc-rgb-row label{flex:1; display:flex; flex-direction:column; gap:4px; font-size:11px; color:var(--ink-faint); text-align:center;}
   .scc-rgb-row input{width:100%; text-align:center; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; color:var(--ink); font-family:var(--mono); font-size:13px; padding:6px 0;}
+
+  /* ---- Spool dialog ---- */
+  .unload-box{max-width:420px;}
+  .unload-hdr{display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:14px;}
+  .unload-title{font-size:18px; font-weight:600; color:var(--ink);}
+  .unload-subtitle{font-size:13px; color:var(--ink-dim); margin-top:2px;}
+  .unload-spool-card{padding:12px; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:10px; margin-bottom:12px;}
+  .unload-spool-row{display:flex; align-items:center; gap:12px;}
+  /* Display only — never a click target, never implies an action. */
+  .unload-spool-swatch{width:34px; height:34px; border-radius:8px; border:2px solid var(--line); flex:none; cursor:default;}
+  .unload-spool-info{flex:1; min-width:0;}
+  .unload-spool-line1{font-size:13.5px; font-weight:600; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .unload-box .btn-sm{padding:5px 10px; font-size:11.5px; flex:none;}
+  .unload-rfid-badge{display:inline-flex; align-items:center; gap:4px; flex:none; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-dim); background:var(--panel); border:1px solid var(--line); border-radius:5px; padding:4px 7px;}
+  .unload-rfid-note{font-size:12px; color:var(--ink-dim); line-height:1.5; margin:0 0 12px;}
+  .unload-field-label{font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-faint); margin:10px 0 6px;}
+  .unload-field-label:first-child{margin-top:0;}
+  .unload-note{display:flex; align-items:flex-start; gap:8px; font-size:11.5px; border-radius:8px; padding:9px 10px; margin-bottom:12px; line-height:1.4;}
+  .unload-note svg{flex:none; margin-top:1px;}
+  .unload-print-warning{color:var(--signal); background:color-mix(in srgb, var(--signal) 10%, transparent); border:1px solid color-mix(in srgb, var(--signal) 30%, transparent);}
+
+  /* ---- Color mode: a full-focus replacement for the unload body, entered
+     via "Edit color" — no unload controls visible while in it. ---- */
+  .unload-color-helper{font-size:11.5px; color:var(--ink-faint); line-height:1.4; margin-bottom:14px;}
+  .unload-compare{display:flex; align-items:center; justify-content:center; gap:16px; margin-bottom:16px;}
+  .unload-compare-now{display:flex; flex-direction:column; align-items:center; gap:6px; opacity:.75;}
+  .unload-compare-swatch-sm{width:28px; height:28px; border-radius:7px; border:2px solid var(--line);}
+  .unload-compare-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--ink-faint);}
+  .unload-compare-arrow{color:var(--ink-faint); font-size:16px;}
+  .unload-compare-pending{display:flex; align-items:center; gap:10px;}
+  .unload-compare-swatch-lg{width:52px; height:52px; border-radius:10px; border:2px solid var(--line); flex:none;}
+  .unload-compare-text{display:flex; flex-direction:column; gap:2px;}
+  .unload-compare-name{font-size:13.5px; font-weight:600; color:var(--ink);}
+  .unload-compare-hex{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim);}
+  .unload-confirm-msg{color:var(--ink-dim); font-size:13px; margin:0 0 12px;}
+  .unload-all-row{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; margin-bottom:10px;}
+  .unload-all-row input{cursor:pointer;}
+  .unload-footer{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--line-soft);}
+  .unload-footer-right{display:flex; gap:8px;}
+  /* The only genuinely filled/solid danger button in the app — everywhere
+     else (.btn.danger, .btn-cancel, .btn-estop) is a tinted outline, which
+     reads as "this is available" rather than "this is the destructive
+     default." Mirrors .btn.purple's existing filled-token pattern. */
+  .btn.danger-filled{background:var(--bad); border-color:var(--bad); color:#fff;}
+  .btn.danger-filled:hover{background:color-mix(in srgb, var(--bad) 85%, black); border-color:color-mix(in srgb, var(--bad) 85%, black);}
+  #unloadStatus:not(:empty){margin-top:8px;}
+
   .maint-table{width:100%; border-collapse:collapse; font-size:12px; margin-top:10px;}
   .maint-table th{text-align:left; color:var(--ink-dim); font-weight:600; padding:6px 8px; border-bottom:1px solid var(--line);}
   .maint-table td{padding:5px 8px; border-bottom:1px solid var(--line); color:var(--ink-faint);}
@@ -391,6 +442,7 @@
   .set-tab:hover{color:var(--ink);}
   .set-tab.active{color:var(--ink); font-weight:600; border-bottom-color:var(--accent);}
   .fwrow{display:flex; align-items:flex-start; gap:10px; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:8px; padding:8px 11px; margin-bottom:6px;}
+  .fwrow:has(.checkbox-input:checked){background:color-mix(in srgb,var(--accent) 10%,var(--panel-2)); border-color:color-mix(in srgb,var(--accent) 30%,var(--line-soft));}
   .fwrow input{margin-top:3px; flex:none;}
   .fwline1{display:block; font-size:12.5px; color:var(--ink); cursor:pointer;}
   .fwline1 b{margin-right:8px;}
@@ -439,8 +491,6 @@
   .prog-fill.amber{background:linear-gradient(90deg,#d97706,#fbbf24);box-shadow:0 0 10px rgba(245,158,11,0.45);animation:none;}
   .prog-fill.red{background:linear-gradient(90deg,#ff4f4f,#ff8c6b);box-shadow:0 0 10px rgba(255,79,79,0.5);animation:none;}
   .prog-fill.green{background:var(--ok);box-shadow:0 0 6px color-mix(in srgb,var(--ok) 30%,transparent);animation:none;}
-  .prog-dot{position:absolute;top:50%;transform:translate(-50%,-50%);width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 0 0 2px rgba(0,229,255,0.5),0 0 14px rgba(0,229,255,0.8);}
-  .prog-dot.amber{box-shadow:0 0 0 2px rgba(245,158,11,0.5),0 0 12px rgba(245,158,11,0.75);background:#fcd34d;}
   .prog-times{display:flex;align-items:center;}
   .prog-time-cell{flex:1;display:flex;flex-direction:column;gap:1px;}
   .prog-time-cell.center{align-items:center;} .prog-time-cell.end{align-items:flex-end;}
@@ -505,6 +555,8 @@
   .topbar-icon{width:22.1px; height:22.1px; display:block;}
   .gear{font:inherit; font-size:15px; font-weight:700; color:#fff; background:transparent; border:none; border-radius:7px; padding:4px; cursor:pointer; line-height:1;}
   .gear:hover{filter:brightness(1.3);}
+  #healthBtn{position:relative;}
+  .health-badge{position:absolute; top:-2px; right:-2px; min-width:15px; height:15px; padding:0 3px; border-radius:999px; background:var(--bad); color:#fff; font-size:9px; font-weight:800; line-height:15px; text-align:center; box-shadow:0 0 0 2px var(--chassis);}
   .sort-wrap{position:relative;}
   .sort-menu{display:none; position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:5px; min-width:170px; z-index:40; box-shadow:0 8px 24px rgba(0,0,0,.4);}
   .sort-menu.open{display:block;}
@@ -517,6 +569,128 @@
   .setup.show{display:block; max-height:calc(100vh - 120px); overflow-y:auto;}
   .queue-dashboard{display:none; margin-bottom:18px;}
   .queue-dashboard.show{display:block; max-height:calc(100vh - 120px); overflow-y:auto;}
+
+  /* ---- Health page ---- */
+  .health-page{display:none; margin-bottom:18px;}
+  .health-page.show{display:block; max-height:calc(100vh - 120px); overflow-y:auto;}
+  .health-page-hdr{position:sticky; top:0; z-index:5; background:var(--chassis); display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px 0 12px; border-bottom:1px solid var(--line-soft);}
+  .health-picker{display:flex; flex-wrap:wrap; gap:8px; flex:1;}
+  .health-chip{display:inline-flex; align-items:center; gap:7px; background:var(--panel); border:1px solid var(--line); border-radius:999px; padding:6px 13px 6px 10px; cursor:pointer; color:var(--ink-dim); font-size:12.5px; font-weight:600;}
+  .health-chip:hover{border-color:var(--ink-faint);}
+  .health-chip.active{border-color:var(--accent); color:var(--ink); background:color-mix(in srgb,var(--accent) 10%,var(--panel));}
+  .health-chip-dot{width:7px; height:7px; border-radius:50%; flex:none; background:var(--status-color);}
+  .health-chip-attn{width:6px; height:6px; border-radius:50%; flex:none; background:var(--bad); box-shadow:0 0 0 2px color-mix(in srgb,var(--bad) 30%,transparent);}
+  .health-page-hdr, #healthBody{max-width:1240px; margin-left:auto; margin-right:auto;}
+  .health-printer-name{font-size:17px; font-weight:700; margin:14px 0 10px;}
+  .health-metrics{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;}
+  .health-metric{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:3px;}
+  .health-metric-label{font-size:11px; font-weight:700; letter-spacing:.02em; color:var(--ink-dim);}
+  .health-metric-val{font-size:22px; font-weight:800; color:var(--ink); font-family:var(--mono);}
+  .health-metric-sub{font-size:12px; color:var(--ink-faint);}
+  .health-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; align-items:start;}
+  .health-card{background:var(--rr-card-bg); border:1px solid var(--rr-card-border); border-radius:11px; padding:13px; margin-bottom:14px;}
+  .health-grid > .health-card{margin-bottom:0;}
+  #healthServiceForm{max-width:1240px; margin:0 auto;}
+  .health-card-hdr{font-size:15px; font-weight:500; color:var(--rr-title); margin-bottom:4px;}
+  .health-card-desc{font-size:12.5px; color:var(--rr-desc); line-height:1.45; margin:0 0 12px;}
+  .health-updated-at{font-size:11.5px; color:var(--ink-faint); white-space:nowrap;}
+  .health-critical-banner{display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:8px; margin-bottom:12px; font-size:12.5px; color:var(--bad); background:color-mix(in srgb,var(--bad) 10%,transparent); border:1px solid color-mix(in srgb,var(--bad) 30%,transparent);}
+  .health-attn-list{display:flex; flex-direction:column; gap:8px;}
+  .health-attn-item{display:flex; align-items:flex-start; gap:9px; padding:9px 10px; border-radius:8px; background:var(--panel-2);}
+  .health-attn-dot{width:8px; height:8px; border-radius:50%; flex:none; margin-top:4px;}
+  .health-attn-item.critical .health-attn-dot{background:var(--bad);}
+  .health-attn-item.warning .health-attn-dot{background:var(--signal);}
+  .health-attn-title{font-size:13px; font-weight:700; color:var(--ink);}
+  .health-attn-detail{font-size:12px; color:var(--ink-dim); line-height:1.5; margin-top:2px;}
+  .health-storage-bar{display:flex; height:11px; border-radius:5px; overflow:hidden; background:var(--storage-track); margin-bottom:12px;}
+  .health-storage-seg{height:100%;}
+  /* Storage legend rows — a dot + label + right-aligned value, no bar (the
+     stacked bar above already shows relative proportion; repeating it per
+     row would be redundant). */
+  .storage-legend-row{display:flex; align-items:center; gap:9px; padding:7px 0;}
+  .storage-legend-row + .storage-legend-row{border-top:1px solid var(--rr-card-border);}
+  .storage-legend-dot{width:9px; height:9px; border-radius:2px; flex:none;}
+  .storage-legend-label{flex:1; min-width:0; font-size:13px; color:var(--rr-label);}
+  .storage-legend-value{flex:none; font-size:12.5px; font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--rr-desc);}
+  .health-storage-actions{display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;}
+  .health-unsupported{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--ink-dim);}
+  .health-unsupported h3{color:var(--ink); margin-bottom:6px;}
+  .health-page .btn-sm{padding:5px 10px; font-size:11.5px; flex:none;}
+  .health-card-hdr-row{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;}
+  .health-card-hdr-row .health-card-hdr{margin-bottom:0;}
+  /* Raw-disclosure dump — the fields that don't have a defensible threshold
+     of their own (freq, srtt, exact byte counts, uptime) stay here rather
+     than posing as a ReadingRow with a color that doesn't mean anything. */
+  .health-diag-vals{font-size:11.5px; font-family:var(--mono); color:var(--ink-faint); word-break:break-word; margin-top:6px;}
+  /* Storage's own total/used/free line only — centered within the card,
+     unlike the Controller/System raw-stat dumps that share .health-diag-vals
+     but stay left-aligned. */
+  .health-storage-totals{text-align:center;}
+  /* ReadingRow — the shared anatomy every Health card metric renders
+     through: a human label + a state-colored current-vs-threshold value on
+     one line, an optional duty/percent bar underneath. Four states:
+     healthy/warning/critical/neutral (neutral = not evaluated — idle,
+     heating/cooling in transit, unmeasurable). The value TEXT and the BAR
+     FILL use different color rules on purpose: a healthy row's value stays
+     in quiet secondary grey (--rr-value-healthy) while its bar still fills
+     green (--rr-healthy) — only warning/critical color the text, so a card
+     with a real problem is the only one that visually shouts. */
+  .reading-row{padding:7px 0;}
+  .reading-row + .reading-row{border-top:1px solid var(--line-soft);}
+  .reading-row-top{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:5px;}
+  .reading-label{font-size:14px; color:var(--rr-label);}
+  .reading-value{font-size:13px; font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; color:var(--rr-value-healthy);}
+  .reading-value.warning{color:var(--rr-warning);}
+  .reading-value.critical{color:var(--rr-critical);}
+  .reading-value.neutral{color:var(--rr-neutral);}
+  .reading-bar{height:6px; border-radius:4px; background:var(--rr-bar-track); overflow:hidden;}
+  .reading-bar-fill{height:100%; border-radius:4px; background:var(--rr-healthy);}
+  .reading-bar-fill.warning{background:var(--rr-warning);}
+  .reading-bar-fill.critical{background:var(--rr-critical);}
+  .reading-bar-fill.neutral{background:var(--rr-neutral);}
+  /* Footer note — only rendered when a card has something specific to say
+     (e.g. a duty imbalance between two named heads), never a generic
+     "something's wrong" line. Colored to match the worst row in the card. */
+  .reading-note{font-size:12.5px; line-height:1.5; margin-top:9px;}
+  .reading-note.warning{color:var(--rr-warning);}
+  .reading-note.critical{color:var(--rr-critical);}
+  /* Toolheads card — compact rows, not the fleet card's big spool lanes. */
+  .health-toolhead-row{display:flex; align-items:center; gap:10px; padding:6px 0; font-size:12.5px; border-bottom:1px solid var(--line-soft);}
+  .health-toolhead-row:last-child{border-bottom:none;}
+  .health-toolhead-row.active{color:var(--ink);}
+  .health-toolhead-swatch{width:12px; height:12px; border-radius:50%; flex:none; border:1px solid var(--line);}
+  .health-toolhead-swatch.empty{background:transparent; border-style:dashed; border-color:var(--ink-faint);}
+  .health-toolhead-swatch.unknown{background:repeating-linear-gradient(45deg,var(--ink-faint),var(--ink-faint) 2px,transparent 2px,transparent 4px);}
+  .health-toolhead-label{flex:0 0 32px; font-weight:700; color:var(--ink);}
+  .health-toolhead-material{flex:1; min-width:0; color:var(--ink-dim);}
+  .health-toolhead-state{flex:none; font-size:11.5px; color:var(--ink-faint);}
+  .health-toolhead-row.active .health-toolhead-state{color:var(--busy); font-weight:600;}
+  /* Controller card — one block per MCU: a state dot + name, then its
+     ReadingRows. */
+  .health-mcu-block{padding:10px 0; border-bottom:1px solid var(--line-soft);}
+  .health-mcu-block:first-child{padding-top:0;}
+  .health-mcu-block:last-child{border-bottom:none; padding-bottom:0;}
+  .health-mcu-hdr{display:flex; align-items:center; gap:7px; margin-bottom:4px;}
+  .health-mcu-dot{width:8px; height:8px; border-radius:50%; flex:none; background:var(--rr-healthy);}
+  .health-mcu-dot.warning{background:var(--rr-warning);}
+  .health-mcu-dot.critical{background:var(--rr-critical);}
+  .health-mcu-name{font-size:12.5px; font-weight:600; color:var(--rr-label);}
+  /* Fans card idle-collapse summary. */
+  .health-fans-detail{margin-top:8px;}
+  .health-fault-row{display:flex; align-items:center; gap:8px; padding:6px 0; font-size:12.5px; border-bottom:1px solid var(--line-soft);}
+  .health-fault-row:last-child{border-bottom:none;}
+  .health-fault-badge{flex:none; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--bad); background:color-mix(in srgb,var(--bad) 12%,transparent); border:1px solid color-mix(in srgb,var(--bad) 35%,transparent); border-radius:4px; padding:2px 6px;}
+  .health-fault-text{color:var(--ink-dim); flex:1; min-width:0; word-break:break-word;}
+  .health-service-row{display:flex; align-items:center; gap:10px; padding:6px 0; font-size:12.5px; border-bottom:1px solid var(--line-soft);}
+  .health-service-row:last-child{border-bottom:none;}
+  .health-service-date{flex:0 0 90px; color:var(--ink-dim); font-family:var(--mono); font-size:11.5px;}
+  .health-service-component{flex:0 0 110px; font-weight:600;}
+  .health-service-comment{flex:1; min-width:0; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .health-service-cost{flex:none; font-family:var(--mono); color:var(--ink-faint); font-size:11.5px;}
+  .health-svc-chips{display:flex; flex-wrap:wrap; gap:6px;}
+  .maint-chip{display:inline-flex; align-items:center; padding:5px 12px; border-radius:999px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink-dim); font-size:12px; cursor:pointer;}
+  .maint-chip:hover{border-color:var(--ink-faint);}
+  .maint-chip.active{border-color:var(--accent); color:var(--ink); background:color-mix(in srgb,var(--accent) 12%,var(--panel-2));}
   .queue-stat-cards{position:sticky; top:0; z-index:5; background:var(--chassis); display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; padding:14px 0 12px; border-bottom:1px solid var(--line-soft);}
   .queue-stat-card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; display:flex; align-items:baseline; gap:9px; flex-wrap:wrap;}
   .queue-stat-value{font-size:26px; font-weight:800; color:var(--ink);}
@@ -756,6 +930,35 @@
   .switch-text{display:flex; flex-direction:column; gap:2px; padding-top:1px;}
   .switch-label{font-size:13px; color:var(--ink);}
   .switch-desc{font-size:12px; color:var(--ink-faint); line-height:1.5;}
+
+  /* ---- Checkbox: reusable multi-select control (real checkbox, styled) ----
+     Same technique as Switch above: appearance:none directly on the input
+     (not a hidden input behind a separate box), so a plain <label> wrapping
+     it still gets native click/keyboard/label semantics for free. Ticks and
+     the indeterminate dash are an inline SVG background — precisely centered
+     regardless of border-box math, no ::after position to hand-tune.
+     Use for multi-select lists (choosing several of several items for an
+     action); never for a standalone on/off setting — that's what Switch is
+     for. */
+  .checkbox-row{display:flex; align-items:flex-start; gap:10px; cursor:pointer;}
+  .checkbox-row.disabled{opacity:.38; cursor:not-allowed;}
+  .checkbox-input{appearance:none; -webkit-appearance:none; box-sizing:border-box; flex:none; margin:0; width:18px; height:18px; border-radius:5px; background-color:transparent; background-repeat:no-repeat; background-position:center; background-size:12px 12px; border:1.5px solid var(--line); cursor:pointer; transition:background-color .15s,border-color .15s;}
+  .checkbox-input:hover:not(:disabled){border-color:var(--accent);}
+  .checkbox-input:checked{background-color:var(--accent); border-color:var(--accent); background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M3.5 8.3 6.3 11.2 12.5 4.6' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");}
+  .checkbox-input:indeterminate{background-color:var(--accent); border-color:var(--accent); background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none'%3E%3Cline x1='4' y1='8' x2='12' y2='8' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");}
+  .checkbox-input:disabled{cursor:not-allowed;}
+  .checkbox-input:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:5px;}
+  .checkbox-text{display:flex; flex-direction:column; gap:2px; padding-top:1px;}
+  .checkbox-label{font-size:13px; color:var(--ink);}
+  .checkbox-desc{font-size:12px; color:var(--ink-faint); line-height:1.5;}
+  /* On-surface variant: the base variant's transparent fill + faint border
+     reads fine on a flat dialog/list background but goes nearly invisible on
+     a card or over media (a camera snapshot, a thumbnail). Use this modifier
+     class alongside .checkbox-input anywhere it sits on a non-flat surface;
+     size/radius/tick/focus-ring are unchanged from the base variant. */
+  .checkbox-input.on-surface{background-color:rgba(0,0,0,.35); border-color:rgba(255,255,255,.45); box-shadow:0 1px 4px rgba(0,0,0,.5);}
+  .checkbox-input.on-surface:hover:not(:disabled){background-color:rgba(0,0,0,.5); border-color:#fff;}
+  .checkbox-input.on-surface:checked{background-color:var(--accent); border-color:var(--accent); box-shadow:0 0 0 1.5px rgba(255,255,255,.85),0 1px 4px rgba(0,0,0,.5);}
   .secret-field{display:inline-flex; align-items:center;}
   .secret-chip{display:inline-flex; align-items:center; gap:8px;}
   .secret-chip .btn{padding:5px 10px; font-size:11.5px;}
@@ -845,12 +1048,18 @@
   /* tighten time row so values stay on one line */
   body.compact .prog-time-val{font-size:11px;}
   body.compact .prog-time-sep{margin:0 5px;}
-  /* hide non-essential buttons */
-  body.compact .foot button[data-id],
-  body.compact .foot button[data-preheat],
-  body.compact .foot button[data-plate],
+  /* Upload stays hidden in compact — it's the one action that doesn't fit
+     the "quick glance/quick action" idiom this mode is for. Everything else
+     (print/preheat/reprint) now shows the same as the full card. While
+     printing there's only room for 3 of the 4 full-card buttons: E-Stop
+     drops (Stop already covers "get me out of this print"), and the
+     remaining three are reordered via flex order to Pause, Plate, Stop. */
+  body.compact .foot button[data-start="0"]{display:none;}
+  body.compact .foot button[data-estop]{display:none;}
   body.compact .foot button[data-act="pause"],
-  body.compact .foot button[data-act="resume"]{display:none;}
+  body.compact .foot button[data-act="resume"]{order:1;}
+  body.compact .foot button[data-plate]{order:2;}
+  body.compact .foot button[data-act="cancel"]{order:3;}
   /* shrink filament lanes */
   body.compact .afc-lanes{gap:4px;}
   body.compact .afc-lane-card{border-radius:7px;}
@@ -890,7 +1099,6 @@
   body.camview .progress-section>.prog-row{margin-bottom:6px;}
   body.camview .prog-pct{font-size:15px;}
   body.camview .prog-track{height:3px;}
-  body.camview .prog-dot{width:8px; height:8px;}
   body.camview .cam-prog-file{margin-bottom:6px;}
   /* .pcard's own flexbox `gap` (10px in camview) adds equally between EVERY
      child pair, including progress-section→foot and foot→pstatus — on top
@@ -913,23 +1121,46 @@
   .cam-shot-retryable{cursor:pointer;}
   .cam-shot-retryable:hover{background:#22262e;}
   .cam-shot-retryable:hover .cam-shot-placeholder-icon{opacity:.9;}
-  .cam-select{display:inline-flex; align-items:center; margin-right:8px;}
-  .cam-select input{width:16px; height:16px; cursor:pointer;}
+  /* align-self:flex-start + margin-top instead of the .top row's own
+     align-items:center (which the printer-name block's other sibling,
+     status-badge/pills, still needs) — .hdr-brand is 9px + 2px margin-bottom,
+     .hdr-name is 15px; this offset centers the 18px checkbox against the
+     name line specifically, not the two-line block as a whole. No
+     margin-right: .top's own 10px flex gap already spaces it from .pn. */
+  .cam-select{display:inline-flex; align-items:center; align-self:flex-start; margin-top:9px;}
+  .pcard:has(.cam-chk:checked){border-color:var(--accent);}
+  .pcard:has(.cam-chk:checked) .top{background:color-mix(in srgb,var(--accent) 16%,transparent); margin:-6px -6px 0; padding:6px 6px 0; border-radius:9px 9px 0 0;}
+  .list-row:has(.checkbox-input:checked){background:color-mix(in srgb,var(--accent) 10%,transparent);}
 
-  #camViewBar{display:none;}
-  body.camview #camViewBar,body.listview #camViewBar{display:flex; flex-direction:column; gap:10px; margin-top:14px;}
-  .camtabs{display:flex; gap:6px; flex-wrap:wrap;}
+  /* Shown whenever the fleet grid/list renders (gridToolbarActive() in JS —
+     regular/compact/camera/list); Print Farm is a separate full-page
+     dashboard that hides this element's ancestor (#fleet-wrap) outright, so
+     no view-mode gating is needed here at all. */
+  #camViewBar{display:flex; flex-direction:column; gap:6px; margin-top:14px;}
+  /* Single row: chips+divider+tag-select on the left (flex:1, wraps first),
+     select-all/actions/Edit Tags on the right (flex:none, wraps as a unit —
+     stays on one line as long as possible, only dropping below the left
+     group once there's truly no room left on the row). */
+  .cambar{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .camtabs{display:flex; align-items:center; gap:6px; flex-wrap:wrap; flex:1; min-width:0;}
   .camtabs button{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 12px; font-size:12px; color:var(--ink-dim); cursor:pointer;}
   .camtabs button.active{color:var(--ink); font-weight:600; border-color:var(--accent);}
-  .cambar{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+  .camtabs button.zero{opacity:.45;}
+  .cambar-divider{width:1px; height:16px; background:var(--line-soft); flex:none;}
   .cambar select{background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 10px; font-size:12px; color:var(--ink);}
+  .cambar-actions{display:flex; align-items:center; gap:8px; flex:none; margin-left:auto;}
   .camselall{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim); cursor:pointer;}
-  #camSelCount{font-size:12px; color:var(--ink-dim);}
+  #camSelCount.has-selection{color:var(--accent); font-weight:600;}
 
   .tags-list{display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow:auto; margin-top:10px;}
   .tags-row{display:flex; align-items:center; gap:10px;}
   .tags-row-name{flex:0 0 140px; font-size:13px; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .tags-row-input{flex:1;}
+  .tags-field-row{display:flex; align-items:center; gap:8px;}
+  .tags-field-row .ptags{min-width:0;}
+  .tags-row-swatch{flex:none; display:flex; align-items:center; min-width:16px;}
+  .tag-color-swatch{width:16px; height:16px; border-radius:4px; border:1px solid rgba(255,255,255,.25); flex:none;}
+  .tag-color-swatch.invalid{background:transparent; border:1px dashed var(--bad); color:var(--bad); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; line-height:1;}
 
   .bulkheat-toolbar{display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:12px; color:var(--ink-dim);}
   .bulkheat-selectall{display:flex; align-items:center; gap:6px; cursor:pointer;}
@@ -938,6 +1169,7 @@
   .bulkheat-list{display:flex; flex-direction:column; gap:2px; max-height:220px; overflow:auto; margin-top:8px; border:1px solid var(--line-soft); border-radius:8px; padding:6px 4px;}
   .bulkheat-row{display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:6px; font-size:13px; cursor:pointer;}
   .bulkheat-row:hover{background:var(--panel-2);}
+  .bulkheat-row:has(.checkbox-input:checked){background:color-mix(in srgb,var(--accent) 10%,transparent);}
   .bulkheat-row input{cursor:pointer; flex:none;}
   .bulkheat-row.disabled{opacity:.5; cursor:default;}
   .bulkheat-row.disabled:hover{background:none;}
@@ -986,7 +1218,12 @@
   .list-printer-cell .hdr-brand{margin-bottom:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   /* ~40 characters — the printer name column was taking up far more room
      than any real printer name needs. */
-  .list-printer-cell .hdr-name{font-size:13px; max-width:15ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  /* 25ch matches maxlength="25" on the printer-name input (Settings >
+     Printers) — the actual enforced cap, not a guess. ch is font-relative,
+     so this scales correctly with this rule's own 13px/800-weight/
+     letter-spacing font, not the vendor line's (which isn't capped here —
+     vendor names are short and never drive this column's width). */
+  .list-printer-cell .hdr-name{font-size:13px; max-width:25ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .list-tag{display:inline-block; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:999px; padding:2px 8px; margin:0 4px 4px 0; font-size:10.5px; color:var(--ink-dim); white-space:nowrap;}
   .list-file-cell{display:flex; align-items:center; gap:8px; cursor:pointer; min-width:0;}
   .list-thumb{width:32px; height:32px; object-fit:cover; border-radius:6px; flex:none;}
@@ -995,15 +1232,31 @@
   /* Progress column: a real bar (not just text) since the row is tall
      enough for it, plus remaining time + layer on the line underneath. */
   .list-progress{display:flex; flex-direction:column; gap:3px;}
-  .list-progress-row{display:flex; align-items:center; gap:8px;}
-  .list-progress-pct{font-family:var(--mono); font-size:11px; font-weight:700; flex:none; width:26px;}
+  .list-progress-row{display:flex; align-items:center; gap:10px;}
+  .list-progress-pct{font-family:var(--mono); font-size:11px; font-weight:700; flex:none; width:30px;}
   .list-progress-pct.cyan{color:#fff;} .list-progress-pct.amber{color:#fcd34d;} .list-progress-pct.red{color:#ff8c6b;} .list-progress-pct.green{color:var(--ok);}
   .list-progress-track{flex:1; height:5px;}
   .list-progress-fill{animation:none !important;}
   .list-progress-meta{font-size:10.5px; color:var(--ink-dim); font-family:var(--mono);}
-  .list-progress-sep{color:var(--ink-faint); margin:0 2px;}
+  /* min-width sized to "9999 / 9999" (4 digits each side — the widest
+     realistic value, tabular numerals) at this font: measures 72.578px via
+     headless Chromium; 76px rounds that up with a small safety margin. The
+     column's own <col> is a fixed px width (not %) for the same number, so
+     table-layout:fixed can't shrink it when the row is squeezed — colgroup
+     percentages are what actually yield in that case, not this cell alone. */
+  .list-layers-cell{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:12px; color:var(--ink-dim); white-space:nowrap; min-width:76px;}
   .list-filament-cell{display:flex; align-items:center; flex-wrap:wrap; gap:4px;}
-  .list-filament-chip{display:inline-block; padding:2px 7px; border-radius:5px; font-size:10px; font-weight:700; letter-spacing:0.03em; line-height:1.5;}
+  /* Fixed width, not content width — "PETG" (4 chars, the longest material
+     code this renders) measures 39.375px including this padding at this
+     font/weight/letter-spacing (measured via headless Chromium, not
+     guessed); 40px rounds that up by a hair. Every chip gets this width
+     regardless of its own text length, so the column reads as an aligned
+     grid instead of each chip sizing to its own content. */
+  .list-filament-chip{display:inline-block; box-sizing:border-box; width:40px; padding:2px 0; border-radius:5px; font-size:10px; font-weight:700; letter-spacing:0.03em; line-height:1.5; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  /* Empty head: hollow, not omitted — same box (width/height/radius) as a
+     loaded chip via box-sizing:border-box, so a row with a mix of loaded and
+     empty heads still lines up chip-for-chip against its neighbors. */
+  .list-filament-chip.empty{background:transparent; border:1px dashed var(--line);}
 
   /* ---- Reduced motion: kill the ambient/infinite animations (pulse, shimmer,
      slide) for users who've asked for it. Brief state-driven transitions
@@ -1017,8 +1270,9 @@
     .ra-spinner{animation:none;}
   }
   .fleet-list .status-badge{display:inline-flex;}
-  .list-status-cam{display:inline-block; margin-left:8px; vertical-align:middle;}
+  .list-status-cam{display:inline-block; vertical-align:middle;}
   .list-status-cam img{width:14px; height:14px;}
   .list-actions-cell{display:flex; gap:6px; white-space:nowrap;}
   .btn-chip.icon-only{flex:none; width:30px; height:30px; padding:0; border-radius:8px;}
   .list-th-chk,.fleet-list td:first-child{text-align:center;}
+  .list-th-cam{text-align:center;}
