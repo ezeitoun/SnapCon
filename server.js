@@ -19,6 +19,7 @@ const connHttp = require("./connectors/http-utils");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 const { createAuditLog } = require("./audit/AuditLog");
 const { createSyncEngine } = require("./sync/SyncEngine");
+const { loadConfigFile } = require("./configLoader");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -56,9 +57,20 @@ const DEFAULT_CFG = { gcodeFolder: "./gcode", port: 4545, printers: [] };
 
 // Live config — editable from the Settings page, no restart needed.
 let CFG, FOLDER, PRINTERS;
+// Set fresh on every loadConfig() call (including the reload after a
+// successful POST /api/config save, which naturally clears these again by
+// loading the just-written, definitely-valid file) — see P0-1 in
+// CODE_AUDIT.md: a corrupt config.json used to be silently discarded and
+// then permanently overwritten with near-empty defaults by the ensure*Schema
+// migrations just below. These gate that overwrite and surface the failure
+// to an admin via publicCfg() (Settings > General shows a warning banner).
+let CONFIG_LOAD_FAILED = false;
+let CONFIG_LOAD_QUARANTINE_PATH = null;
 function loadConfig() {
-  try { CFG = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")); }
-  catch { CFG = { ...DEFAULT_CFG }; }
+  const result = loadConfigFile(CONFIG_PATH, DEFAULT_CFG);
+  CFG = result.cfg;
+  CONFIG_LOAD_FAILED = result.loadFailed;
+  CONFIG_LOAD_QUARANTINE_PATH = result.quarantinePath;
   FOLDER = path.resolve(BASE_DIR, CFG.gcodeFolder || "./gcode");
   PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
   try { fs.mkdirSync(FOLDER, { recursive: true }); } catch {}
@@ -91,7 +103,7 @@ function ensurePrinterIds() {
       changed = true;
     }
   }
-  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensurePrinterIds();
 
@@ -115,7 +127,7 @@ function ensureNotificationSchema() {
     nf.telegramEnabled = nf.service === "telegram";
     changed = true;
   }
-  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensureNotificationSchema();
 
@@ -127,7 +139,7 @@ ensureNotificationSchema();
 function ensureDefaultViewSchema() {
   if (CFG.defaultView === undefined) {
     CFG.defaultView = CFG.openCompact ? "compact" : "regular";
-    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
+    if (!CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
   }
 }
 ensureDefaultViewSchema();
@@ -152,7 +164,7 @@ const { migratePrinterPoolConfig } = require("./queue/migratePrinterPool");
   const { cfg, changed } = migratePrinterPoolConfig(CFG);
   CFG = cfg;
   PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
-  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 })();
 function ensureGroupsSchema() {
   if (!Array.isArray(CFG.groups)) CFG.groups = [];
@@ -162,7 +174,7 @@ function ensureGroupsSchema() {
     CFG.groups.unshift({ id: GROUP_EVERYONE_ID, name: "Everyone", createdAt: now, updatedAt: now });
     changed = true;
   }
-  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensureGroupsSchema();
 
@@ -187,7 +199,7 @@ function ensurePrinterPoolSchema() {
     CFG.printerPools.unshift({ id: PRINTER_POOL_DEFAULT_MANUAL_ID, name: "Unassigned", type: "manual", isDefault: true, bedClearOnDispatchFailure: false, createdAt: now, updatedAt: now });
     changed = true;
   }
-  if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensurePrinterPoolSchema();
 const queueStore = createQueueStore({ baseDir: BASE_DIR });
@@ -1895,7 +1907,9 @@ function publicCfg(role) {
       telegramBotConfigured: !!(CFG.notifications && CFG.notifications.telegramBotToken)
     },
     auditRetentionDays: CFG.auditRetentionDays || 90,
-    auditAvailable: auditLog.isAvailable()
+    auditAvailable: auditLog.isAvailable(),
+    configLoadFailed: CONFIG_LOAD_FAILED,
+    configLoadQuarantinePath: CONFIG_LOAD_QUARANTINE_PATH
   };
 }
 app.get("/api/config", requireAuth, (req, res) => res.json(publicCfg(req.user.role)));

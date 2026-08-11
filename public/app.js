@@ -6262,6 +6262,30 @@ function setNotifTabValues(v){
 }
 registerSettingsTab("notif",notifTabValues,setNotifTabValues);
 
+// Surfaces a corrupt/unreadable config.json from the last startup (see
+// CODE_AUDIT.md P0-1). CONFIG_LOAD_FAILED/CONFIG_LOAD_QUARANTINE_PATH are the
+// single source of truth for "is a load failure still active in this
+// session" — read by the first-run onboarding check (below) so it doesn't
+// mistake a corrupt-config-caused empty fleet for a genuine first run, and
+// by saveConfig()'s pre-save confirmation. Called both from loadConfigUI()
+// (initial state) and from saveConfig()'s success path (POST /api/config's
+// response already reflects the post-save reload server-side, so a
+// successful save genuinely clears this, not just optimistically).
+let CONFIG_LOAD_FAILED=false, CONFIG_LOAD_QUARANTINE_PATH=null;
+function renderConfigLoadWarning(c){
+  CONFIG_LOAD_FAILED=!!c.configLoadFailed;
+  CONFIG_LOAD_QUARANTINE_PATH=c.configLoadQuarantinePath||null;
+  const card=$("configLoadWarningCard");
+  if(!card) return;
+  if(!CONFIG_LOAD_FAILED){ card.style.display="none"; return; }
+  card.style.display="";
+  card.innerHTML=`<div class="settings-warning-title">config.json could not be read on last startup</div>`+
+    `<div>SnapCon started with default settings instead of your saved configuration — nothing has been overwritten yet. `+
+    (CONFIG_LOAD_QUARANTINE_PATH
+      ? `Your previous file was preserved as <b>${esc(CONFIG_LOAD_QUARANTINE_PATH)}</b> for recovery.`
+      : `Your previous config.json was left in place, unmodified, in case it can be repaired manually.`)+
+    ` Review the settings below and Save once you're ready — this clears automatically after your next save.</div>`;
+}
 async function loadConfigUI(){
   await loadConnectorTypes();
   // Awaited before any printer row is built below — the Access checklist and
@@ -6272,6 +6296,7 @@ async function loadConfigUI(){
   await loadQueueManagementUI();
   try{
     const c=await getJSON("/api/config");
+    renderConfigLoadWarning(c);
     $("setFolder").value=c.gcodeFolder||"";
     scheduleFolderCheck();
     $("setLogsFolder").value=c.logsFolder||"";
@@ -6366,7 +6391,12 @@ async function loadConfigUI(){
     // The onboarding "add your first printer" flow drops into the admin-only
     // Printers settings tab — never force that open for a non-Admin role,
     // who couldn't reach or complete it (Settings itself is hidden for them).
-    if(!c.configured && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("sortBtn").style.display="none"; $("compactBtn").style.display="none"; if($("filesBtn")) $("filesBtn").style.display="none"; if($("maintBtn")) $("maintBtn").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
+    // An empty printer list caused by a failed config load (CONFIG_LOAD_FAILED)
+    // is NOT a genuine first run — it must not trigger onboarding, which would
+    // hide the warning banner above (it lives on tab-general, and showSetTab
+    // below hides every other .set-panel) and invite saving an empty printer
+    // list over the still-recoverable original.
+    if(!c.configured && !CONFIG_LOAD_FAILED && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title="Back"; document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("sortBtn").style.display="none"; $("compactBtn").style.display="none"; if($("filesBtn")) $("filesBtn").style.display="none"; if($("maintBtn")) $("maintBtn").style.display="none"; $("setupmsg").textContent="Welcome — add your printers to get started"; if(!$("setPrinters").children.length) addPrinterRow("",""); }
   }catch(e){}
 }
 // ---- Shared masked-secret control (printer API token, Telegram bot token) ----
@@ -7221,6 +7251,16 @@ function setSaveStatus(cls,text){
   });
 }
 async function saveConfig(){
+  // A load failure means everything currently shown (printers included) came
+  // from defaults, not from disk — the original is only safe as long as
+  // nothing overwrites it. Same confirm() pattern showSetTab() already uses
+  // for discard-unsaved-changes, not a new modal mechanism.
+  if(CONFIG_LOAD_FAILED){
+    const recoveryNote=CONFIG_LOAD_QUARANTINE_PATH
+      ? `The original configuration that failed to load has been preserved for recovery as ${CONFIG_LOAD_QUARANTINE_PATH}.`
+      : `The original configuration that failed to load has been preserved for recovery.`;
+    if(!confirm(`SnapCon could not load the existing configuration on last startup. Saving now will replace the active configuration with the values currently shown here. ${recoveryNote}\n\nSave anyway?`)) return;
+  }
   const saveBtn=$("saveCfg");
   if(saveBtn) saveBtn.disabled=true;
   setSaveStatus("work","Saving…");
@@ -7291,6 +7331,11 @@ async function saveConfig(){
   try{
     const c=await (await postJSON("/api/config",body)).json();
     if(c.error) throw new Error(c.error);
+    // The response already reflects server.js's post-save loadConfig() reload
+    // (a real re-read of the just-written, definitely-valid file, not an
+    // optimistic client-side assumption) — re-render so the warning banner
+    // actually clears, matching what its own text claims.
+    renderConfigLoadWarning(c);
     // A brand-new printer's row has no id yet at save time (gatherPrinters()
     // sends id:undefined for it, matched server-side by URL) — the response
     // carries the real assigned id back, but nothing previously wrote it onto
