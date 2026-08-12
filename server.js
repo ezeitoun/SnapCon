@@ -21,6 +21,7 @@ const { createAuditLog } = require("./audit/AuditLog");
 const { createSyncEngine } = require("./sync/SyncEngine");
 const { loadConfigFile } = require("./configLoader");
 const { readNotifyToken, ensureNotifyToken, timingSafeTokenEqual } = require("./notifyToken");
+const { isPathWithinFolder, resolveWithinFolder } = require("./pathSafety");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -385,10 +386,10 @@ app.get(/^\/health(\/.*)?$/i, (req, res) => {
 const { fetchTimeout, fetchJSONTimeout, baseUrl } = connHttp;
 
 // Resolve a requested path safely INSIDE the watched folder (no traversal).
+// See pathSafety.js for the actual containment logic and why it's not a
+// bare startsWith() check.
 function safePath(sub) {
-  if (!sub) return null;
-  const p = path.resolve(FOLDER, sub);
-  return p.startsWith(FOLDER) ? p : null;
+  return resolveWithinFolder(sub, FOLDER);
 }
 
 
@@ -481,7 +482,7 @@ app.post("/api/files/mkdir", requireRegular, (req, res) => {
     return res.status(400).json({ error: "Invalid folder name" });
   }
   const target = path.join(dir, clean);
-  if (!target.startsWith(FOLDER)) return res.status(400).json({ error: "Invalid folder name" });
+  if (!isPathWithinFolder(target, FOLDER)) return res.status(400).json({ error: "Invalid folder name" });
   if (fs.existsSync(target)) return res.status(409).json({ error: "Already exists" });
   try { fs.mkdirSync(target); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -530,7 +531,7 @@ app.post("/api/files/upload", requireRegular, rawGcodeBody, (req, res) => {
     return res.status(400).json({ error: "Only sliced files (.gcode/.gco/.g/.gx/.3mf) can be uploaded here" });
   }
   const target = path.join(dir, name);
-  if (!target.startsWith(FOLDER)) return res.status(400).json({ error: "Invalid file name" });
+  if (!isPathWithinFolder(target, FOLDER)) return res.status(400).json({ error: "Invalid file name" });
   if (fs.existsSync(target)) return res.status(409).json({ error: "Already exists" });
   if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "Empty upload" });
   try { fs.writeFileSync(target, req.body); res.json({ ok: true, name }); }
