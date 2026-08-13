@@ -61,6 +61,97 @@ test("excludeObject rejects an injected object name (rejected promise, not a net
   assert.equal(fetchCalled, false, "must reject before ever reaching the network");
 });
 
+// ---- moonrakerPost timeout (CODE_AUDIT.md P1-2) ----
+// Previously a bare fetch() with no AbortController at all — able to hang
+// the single most safety-critical action (E-Stop), plus pause/resume/
+// cancel/bed-temp/start-print, indefinitely against a wedged printer. These
+// mock a fetch that only ever settles in response to the AbortSignal it's
+// given, mirroring exactly how the real Fetch API's AbortController
+// integration behaves — this exercises the real, unmocked fetchTimeout()/
+// AbortController wiring inside moonrakerPost, only the network I/O itself
+// is faked.
+function abortReactiveFetch(delayMs) {
+  return (url, opts) => new Promise((resolve, reject) => {
+    const t = delayMs != null ? setTimeout(() => resolve({ ok: true, status: 200, text: async () => "" }), delayMs) : null;
+    opts.signal.addEventListener("abort", () => {
+      if (t) clearTimeout(t);
+      const e = new Error("This operation was aborted");
+      e.name = "AbortError";
+      reject(e);
+    });
+  });
+}
+
+test("moonrakerPost aborts and rejects, instead of hanging forever, when Moonraker never responds", async () => {
+  const realFetch = global.fetch;
+  global.fetch = abortReactiveFetch(null);
+  try {
+    await assert.rejects(() => http.moonrakerPost(p, "/printer/emergency_stop", 30));
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("moonrakerPost succeeds normally when the response arrives well within the bound", async () => {
+  const realFetch = global.fetch;
+  global.fetch = abortReactiveFetch(5);
+  try {
+    await assert.doesNotReject(() => http.moonrakerPost(p, "/printer/emergency_stop", 200));
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("moonrakerPost: an explicit ms override actually changes the bound — a slower-but-legitimate response succeeds when given enough time", async () => {
+  const realFetch = global.fetch;
+  global.fetch = abortReactiveFetch(40);
+  try {
+    await assert.doesNotReject(() => http.moonrakerPost(p, "/printer/emergency_stop", 200));
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("moonrakerPost: an explicit ms override actually changes the bound — the same response times out under a tighter bound", async () => {
+  const realFetch = global.fetch;
+  global.fetch = abortReactiveFetch(100);
+  try {
+    await assert.rejects(() => http.moonrakerPost(p, "/printer/emergency_stop", 20));
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("moonrakerPost: a timeout produces a distinct, useful message naming the printer and the bound", async () => {
+  const realFetch = global.fetch;
+  global.fetch = abortReactiveFetch(null);
+  try {
+    await assert.rejects(() => http.moonrakerPost(p, "/printer/emergency_stop", 25), /Test Printer did not respond within 25ms/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("moonrakerPost: a genuine network failure (not a timeout) still reports 'Could not reach', distinctly from the timeout message", async () => {
+  const realFetch = global.fetch;
+  global.fetch = async () => { throw new Error("ECONNREFUSED"); };
+  try {
+    await assert.rejects(() => http.moonrakerPost(p, "/printer/emergency_stop", 100), /Could not reach Test Printer: ECONNREFUSED/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
+test("sendGcode: an explicit ms is threaded through to moonrakerPost's bound (not silently ignored)", async () => {
+  const realFetch = global.fetch;
+  global.fetch = abortReactiveFetch(null);
+  try {
+    await assert.rejects(() => http.sendGcode(p, "G29", 30), /did not respond within 30ms/);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 // ---- parseFallbackStats / getFileMetadata fallback ----
 // Moonraker's own metadata scanner reports slicer:"Unknown" (no
 // estimated_time/filament_colour at all) on real Creality-Print-sliced

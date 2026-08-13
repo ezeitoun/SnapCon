@@ -254,6 +254,50 @@ test("applyHeadMapping sends nothing at all when auto-level isn't requested anyw
   assert.equal(called, false);
 });
 
+// CODE_AUDIT.md P1-2: G29 genuinely blocks for the full leveling pass (see
+// this connector's own comment above applyHeadMapping) — it must NOT
+// inherit moonrakerPost's 8s fast-command default, or a real ~1-3 minute
+// leveling pass would be wrongly aborted mid-flight. Uses node:test's mock
+// timers (same convention as test/connectors/snapmaker-u1-klipper-ws.test.js)
+// to prove the actual bound without waiting 5 real minutes: a fetch that
+// only ever settles in response to the AbortSignal, ticked to just under
+// and then just past the 5-minute mark.
+// Drains the microtask queue enough times for a rejection to propagate up
+// through however many `await` layers sit between the mocked fetch and the
+// test's own `.then()` observer — a fixed small count of flushes is brittle
+// against call-stack depth (matched empirically for applyHeadMapping's own
+// extra `await http.sendGcode(...)` layer beyond moonrakerPost itself).
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+test("applyHeadMapping (G29) uses a generous ~5-minute timeout, not the 8s fast-command default", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let settled = false, rejected = false;
+  const realFetch = global.fetch;
+  global.fetch = (url, opts) => new Promise((_resolve, reject) => {
+    opts.signal.addEventListener("abort", () => {
+      const e = new Error("This operation was aborted");
+      e.name = "AbortError";
+      reject(e);
+    });
+  });
+  const pending = conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [], {}, { autoLevel: true });
+  pending.then(() => { settled = true; }, () => { settled = true; rejected = true; });
+  pending.catch(() => {}); // avoid an unhandled-rejection warning while intentionally left pending below
+
+  try {
+    t.mock.timers.tick(4 * 60 * 1000); // 4 minutes — well under the bound
+    await flush();
+    assert.equal(settled, false, "must not time out this early — would indicate it's still using the 8s default, not the 5-minute override");
+
+    t.mock.timers.tick(65 * 1000); // cross the 5-minute mark
+    await flush();
+    assert.equal(settled, true);
+    assert.equal(rejected, true);
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 // ---- Thumbnail: embedded base64 PNG, not a Moonraker .thumbs/ sidecar ----
 // Confirmed live: the shared http.getThumbnail's ".thumbs/*.png" sidecar
 // convention 404s on every real Creality-Print-sliced file, because

@@ -186,13 +186,22 @@ async function applyHeadMapping(p, tools, map, prefs = {}) {
     if (idxs.length) prefsLine += " FLOW_CALIBRATE_EXTRUDERS='" + idxs.join(",") + "'";
   }
   lines.push(prefsLine);
-  await http.sendGcode(p, lines.join("\n"));
+  // Generous explicit bound, not the default 8s fast-command timeout —
+  // whether SET_PRINT_PREFERENCES BED_LEVEL=1 merely stores a flag for the
+  // print-start macro to consult later, or synchronously triggers physical
+  // leveling itself, isn't confirmed from source (see CODE_AUDIT.md P1-2);
+  // this is a safety ceiling for an unconfirmed-duration call, not a claim
+  // that it should ever actually take this long.
+  await http.sendGcode(p, lines.join("\n"), 5 * 60 * 1000);
 }
 exports.applyHeadMapping = applyHeadMapping;
 
 async function unloadFilament(p, extruders) {
   for (const e of extruders) {
-    await http.sendGcode(p, "AUTO_FEEDING EXTRUDER=" + parseInt(e, 10) + " UNLOAD=1");
+    // AUTO_FEEDING ... UNLOAD=1 is a physical retract/feed operation of
+    // unconfirmed real-world duration — generous explicit bound rather than
+    // the default 8s fast-command timeout or leaving it fully unbounded.
+    await http.sendGcode(p, "AUTO_FEEDING EXTRUDER=" + parseInt(e, 10) + " UNLOAD=1", 5 * 60 * 1000);
   }
 }
 exports.unloadFilament = unloadFilament;

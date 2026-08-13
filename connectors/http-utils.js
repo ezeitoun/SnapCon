@@ -32,14 +32,26 @@ async function fetchJSONTimeout(url, ms = 3500) {
 }
 
 // POST to a printer's Moonraker endpoint. Throws a user-showable error on
-// network failure or a non-2xx response.
-async function moonrakerPost(p, apiPath) {
+// network failure, timeout, or a non-2xx response.
+// `ms` defaults to a short bound suitable for a POST-and-forget gcode
+// command (pause/resume/cancel/estop/bed-temp/start-print/exclude-object/
+// filament-color) — see CODE_AUDIT.md P1-2: this used to be a bare fetch()
+// with no timeout at all, able to hang the single most safety-critical
+// action (E-Stop) indefinitely against a wedged printer. Some Moonraker
+// macros are NOT fire-and-forget, though — `/printer/gcode/script` blocks
+// until the macro fully finishes (confirmed live for G29, see
+// creality-klipper.js), so a genuinely long-running physical macro must
+// pass an explicit, generous `ms` rather than inherit this default.
+async function moonrakerPost(p, apiPath, ms = 8000) {
   let r;
-  try { r = await fetch(baseUrl(p) + apiPath, { method: "POST" }); }
-  catch (e) { throw new Error("Could not reach " + p.name + ": " + e.message); }
+  try { r = await fetchTimeout(baseUrl(p) + apiPath, ms, { method: "POST" }); }
+  catch (e) {
+    if (e.name === "AbortError") throw new Error(p.name + " did not respond within " + ms + "ms");
+    throw new Error("Could not reach " + p.name + ": " + e.message);
+  }
   if (!r.ok) throw new Error("Moonraker " + r.status + ": " + (await r.text()).slice(0, 160));
 }
-const sendGcode = (p, script) => moonrakerPost(p, "/printer/gcode/script?script=" + encodeURIComponent(script));
+const sendGcode = (p, script, ms) => moonrakerPost(p, "/printer/gcode/script?script=" + encodeURIComponent(script), ms);
 
 // Stream a file to the printer as multipart/form-data, reporting bytes sent so
 // the UI can show a real upload progress bar. Resolves on the printer's 2xx.

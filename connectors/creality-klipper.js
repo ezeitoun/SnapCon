@@ -254,7 +254,10 @@ exports.bedTemp = http.bedTemp;
 // bed BEFORE this print, not a leveling pass racing it.
 async function applyHeadMapping(p, tools, map, prefs = {}) {
   const autoLevel = prefs.autoLevel !== undefined ? !!prefs.autoLevel : !!p.autoLevel;
-  if (autoLevel) await http.sendGcode(p, "G29");
+  // Generous explicit bound (not the default 8s fast-command timeout) — see
+  // this function's own comment above: the documented ~1-3 minute leveling
+  // pass is a genuine synchronous wait, not a hang to guard against.
+  if (autoLevel) await http.sendGcode(p, "G29", 5 * 60 * 1000);
 }
 exports.applyHeadMapping = applyHeadMapping;
 // No unloadFilament — that's the K2 CFS gap noted above.
