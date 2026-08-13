@@ -1,11 +1,20 @@
 <!DOCTYPE html>
 <!-- SnapCon — index v0.5.0 -->
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>SnapCon</title>
 <link rel="preload" href="/fonts/JetBrainsMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
+<script>
+(function(){
+  var stored=null;
+  try{ stored=localStorage.getItem("snapcon-theme"); }catch(e){}
+  var theme=(stored==="light"||stored==="dark")?stored
+    :((window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark");
+  document.documentElement.setAttribute("data-theme",theme);
+})();
+</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -98,6 +107,7 @@
       <button class="gear" id="queueBtn" title="Queue Management" style="display:none">
         <svg width="22.1" height="22.1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topbar-icon"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="12" height="4" rx="1"/></svg>
       </button>
+      <button class="gear" id="themeBtn" title="Switch to light theme" aria-pressed="false"><img src="/moon.svg" class="topbar-icon" id="themeBtnIcon" alt="Dark theme"></button>
       <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
       <span class="topbar-clock" id="topbarClock"></span>
       <div class="user-badge" id="userBadge" style="display:none">

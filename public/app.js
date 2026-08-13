@@ -302,14 +302,14 @@ function camBucket(p){
 function statusColorText(p){
   if(!p.online) return { statusColor:"var(--ink-faint)", statusTxt:"Offline" };
   if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:"Printing" };
-  if(p.state==="paused") return { statusColor:"#fbbf24", statusTxt:"Paused" };
+  if(p.state==="paused") return { statusColor:"var(--paused)", statusTxt:"Paused" };
   if(p.state==="error") return { statusColor:"var(--bad)", statusTxt:"Error" };
   if(p.state==="maintenance") return { statusColor:"var(--violet-soft)", statusTxt:"Maintenance" };
   // A file sitting on the printer ready to print is more useful to see at a
   // glance than "Idle"/"Complete"/"Cancelled" — takes priority over those
   // (but not over Printing/Paused/Error/Maintenance, which are more urgent).
   if(p.queuedFile&&p.queuedFile.status==='ready') return { statusColor:"var(--signal)", statusTxt:"Loaded" };
-  if(p.state==="complete") return { statusColor:"#22C5BE", statusTxt:"Complete" };
+  if(p.state==="complete") return { statusColor:"var(--complete)", statusTxt:"Complete" };
   if(p.state==="cancelled") return { statusColor:"var(--bad)", statusTxt:"Cancelled" };
   return { statusColor:"var(--ok)", statusTxt:"Idle" };
 }
@@ -772,6 +772,7 @@ async function init(){
     const topSort=document.querySelector(".topbar .sort-wrap");
     if(topSort) topSort.style.display="none";
     if($("compactBtn")) $("compactBtn").style.display="none";
+    if($("themeBtn")) $("themeBtn").style.display="none";
     if($("gear")) $("gear").style.display="none";
     if($("topbarClock")) $("topbarClock").style.display="none";
     if($("jobsechead")) $("jobsechead").style.display="none";
@@ -799,6 +800,18 @@ async function init(){
 function wireModal(modalId, closeFn, buttonIds){
   buttonIds.forEach(id=>$(id).addEventListener("click", closeFn));
   $(modalId).addEventListener("click", e=>{ if(e.target===$(modalId)) closeFn(); });
+}
+
+// The icon always shows the CURRENT theme (sun = light is active, moon =
+// dark is active); title/aria describe what clicking does, i.e. the switch
+// TO the other theme — never the same word for both, so neither reads as
+// stale after a click.
+function syncThemeButton(){
+  const light=document.documentElement.getAttribute("data-theme")==="light";
+  $("themeBtnIcon").src=light?"/sun.svg":"/moon.svg";
+  $("themeBtnIcon").alt=light?"Light theme":"Dark theme";
+  $("themeBtn").title=light?"Switch to dark theme":"Switch to light theme";
+  $("themeBtn").setAttribute("aria-pressed",light?"true":"false");
 }
 
 function wireUI(){
@@ -847,6 +860,28 @@ function wireUI(){
     if($("healthPage").classList.contains("show")) closeHealthPage();
     else openHealthPage();
   });
+  $("themeBtn").addEventListener("click", ()=>{
+    const next=document.documentElement.getAttribute("data-theme")==="light"?"dark":"light";
+    document.documentElement.setAttribute("data-theme",next);
+    localStorage.setItem("snapcon-theme",next);
+    syncThemeButton();
+  });
+  syncThemeButton();
+  // No stored choice yet — the page opened on whatever prefers-color-scheme
+  // said at load (see the inline <head> script). Keep following the OS
+  // setting live until the user makes an explicit pick via the button
+  // above, at which point localStorage.getItem below stops returning null
+  // and this listener becomes a no-op forever.
+  if(window.matchMedia){
+    const mq=window.matchMedia("(prefers-color-scheme: light)");
+    const onOsThemeChange=(e)=>{
+      if(localStorage.getItem("snapcon-theme")) return;
+      document.documentElement.setAttribute("data-theme",e.matches?"light":"dark");
+      syncThemeButton();
+    };
+    if(mq.addEventListener) mq.addEventListener("change",onOsThemeChange);
+    else if(mq.addListener) mq.addListener(onOsThemeChange);
+  }
   $("healthRefreshBtn").addEventListener("click", ()=>{ if(HEALTH_PRINTER_ID!=null) loadHealthData(); });
   $("healthSvcCancel").addEventListener("click", closeHealthServiceForm);
   $("healthSvcSave").addEventListener("click", saveHealthService);
@@ -3210,8 +3245,7 @@ function defaultMapping(need, heads){
 }
 
 function spoolSvg(color,active,uid){
-  const glow=active?`filter:drop-shadow(0 0 8px ${color}cc);`:'';
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 60 60" style="${glow}">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50" viewBox="0 0 60 60" class="spool${active?' is-active':''}" style="--spool-glow:${color}cc">
   <defs>
     <linearGradient id="frame-${uid}" x1="10" y1="6" x2="50" y2="54" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#333B4E"/><stop offset="1" stop-color="#12151C"/>
