@@ -3560,7 +3560,17 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
     const cached=CARD_CACHE.get(p.id);
     let el, rebuilt=true;
     if(incremental && cached && cached.sig===sig){ el=cached.el; rebuilt=false; }
-    else { el=buildCardHtml(p, need, dragEnabled); CARD_CACHE.set(p.id, { sig, el }); }
+    else {
+      el=buildCardHtml(p, need, dragEnabled);
+      // A rebuild replaces the cached element with a brand-new one — the
+      // previous element is still attached to `wrap` from the last render
+      // pass and must be removed here, or it's silently orphaned in the DOM
+      // (still visible, no longer reachable via CARD_CACHE) every time this
+      // printer's card is rebuilt, i.e. on every poll its displayed data
+      // changes — which for an actively-printing card is every single poll.
+      if(cached) cached.el.remove();
+      CARD_CACHE.set(p.id, { sig, el });
+    }
     if(rebuilt && VIEW_MODE==='camera' && p.online && p.capabilities?.camera){
       const slot=el.querySelector('.cam-shot-slot[data-camslot="'+p.id+'"]');
       if(slot) mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
