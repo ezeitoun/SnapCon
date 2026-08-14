@@ -152,51 +152,44 @@
         <!-- Destinations for the Health page's "Sync logs"/"Sync camera"
              buttons (still disabled — see those buttons' titles). Each
              printer gets its own subfolder here, named after the printer.
-             Retention is per-folder on purpose (logs and camera/timelapse
-             have very different natural lifetimes) and only ever deletes a
-             file from the PRINTER after it's confirmed synced here first —
-             never by age alone. -->
+             Retention is per-row on purpose (logs and camera/timelapse have
+             very different natural lifetimes) and only ever deletes a file
+             from the PRINTER after it's confirmed synced here first — never
+             by age alone. -->
         <div class="settings-section">
           <div class="settings-section-title">Printer sync</div>
-          <div class="settings-section-desc">Where synced printer logs, camera/timelapse, and g-code files land on this SnapCon host. Each printer gets its own subfolder here, named after the printer.</div>
+          <div class="settings-section-desc">Where synced files land on this SnapCon host. Each printer gets its own subfolder, named after the printer.</div>
           <div class="settings-section-body">
-            <div class="settings-field">
-              <label class="settings-label" for="setLogsFolder">Logs folder</label>
-              <div style="display:flex;gap:8px">
-                <input class="field" id="setLogsFolder" placeholder="e.g. C:/Users/you/snapcon-logs" style="flex:1" />
-                <button class="btn ghost" id="browseLogsBtn" style="flex:none;white-space:nowrap">Browse…</button>
+            <div class="sync-table">
+              <div class="sync-row sync-head" aria-hidden="true">
+                <div>What</div><div>Destination</div><div>Delete after</div>
               </div>
-              <div class="settings-field" style="margin-top:10px">
-                <label class="settings-label" for="setLogsRetentionDays">Delete from printer after sync, older than (days)</label>
-                <input class="field" id="setLogsRetentionDays" type="number" min="1" step="1" placeholder="Never" style="max-width:140px" />
-                <div class="settings-help">Only files already confirmed synced to the folder above are ever deleted from the printer. Leave blank to never delete.</div>
+              <div class="sync-row">
+                <div class="sync-what">Logs</div>
+                <div class="sync-dest">
+                  <input class="field" id="setLogsFolder" placeholder="e.g. C:/Users/you/snapcon-logs" style="flex:1" aria-label="Logs folder" />
+                  <button class="btn ghost" id="browseLogsBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                </div>
+                <input class="field" id="setLogsRetentionDays" type="number" min="1" step="1" placeholder="Never" aria-label="Delete Logs from printer after sync, older than, in days" />
               </div>
-            </div>
-            <div class="settings-field" style="margin-top:20px">
-              <label class="settings-label" for="setCameraFolder">Camera folder</label>
-              <div style="display:flex;gap:8px">
-                <input class="field" id="setCameraFolder" placeholder="e.g. C:/Users/you/snapcon-camera" style="flex:1" />
-                <button class="btn ghost" id="browseCameraBtn" style="flex:none;white-space:nowrap">Browse…</button>
+              <div class="sync-row">
+                <div class="sync-what">Camera<div class="sync-what-sub">Snapshots and timelapse</div></div>
+                <div class="sync-dest">
+                  <input class="field" id="setCameraFolder" placeholder="e.g. C:/Users/you/snapcon-camera" style="flex:1" aria-label="Camera folder" />
+                  <button class="btn ghost" id="browseCameraBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                </div>
+                <input class="field" id="setCameraRetentionDays" type="number" min="1" step="1" placeholder="Never" aria-label="Delete Camera files from printer after sync, older than, in days" />
               </div>
-              <div class="settings-field" style="margin-top:10px">
-                <label class="settings-label" for="setCameraRetentionDays">Delete from printer after sync, older than (days)</label>
-                <input class="field" id="setCameraRetentionDays" type="number" min="1" step="1" placeholder="Never" style="max-width:140px" />
-                <div class="settings-help">Only files already confirmed synced to the folder above are ever deleted from the printer. Leave blank to never delete.</div>
-              </div>
-            </div>
-            <div class="settings-field" style="margin-top:20px">
-              <label class="settings-label" for="setGcodeSyncFolder">Synced g-code folder</label>
-              <div style="display:flex;gap:8px">
-                <input class="field" id="setGcodeSyncFolder" placeholder="e.g. C:/Users/you/snapcon-gcode-archive" style="flex:1" />
-                <button class="btn ghost" id="browseGcodeSyncBtn" style="flex:none;white-space:nowrap">Browse…</button>
-              </div>
-              <div class="settings-help">Not the same as the G-code folder under Files above — that's where SnapCon reads files from to offer for printing. This is a separate destination for archiving each printer's own g-code storage.</div>
-              <div class="settings-field" style="margin-top:10px">
-                <label class="settings-label" for="setGcodeSyncRetentionDays">Delete from printer after sync, older than (days)</label>
-                <input class="field" id="setGcodeSyncRetentionDays" type="number" min="1" step="1" placeholder="Never" style="max-width:140px" />
-                <div class="settings-help">Only files already confirmed synced to the folder above are ever deleted from the printer. Leave blank to never delete.</div>
+              <div class="sync-row">
+                <div class="sync-what">G-code archive<div class="sync-what-sub">The printer's own storage, not the folder above</div></div>
+                <div class="sync-dest">
+                  <input class="field" id="setGcodeSyncFolder" placeholder="e.g. C:/Users/you/snapcon-gcode-archive" style="flex:1" aria-label="G-code archive folder" />
+                  <button class="btn ghost" id="browseGcodeSyncBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                </div>
+                <input class="field" id="setGcodeSyncRetentionDays" type="number" min="1" step="1" placeholder="Never" aria-label="Delete G-code archive files from printer after sync, older than, in days" />
               </div>
             </div>
+            <div class="settings-note">Delete after is in days, and only ever removes files already confirmed synced to the destination. Leave blank to never delete from the printer.</div>
           </div>
         </div>
 
@@ -220,13 +213,13 @@
               <div class="settings-field">
                 <label class="settings-label" for="setCurrency">Currency</label>
                 <select class="field" id="setCurrency">
-                  <option value="$">USD — $</option>
-                  <option value="€">EUR — €</option>
-                  <option value="£">GBP — £</option>
-                  <option value="₪">ILS — ₪</option>
-                  <option value="¥">JPY — ¥</option>
-                  <option value="₹">INR — ₹</option>
-                  <option value="₩">KRW — ₩</option>
+                  <option value="$">USD $</option>
+                  <option value="€">EUR €</option>
+                  <option value="£">GBP £</option>
+                  <option value="₪">ILS ₪</option>
+                  <option value="¥">JPY ¥</option>
+                  <option value="₹">INR ₹</option>
+                  <option value="₩">KRW ₩</option>
                 </select>
               </div>
               <div class="settings-field">

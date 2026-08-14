@@ -978,6 +978,18 @@ function wireUI(){
   $("browseLogsBtn").addEventListener("click", ()=>openBrowse("setLogsFolder"));
   $("browseCameraBtn").addEventListener("click", ()=>openBrowse("setCameraFolder"));
   $("browseGcodeSyncBtn").addEventListener("click", ()=>openBrowse("setGcodeSyncFolder"));
+  // 0 and blank mean different things here (blank = never delete, 0 would
+  // mean delete immediately) but the save path already treats "0 days" as
+  // "never" (see saveConfig's `>0` check) — so a field showing "0" would
+  // silently behave as "never" while still looking like a real, different
+  // value. Reject it at the source: any non-positive entry collapses back
+  // to blank immediately, the same state a user clearing the field reaches.
+  ["setLogsRetentionDays","setCameraRetentionDays","setGcodeSyncRetentionDays"].forEach(id=>{
+    $(id).addEventListener("input", ()=>{
+      const el=$(id);
+      if(el.value!=="" && parseInt(el.value,10)<=0) el.value="";
+    });
+  });
   $("browsego").addEventListener("click", ()=>navigateBrowse($("browsepath").value.trim()));
   $("browsepath").addEventListener("keydown", e=>{ if(e.key==="Enter") navigateBrowse($("browsepath").value.trim()); });
   $("browseok").addEventListener("click", ()=>{
