@@ -615,6 +615,7 @@ function hideLoginOverlay(){
 }
 function onLoginSuccess(user){
   CURRENT_USER=user;
+  applyAccountTheme(user);
   LAST_LOGIN_AT=Date.now();
   hideLoginOverlay();
   if(LOGIN_RESOLVE){ const r=LOGIN_RESOLVE; LOGIN_RESOLVE=null; r(); }
@@ -691,7 +692,7 @@ async function authGate(){
     try{
       const s=await fetch("/api/session").then(r=>r.json());
       USERS_ENABLED=!!s.usersEnabled;
-      if(USERS_ENABLED && s.authenticated) CURRENT_USER=s.user;
+      if(USERS_ENABLED && s.authenticated){ CURRENT_USER=s.user; applyAccountTheme(CURRENT_USER); }
       break;
     }catch{
       if(attempt===0) await new Promise(r=>setTimeout(r,800));
@@ -813,6 +814,20 @@ function syncThemeButton(){
   $("themeBtn").title=light?"Switch to dark theme":"Switch to light theme";
   $("themeBtn").setAttribute("aria-pressed",light?"true":"false");
 }
+// A signed-in user's saved theme is authoritative over whatever this
+// particular browser guessed for first paint (local prefers-color-scheme or
+// a stale localStorage value from someone else on a shared machine) — and
+// gets written back to localStorage so the NEXT load on this same browser
+// already has it before the inline <head> script even runs, no flash, no
+// waiting on this request. A no-op for accounts that haven't picked a theme
+// yet (theme is null) — they keep following prefers-color-scheme as usual.
+function applyAccountTheme(user){
+  if(!user || (user.theme!=="light" && user.theme!=="dark")) return;
+  localStorage.setItem("snapcon-theme",user.theme);
+  if(document.documentElement.getAttribute("data-theme")===user.theme) return;
+  document.documentElement.setAttribute("data-theme",user.theme);
+  syncThemeButton();
+}
 
 function wireUI(){
   wireModal("platemodal", closePlate, ["platex","plateCancel"]);
@@ -865,6 +880,14 @@ function wireUI(){
     document.documentElement.setAttribute("data-theme",next);
     localStorage.setItem("snapcon-theme",next);
     syncThemeButton();
+    // Best-effort: this device already has the new theme regardless of
+    // whether the save round-trips, so nothing here needs to be awaited or
+    // surfaced as an error — a failed save just means the NEXT device/login
+    // won't pick it up yet.
+    if(USERS_ENABLED && CURRENT_USER){
+      CURRENT_USER.theme=next;
+      fetch("/api/session/theme",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({theme:next})}).catch(()=>{});
+    }
   });
   syncThemeButton();
   // No stored choice yet — the page opened on whatever prefers-color-scheme

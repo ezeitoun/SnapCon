@@ -2303,7 +2303,24 @@ function adminCountExcluding(excludeId) {
 app.get("/api/session", (req, res) => {
   if (!CFG.usersEnabled) return res.json({ usersEnabled: false });
   if (!req.user) return res.json({ usersEnabled: true, authenticated: false });
-  res.json({ usersEnabled: true, authenticated: true, user: { id: req.user.id, loginName: req.user.loginName, firstName: req.user.firstName, lastName: req.user.lastName, role: req.user.role } });
+  res.json({ usersEnabled: true, authenticated: true, user: { id: req.user.id, loginName: req.user.loginName, firstName: req.user.firstName, lastName: req.user.lastName, role: req.user.role, theme: req.user.theme } });
+});
+
+// Self-service, deliberately narrow — not routed through PUT /api/users/:id
+// (requireAdmin, full profile edit) since a "regular"/"view" user must be
+// able to save their own theme choice without user-management permissions.
+// Only ever touches the caller's own record (req.user.id from the session),
+// never req.params — there is no other user's data reachable here.
+app.post("/api/session/theme", requireAuth, (req, res) => {
+  if (!req.user.id) return res.status(400).json({ error: "Per-user theme requires User Access Management" });
+  const theme = req.body && req.body.theme;
+  if (theme !== "light" && theme !== "dark") return res.status(400).json({ error: "theme must be \"light\" or \"dark\"" });
+  const u = USERS.find(x => x.id === req.user.id);
+  if (!u) return res.status(404).json({ error: "User not found" });
+  u.theme = theme;
+  u.updatedAt = new Date().toISOString();
+  try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true });
 });
 
 app.post("/api/login", async (req, res) => {
@@ -2322,7 +2339,7 @@ app.post("/api/login", async (req, res) => {
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
   auditLog.log({ category: "auth", event: "login", userId: u.id, userLabel: u.loginName });
-  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role } });
+  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, theme: u.theme || null } });
 });
 
 // Deliberately generic: whether the login name doesn't exist, isn't an OTP
@@ -2378,7 +2395,7 @@ app.post("/api/login/otp/verify", (req, res) => {
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
   auditLog.log({ category: "auth", event: "login", userId: u.id, userLabel: u.loginName, detail: { via: "otp" } });
-  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role } });
+  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, theme: u.theme || null } });
 });
 
 app.post("/api/logout", (req, res) => {
