@@ -66,10 +66,13 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   function validateRemoteAccessSecurity() {
     const cfg = getConfig();
     if (!cfg.usersEnabled) {
-      return { allowed: false, reason: "SnapCon login protection (User Access Management) is not enabled. Enable it in Settings → General first." };
+      // code is additive — every existing consumer of .reason (the frontend
+      // display, other internal call sites, test/remote-access/service.test.js's
+      // regex assertions) is unaffected.
+      return { allowed: false, reason: "SnapCon login protection (User Access Management) is not enabled. Enable it in Settings → Users first.", code: "users_disabled" };
     }
     if (!getUsers().some(u => u.role === "admin")) {
-      return { allowed: false, reason: "No Admin account exists yet." };
+      return { allowed: false, reason: "No Admin account exists yet.", code: "no_admin" };
     }
     // SnapCon has no reverse-proxy-only / forward-auth / trusted-localhost
     // auth mode today — this is the entire policy. If such a mode is ever
@@ -467,7 +470,7 @@ function createRemoteAccessService({ baseDir, getConfig, getUsers, port, apiClie
   // everConnectedThisSession, a fresh probe cycle) so the UI's chain
   // visibly resolves top to bottom again instead of appearing stuck.
   async function restart() {
-    if (!Store.load(baseDir).enabled) return { ok: false, error: "Remote Access is not enabled." };
+    if (!Store.load(baseDir).enabled) return { ok: false, error: "Remote Access is not enabled.", code: "not_enabled" };
     state = "starting";
     processManager.onStatusChange(onCloudflaredEvent);
     try {

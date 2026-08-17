@@ -20,6 +20,7 @@ const { createRemoteAccessService } = require("./remote-access/RemoteAccessServi
 const { createAuditLog } = require("./audit/AuditLog");
 const { createSyncEngine } = require("./sync/SyncEngine");
 const { loadConfigFile } = require("./configLoader");
+const locales = require("./locales");
 const { readNotifyToken, ensureNotifyToken, timingSafeTokenEqual } = require("./notifyToken");
 const { isPathWithinFolder, resolveWithinFolder } = require("./pathSafety");
 
@@ -57,6 +58,13 @@ const USERS_PATH = path.join(BASE_DIR, "users.json");
 const QUEUED_FILE_PATH = path.join(BASE_DIR, "queued-files.json");
 const NOTIFY_TOKEN_PATH = path.join(BASE_DIR, "notify-token.json");
 const DEFAULT_CFG = { gcodeFolder: "./gcode", port: 4545, printers: [] };
+// Runtime, writable, per-install (BASE_DIR) — never the bundled read-only
+// tree. LOCALES_DEFAULT_DIR ships the canonical originals and is only ever
+// read from, to seed LOCALES_DIR on first run (see locales.seedDefaultLocales).
+const LOCALES_DIR = path.join(BASE_DIR, "locales");
+const LOCALES_DEFAULT_DIR = path.join(ASSET_DIR, "locales-default");
+let LOCALE_REGISTRY = { locales: {}, errors: [] };
+function refreshLocaleRegistry() { LOCALE_REGISTRY = locales.scanLocales(LOCALES_DIR); }
 
 // Live config — editable from the Settings page, no restart needed.
 let CFG, FOLDER, PRINTERS;
@@ -87,6 +95,15 @@ function loadConfig() {
 }
 loadConfig();
 const PORT = CFG.port || 4545;
+// Seed-once, never-overwrite for every locale except English (see
+// locales.seedDefaultLocales), then English's own version-gated sync (see
+// locales.syncCanonicalEnglish — safe specifically because the Language
+// Editor never lets anyone write en.json), then an initial scan — same
+// "load at startup, Refresh re-scans" lifecycle as every other cached
+// registry in this file.
+try { locales.seedDefaultLocales(LOCALES_DIR, LOCALES_DEFAULT_DIR); } catch (e) { console.error("[locales] seeding failed:", e.message); }
+try { locales.syncCanonicalEnglish(LOCALES_DIR, LOCALES_DEFAULT_DIR); } catch (e) { console.error("[locales] English sync failed:", e.message); }
+refreshLocaleRegistry();
 
 const newPrinterId = () => "p_" + crypto.randomBytes(6).toString("hex");
 // One-time migration for a config.json predating persistent printer ids:
@@ -1435,7 +1452,7 @@ app.post("/api/bedtemp", requireRegular, async (req, res) => {
 // no reason for the connector to probe a second time.
 async function probeFirmware(p) {
   const c = getConnector(p.connector);
-  if (!c.getFirmwareInfo) return { name: p.name, online: true, skipped: true, reason: "not supported" };
+  if (!c.getFirmwareInfo) return { name: p.name, online: true, skipped: true, reason: "not supported", reasonCode: "not_supported" };
   const st = await probeCached(p);
   return c.getFirmwareInfo(p, st);
 }
@@ -1491,7 +1508,11 @@ function checkFanMismatch(p, health) {
     const mismatched = measurable && commanded && f.rpm < FAN_STOPPED_RPM_THRESHOLD;
     if (mismatched) {
       if (fanMismatchSeen.get(key)) {
-        reasons.push({ severity: "warning", title: "Fan not spinning", detail: `${f.name} is commanded on but reporting ${Math.round(f.rpm)} RPM.`, suggestedComponent: "Fans" });
+        // code/name/rpm are additive — title/detail stay as the existing
+        // English prose for any consumer that isn't the (now code-aware)
+        // client renderer; the client translates from code+params instead
+        // of parsing this English sentence back apart.
+        reasons.push({ severity: "warning", title: "Fan not spinning", detail: `${f.name} is commanded on but reporting ${Math.round(f.rpm)} RPM.`, suggestedComponent: "Fans", code: "fan-not-spinning", name: f.name, rpm: Math.round(f.rpm) });
       } else {
         fanMismatchSeen.set(key, true);
       }
@@ -1574,19 +1595,19 @@ function computeHealthAttention(p, health) {
     // unexpected shape degrades safely rather than silently saying nothing.
     const flags = Array.isArray(health.system.throttledState.flags) ? health.system.throttledState.flags : [];
     if (flags.includes("Under-Voltage Detected")) {
-      reasons.push({ severity: "critical", title: "Undervoltage", detail: "The printer's controller is reporting a power under-voltage condition right now.", suggestedComponent: "Power Supply" });
+      reasons.push({ severity: "critical", title: "Undervoltage", detail: "The printer's controller is reporting a power under-voltage condition right now.", suggestedComponent: "Power Supply", code: "undervoltage" });
     } else {
-      reasons.push({ severity: "critical", title: "Throttled", detail: "The printer's controller is reporting a throttle condition (power or thermal) right now." });
+      reasons.push({ severity: "critical", title: "Throttled", detail: "The printer's controller is reporting a throttle condition (power or thermal) right now.", code: "throttled" });
     }
   }
   if (health.storage && health.storage.available) {
     const du = health.storage.diskUsage;
     if (du && (du.free < du.total * DISK_CRITICAL_PCT || du.free < DISK_CRITICAL_BYTES)) {
-      reasons.push({ severity: "critical", title: "Low disk space", detail: "Uploads can fail confusingly once the disk fills — free up space soon." });
+      reasons.push({ severity: "critical", title: "Low disk space", detail: "Uploads can fail confusingly once the disk fills — free up space soon.", code: "low-disk-space" });
     }
   }
   if (health.faults && health.faults.available && health.faults.list.length) {
-    reasons.push({ severity: "warning", title: "Recent fault", detail: "The printer has reported at least one recent error — see the fault log." });
+    reasons.push({ severity: "warning", title: "Recent fault", detail: "The printer has reported at least one recent error — see the fault log.", code: "recent-fault" });
   }
   reasons.push(...checkFanMismatch(p, health));
   return reasons;
@@ -1799,8 +1820,8 @@ function computeMaintenanceAttention(p) {
   const next = computeNextMaintenance(entries);
   if (!next) return [];
   const daysUntil = Math.floor((new Date(next.date + "T00:00:00").getTime() - Date.now()) / 86400000);
-  if (daysUntil < 0) return [{ severity: "critical", title: "Maintenance overdue", detail: `${next.component} was due ${next.date}` }];
-  if (daysUntil <= 14) return [{ severity: "warning", title: "Maintenance due soon", detail: `${next.component} due ${next.date}` }];
+  if (daysUntil < 0) return [{ severity: "critical", title: "Maintenance overdue", detail: `${next.component} was due ${next.date}`, code: "maintenance-overdue", component: next.component, date: next.date }];
+  if (daysUntil <= 14) return [{ severity: "warning", title: "Maintenance due soon", detail: `${next.component} due ${next.date}`, code: "maintenance-due-soon", component: next.component, date: next.date }];
   return [];
 }
 
@@ -1913,7 +1934,8 @@ function publicCfg(role) {
     allowMapping: CFG.allowMapping !== false,
     suggestMatching: CFG.suggestMatching !== false,
     usersEnabled: !!CFG.usersEnabled,
-    configured: PRINTERS.length > 0
+    configured: PRINTERS.length > 0,
+    locale: CFG.locale || "en"
   };
   if (role !== "admin") return base;
   return {
@@ -1980,7 +2002,7 @@ app.post("/api/remote-access/enable", requireAdmin, (req, res) => {
   // Fast-fail synchronously on the security precondition — never even
   // attempt the network/child-process work if login protection isn't on.
   const security = remoteAccess.validateRemoteAccessSecurity();
-  if (!security.allowed) return res.status(400).json({ ok: false, error: security.reason });
+  if (!security.allowed) return res.status(400).json({ ok: false, error: security.reason, code: security.code });
   // The rest (provisioning, download, process start) can take a while — the
   // client polls /api/remote-access/status rather than this request hanging.
   res.json({ ok: true, pending: true });
@@ -2187,6 +2209,11 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     filamentCost: (typeof b.filamentCost === "number" && b.filamentCost > 0) ? b.filamentCost : undefined,
     electricityRate: (typeof b.electricityRate === "number" && b.electricityRate > 0) ? b.electricityRate : undefined,
     currency: (typeof b.currency === "string" && b.currency.trim()) ? b.currency.trim().slice(0, 6) : "$",
+    // System default locale — not required to currently be an installed
+    // locale (same loose-validation treatment as currency above, since
+    // installed locales are a dynamic set, not a fixed allow-list like
+    // alternateDisplay/defaultView).
+    locale: (typeof b.locale === "string" && locales.LOCALE_RE.test(b.locale)) ? b.locale : (CFG.locale || "en"),
     tNotation: b.tNotation ? true : undefined,
     defaultView: ["regular","compact","camera","list","printfarm"].includes(b.defaultView) ? b.defaultView : (CFG.defaultView || "regular"),
     // Empty means "don't show it" (see the topbar) — never persisted as a
@@ -2301,9 +2328,13 @@ function adminCountExcluding(excludeId) {
 }
 
 app.get("/api/session", (req, res) => {
-  if (!CFG.usersEnabled) return res.json({ usersEnabled: false });
-  if (!req.user) return res.json({ usersEnabled: true, authenticated: false });
-  res.json({ usersEnabled: true, authenticated: true, user: { id: req.user.id, loginName: req.user.loginName, firstName: req.user.firstName, lastName: req.user.lastName, role: req.user.role, theme: req.user.theme } });
+  // locale is included unauthenticated too — it's just the system-configured
+  // default locale CODE (e.g. "en"/"es"), not sensitive — so the login
+  // overlay's pre-auth i18n bootstrap can resolve a starting locale without
+  // a separate round-trip or requiring a session first.
+  if (!CFG.usersEnabled) return res.json({ usersEnabled: false, locale: CFG.locale || "en" });
+  if (!req.user) return res.json({ usersEnabled: true, authenticated: false, locale: CFG.locale || "en" });
+  res.json({ usersEnabled: true, authenticated: true, user: { id: req.user.id, loginName: req.user.loginName, firstName: req.user.firstName, lastName: req.user.lastName, role: req.user.role, theme: req.user.theme, locale: req.user.locale } });
 });
 
 // Self-service, deliberately narrow — not routed through PUT /api/users/:id
@@ -2323,43 +2354,220 @@ app.post("/api/session/theme", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Same shape as POST /api/session/theme above — self-service, any role, only
+// ever touches the caller's own record. Resolution order (user -> CFG.locale
+// -> "en") is applied client-side by the i18n runtime; this route only
+// persists the override. Not gated on the locale actually existing in the
+// registry — a locale later removed just falls back to "en" at read time
+// (see applyAccountLocale-equivalent in app.js), same as a deleted theme
+// choice never being a fatal state.
+app.post("/api/session/locale", requireAuth, (req, res) => {
+  if (!req.user.id) return res.status(400).json({ error: "Per-user language requires User Access Management" });
+  const locale = req.body && req.body.locale;
+  if (locale !== null && (typeof locale !== "string" || !locales.LOCALE_RE.test(locale))) {
+    return res.status(400).json({ error: "locale must be a valid locale code, or null to follow the system default" });
+  }
+  const u = USERS.find(x => x.id === req.user.id);
+  if (!u) return res.status(404).json({ error: "User not found" });
+  u.locale = locale;
+  u.updatedAt = new Date().toISOString();
+  try { saveUsers(); } catch (e) { return res.status(500).json({ error: e.message }); }
+  res.json({ ok: true });
+});
+
+// ---- Public locale discovery (unauthenticated, read-only) ----
+// Exists specifically for the login/OTP overlay's pre-auth i18n bootstrap —
+// public/i18n.js's fetchLocale() calls the second route below for EVERY
+// locale load, authenticated or not, so there is exactly one code path
+// rather than branching i18n.js on auth state. Deliberately separate from
+// the authenticated /api/locales* routes below (never modified by this
+// pair): trimmed response shape only (no `errors`/`version`/`snapconVersion`
+// /`updated` on the list; no `fingerprint` on the single-locale read — that
+// one backs the Language Editor's optimistic-concurrency check and has no
+// pre-auth use). Every mutation (save/create/import/refresh) stays
+// requireAdmin on the routes further down — nothing here writes anything.
+app.get("/api/public-locales", (req, res) => {
+  res.json({
+    locales: Object.entries(LOCALE_REGISTRY.locales).map(([locale, entry]) => ({
+      locale, language: entry.meta.language, nativeName: entry.meta.nativeName,
+      completionPercent: entry.completion.percent
+    }))
+  });
+});
+app.get("/api/public-locales/:locale", (req, res) => {
+  const filePath = locales.safeLocalePath(LOCALES_DIR, req.params.locale);
+  if (!filePath) return res.status(400).json({ error: "Invalid locale code" });
+  let raw;
+  try { raw = fs.readFileSync(filePath, "utf8"); }
+  catch (e) { return res.status(404).json({ error: "Locale not found" }); }
+  let data;
+  try { data = JSON.parse(raw); }
+  catch (e) { return res.status(500).json({ error: "This locale file is currently invalid JSON: " + e.message }); }
+  res.json({ data });
+});
+
+// ---- Locale discovery + Language Editor (admin-only mutation) ----
+// Reading the list is available to any authenticated user (populating their
+// own language selector); every write (save/create/import/refresh) is
+// requireAdmin, enforced server-side — never inferred from what the
+// frontend chooses to show. English (en) is permanently read-only, even for
+// Admin, at every mutating route below.
+app.get("/api/locales", requireAuth, (req, res) => {
+  res.json({
+    locales: Object.entries(LOCALE_REGISTRY.locales).map(([locale, entry]) => ({
+      locale, language: entry.meta.language, nativeName: entry.meta.nativeName,
+      version: entry.meta.version || 0, snapconVersion: entry.meta.snapconVersion || null,
+      updated: entry.meta.updated || null, completionPercent: entry.completion.percent
+    })),
+    errors: LOCALE_REGISTRY.errors
+  });
+});
+
+app.post("/api/locales/refresh", requireAdmin, (req, res) => {
+  refreshLocaleRegistry();
+  res.json({ ok: true, errors: LOCALE_REGISTRY.errors });
+});
+
+// requireAuth, not requireAdmin — the i18n runtime needs this for ANY
+// signed-in user to actually render translated text, not just the
+// Language Editor (admin-only writes are the real gate, further down).
+app.get("/api/locales/:locale", requireAuth, (req, res) => {
+  const filePath = locales.safeLocalePath(LOCALES_DIR, req.params.locale);
+  if (!filePath) return res.status(400).json({ error: "Invalid locale code" });
+  let raw;
+  try { raw = fs.readFileSync(filePath, "utf8"); }
+  catch (e) { return res.status(404).json({ error: "Locale not found" }); }
+  let data;
+  try { data = JSON.parse(raw); }
+  catch (e) { return res.status(500).json({ error: "This locale file is currently invalid JSON: " + e.message }); }
+  res.json({ data, fingerprint: locales.computeFingerprint(LOCALES_DIR, req.params.locale + ".json") });
+});
+
+app.post("/api/locales", requireAdmin, (req, res) => {
+  const b = req.body || {};
+  const locale = String(b.locale || "");
+  if (!locales.LOCALE_RE.test(locale)) return res.status(400).json({ error: "Locale code must look like \"es\", \"fr\", or \"pt-BR\"" });
+  if (locale === "en") return res.status(400).json({ error: "English is the built-in source locale and can't be recreated" });
+  if (LOCALE_REGISTRY.locales[locale]) return res.status(400).json({ error: `"${locale}" already exists` });
+  const enPath = locales.safeLocalePath(LOCALES_DIR, "en");
+  let enData;
+  try { enData = JSON.parse(fs.readFileSync(enPath, "utf8")); }
+  catch (e) { return res.status(500).json({ error: "Could not read the English source to seed the new language: " + e.message }); }
+  // Untranslated per spec 3D/6E — null values, not copied English prose,
+  // so a fresh language never claims false completion.
+  function nullify(obj) {
+    if (obj === null || typeof obj !== "object" || Array.isArray(obj)) return null;
+    const out = {};
+    for (const k of Object.keys(obj)) out[k] = (k !== "_meta" && typeof obj[k] === "object" && obj[k] !== null) ? nullify(obj[k]) : (k === "_meta" ? obj[k] : null);
+    return out;
+  }
+  const data = nullify(enData);
+  data._meta = { locale, language: String(b.language || "").trim() || locale, nativeName: String(b.nativeName || "").trim() || locale, version: 1, snapconVersion: VERSION, updated: new Date().toISOString().slice(0, 10) };
+  try { locales.writeLocaleFile(LOCALES_DIR, locale, data); } catch (e) { return res.status(500).json({ error: e.message }); }
+  refreshLocaleRegistry();
+  res.json({ ok: true });
+});
+
+app.post("/api/locales/:locale", requireAdmin, (req, res) => {
+  const locale = req.params.locale;
+  if (locale === "en") return res.status(400).json({ error: "English is the built-in source locale and is read-only" });
+  if (!locales.LOCALE_RE.test(locale)) return res.status(400).json({ error: "Invalid locale code" });
+  const b = req.body || {};
+  if (!b.data || typeof b.data !== "object") return res.status(400).json({ error: "Missing locale data" });
+  const shape = locales.validateLocaleShape(locale + ".json", b.data);
+  if (!shape.ok) return res.status(400).json({ error: shape.error });
+  const currentFingerprint = locales.computeFingerprint(LOCALES_DIR, locale + ".json");
+  if (currentFingerprint && b.expectedFingerprint && currentFingerprint !== b.expectedFingerprint) {
+    return res.status(409).json({ error: "This translation changed elsewhere since it was opened — refresh to see the latest version before saving." });
+  }
+  const nextData = { ...b.data, _meta: { ...b.data._meta, version: (parseInt(b.data._meta.version, 10) || 0) + 1, snapconVersion: VERSION, updated: new Date().toISOString().slice(0, 10) } };
+  try { locales.writeLocaleFile(LOCALES_DIR, locale, nextData); } catch (e) { return res.status(500).json({ error: e.message }); }
+  refreshLocaleRegistry();
+  res.json({ ok: true, meta: nextData._meta });
+});
+
+// Preview-only — validates and reports stats without writing anything, so
+// the editor can show "N recognized / N missing / N orphaned / N placeholder
+// errors" before the admin commits (spec 6G).
+app.post("/api/locales/:locale/import-preview", requireAdmin, (req, res) => {
+  const locale = req.params.locale;
+  if (locale === "en") return res.status(400).json({ error: "English is the built-in source locale and is read-only" });
+  const b = req.body || {};
+  if (!b.data || typeof b.data !== "object") return res.status(400).json({ error: "Missing locale data" });
+  const shape = locales.validateLocaleShape(locale + ".json", b.data);
+  if (!shape.ok) return res.status(400).json({ error: shape.error });
+  const enEntry = LOCALE_REGISTRY.locales.en;
+  let enFlat = {};
+  try { enFlat = locales.flattenKeys(JSON.parse(fs.readFileSync(locales.safeLocalePath(LOCALES_DIR, "en"), "utf8"))); } catch {}
+  const importedFlat = locales.flattenKeys(b.data);
+  const completion = locales.computeCompletion(enFlat, importedFlat);
+  res.json({
+    recognizedKeys: completion.translated,
+    missingKeys: completion.total - completion.translated,
+    orphanedKeys: locales.findOrphanedKeys(enFlat, importedFlat).length,
+    placeholderErrors: locales.findPlaceholderMismatches(enFlat, importedFlat).length
+  });
+});
+
+app.post("/api/locales/:locale/import", requireAdmin, (req, res) => {
+  const locale = req.params.locale;
+  if (locale === "en") return res.status(400).json({ error: "English is the built-in source locale and is read-only" });
+  if (!locales.LOCALE_RE.test(locale)) return res.status(400).json({ error: "Invalid locale code" });
+  const b = req.body || {};
+  if (!b.data || typeof b.data !== "object") return res.status(400).json({ error: "Missing locale data" });
+  const shape = locales.validateLocaleShape(locale + ".json", b.data);
+  if (!shape.ok) return res.status(400).json({ error: shape.error });
+  // Import REPLACES the target file — the imported JSON is the whole
+  // translation, not a patch merged over whatever was there before (spec
+  // 6G: "the imported locale represents the target translation file rather
+  // than silently merging hidden values from the previous version").
+  const nextData = { ...b.data, _meta: { ...b.data._meta, locale, version: (parseInt(b.data._meta.version, 10) || 0) + 1, updated: new Date().toISOString().slice(0, 10) } };
+  try { locales.writeLocaleFile(LOCALES_DIR, locale, nextData); } catch (e) { return res.status(500).json({ error: e.message }); }
+  refreshLocaleRegistry();
+  res.json({ ok: true });
+});
+
 app.post("/api/login", async (req, res) => {
-  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
+  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled", code: "users_disabled" });
   const { loginName, password } = req.body || {};
   const u = findUserByLoginName(loginName);
   if (!u) {
     auditLog.log({ category: "auth", event: "login-failed", userLabel: String(loginName || ""), detail: { reason: "unknown login name" } });
-    return res.status(401).json({ error: "Invalid login name or password" });
+    // Deliberately the SAME code (and English string) as the bad-password
+    // branch below — anti-enumeration, see the class comment above
+    // /api/login/otp/request. A translation must never split these into
+    // two distinguishable codes.
+    return res.status(401).json({ error: "Invalid login name or password", code: "invalid_credentials" });
   }
-  if (u.otpEnabled) return res.status(400).json({ error: 'This account signs in with a one-time code — use "Send me a code instead"' });
+  if (u.otpEnabled) return res.status(400).json({ error: 'This account signs in with a one-time code — use "Send me a code instead"', code: "otp_required" });
   if (!(await auth.verifyPassword(String(password || ""), u.passwordHash))) {
     auditLog.log({ category: "auth", event: "login-failed", userId: u.id, userLabel: u.loginName, detail: { reason: "bad password" } });
-    return res.status(401).json({ error: "Invalid login name or password" });
+    return res.status(401).json({ error: "Invalid login name or password", code: "invalid_credentials" });
   }
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
   auditLog.log({ category: "auth", event: "login", userId: u.id, userLabel: u.loginName });
-  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, theme: u.theme || null } });
+  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, theme: u.theme || null, locale: u.locale || null } });
 });
 
 // Deliberately generic: whether the login name doesn't exist, isn't an OTP
 // account, or has no email on file all produce the same message, so this
 // can't be used to enumerate accounts.
 app.post("/api/login/otp/request", async (req, res) => {
-  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
+  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled", code: "users_disabled" });
   const otpService = (CFG.otp && CFG.otp.service) || "resend";
   if (otpService === "ntfy") {
-    if (!CFG.otp || !CFG.otp.ntfyTopic) return res.status(500).json({ error: "OTP is not configured" });
+    if (!CFG.otp || !CFG.otp.ntfyTopic) return res.status(500).json({ error: "OTP is not configured", code: "otp_not_configured" });
   } else if (otpService === "telegram") {
-    if (!CFG.otp || !CFG.otp.telegramChatId || !CFG.notifications || !CFG.notifications.telegramBotToken) return res.status(500).json({ error: "OTP is not configured" });
+    if (!CFG.otp || !CFG.otp.telegramChatId || !CFG.notifications || !CFG.notifications.telegramBotToken) return res.status(500).json({ error: "OTP is not configured", code: "otp_not_configured" });
   } else if (!CFG.resend || !CFG.resend.apiKey || !CFG.resend.fromAddress) {
-    return res.status(500).json({ error: "OTP is not configured" });
+    return res.status(500).json({ error: "OTP is not configured", code: "otp_not_configured" });
   }
   const u = findUserByLoginName((req.body || {}).loginName);
   // ntfy/Telegram both deliver to a shared recipient, not a per-user
   // address, so email isn't required for those paths — it still is for
   // Resend, which needs somewhere to send the message.
-  if (!u || !u.otpEnabled || (otpService === "resend" && !u.email)) return res.status(400).json({ error: "Could not send a code for that login name" });
+  if (!u || !u.otpEnabled || (otpService === "resend" && !u.email)) return res.status(400).json({ error: "Could not send a code for that login name", code: "otp_request_generic_fail" });
   const code = auth.setOtpCode(u.loginNameLower);
   try {
     if (otpService === "ntfy") {
@@ -2374,28 +2582,38 @@ app.post("/api/login/otp/request", async (req, res) => {
       });
     }
   } catch (e) {
-    return res.status(502).json({ error: "Could not send the code: " + e.message });
+    // Raw delivery diagnostic (Resend/ntfy/Telegram HTTP error) — left as
+    // free text in `detail`, never given its own translated code; only
+    // reachable for an already-valid, already-configured OTP account, so
+    // (unlike otp_request_generic_fail above) this path is not itself an
+    // anti-enumeration concern — that property is pre-existing, not
+    // something this phase changes.
+    return res.status(502).json({ error: "Could not send the code: " + e.message, code: "otp_delivery_failed", detail: e.message });
   }
   res.json({ ok: true });
 });
 
 app.post("/api/login/otp/verify", (req, res) => {
-  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled" });
+  if (!CFG.usersEnabled) return res.status(400).json({ error: "User Access Management is not enabled", code: "users_disabled" });
   const { loginName, code } = req.body || {};
   const u = findUserByLoginName(loginName);
   if (!u || !u.otpEnabled) {
     auditLog.log({ category: "auth", event: "login-failed", userLabel: String(loginName || ""), detail: { reason: "unknown/non-OTP login name" } });
-    return res.status(401).json({ error: "Incorrect code" });
+    // Same code+string as auth.verifyOtpCode()'s own "wrong code" outcome
+    // below — preserves today's exact distinguishability from its OTHER
+    // three outcomes (request_new/expired/too_many_attempts), which this
+    // phase does not change.
+    return res.status(401).json({ error: "Incorrect code", code: "otp_verify_incorrect" });
   }
   const result = auth.verifyOtpCode(u.loginNameLower, code);
   if (!result.ok) {
     auditLog.log({ category: "auth", event: "login-failed", userId: u.id, userLabel: u.loginName, detail: { reason: result.error } });
-    return res.status(401).json({ error: result.error });
+    return res.status(401).json({ error: result.error, code: result.code });
   }
   const token = auth.createSession(u.id);
   res.cookie(auth.SESSION_COOKIE, token, auth.sessionCookieOptions());
   auditLog.log({ category: "auth", event: "login", userId: u.id, userLabel: u.loginName, detail: { via: "otp" } });
-  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, theme: u.theme || null } });
+  res.json({ ok: true, user: { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, theme: u.theme || null, locale: u.locale || null } });
 });
 
 app.post("/api/logout", (req, res) => {
@@ -2412,15 +2630,15 @@ app.get("/api/users", requireAdmin, (req, res) => {
 app.post("/api/users", requireAdmin, async (req, res) => {
   const b = req.body || {};
   const loginName = String(b.loginName || "").trim();
-  if (!LOGIN_NAME_RE.test(loginName)) return res.status(400).json({ error: "Login name must be 2-32 characters (letters, numbers, _ . -)" });
+  if (!LOGIN_NAME_RE.test(loginName)) return res.status(400).json({ error: "Login name must be 2-32 characters (letters, numbers, _ . -)", code: "invalid_login_name" });
   const loginNameLower = loginName.toLowerCase();
-  if (USERS.some(u => u.loginNameLower === loginNameLower)) return res.status(400).json({ error: "That login name is already in use" });
-  if (!ROLES.includes(b.role)) return res.status(400).json({ error: "Invalid role" });
+  if (USERS.some(u => u.loginNameLower === loginNameLower)) return res.status(400).json({ error: "That login name is already in use", code: "login_name_taken" });
+  if (!ROLES.includes(b.role)) return res.status(400).json({ error: "Invalid role", code: "invalid_role" });
   const otpEnabled = !!b.otpEnabled;
   let passwordHash = null;
   if (!otpEnabled) {
     const password = String(b.password || "");
-    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    if (password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters", code: "password_too_short" });
     passwordHash = await auth.hashPassword(password);
   }
   const now = new Date().toISOString();
@@ -2442,7 +2660,7 @@ app.post("/api/users", requireAdmin, async (req, res) => {
 
 app.put("/api/users/:id", requireAdmin, async (req, res) => {
   const u = USERS.find(x => x.id === req.params.id);
-  if (!u) return res.status(404).json({ error: "User not found" });
+  if (!u) return res.status(404).json({ error: "User not found", code: "user_not_found" });
   const b = req.body || {};
 
   // Validate everything into locals first — nothing on the live `u` object
@@ -2452,21 +2670,21 @@ app.put("/api/users/:id", requireAdmin, async (req, res) => {
   let loginName, loginNameLower;
   if (b.loginName !== undefined) {
     loginName = String(b.loginName || "").trim();
-    if (!LOGIN_NAME_RE.test(loginName)) return res.status(400).json({ error: "Login name must be 2-32 characters (letters, numbers, _ . -)" });
+    if (!LOGIN_NAME_RE.test(loginName)) return res.status(400).json({ error: "Login name must be 2-32 characters (letters, numbers, _ . -)", code: "invalid_login_name" });
     loginNameLower = loginName.toLowerCase();
-    if (USERS.some(x => x.id !== u.id && x.loginNameLower === loginNameLower)) return res.status(400).json({ error: "That login name is already in use" });
+    if (USERS.some(x => x.id !== u.id && x.loginNameLower === loginNameLower)) return res.status(400).json({ error: "That login name is already in use", code: "login_name_taken" });
   }
   if (b.role !== undefined) {
-    if (!ROLES.includes(b.role)) return res.status(400).json({ error: "Invalid role" });
-    if (u.role === "admin" && b.role !== "admin" && adminCountExcluding(u.id) === 0) return res.status(400).json({ error: "Cannot demote the last Admin" });
+    if (!ROLES.includes(b.role)) return res.status(400).json({ error: "Invalid role", code: "invalid_role" });
+    if (u.role === "admin" && b.role !== "admin" && adminCountExcluding(u.id) === 0) return res.status(400).json({ error: "Cannot demote the last Admin", code: "last_admin_demote" });
   }
   const nextOtpEnabled = b.otpEnabled !== undefined ? !!b.otpEnabled : u.otpEnabled;
   if (b.password) {
-    if (nextOtpEnabled) return res.status(400).json({ error: "OTP-enabled accounts cannot have a password" });
-    if (String(b.password).length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
+    if (nextOtpEnabled) return res.status(400).json({ error: "OTP-enabled accounts cannot have a password", code: "otp_no_password" });
+    if (String(b.password).length < 8) return res.status(400).json({ error: "Password must be at least 8 characters", code: "password_too_short" });
   }
   const willHavePassword = nextOtpEnabled ? false : (b.password ? true : !!u.passwordHash);
-  if (!nextOtpEnabled && !willHavePassword) return res.status(400).json({ error: "Set a password, or enable OTP login" });
+  if (!nextOtpEnabled && !willHavePassword) return res.status(400).json({ error: "Set a password, or enable OTP login", code: "password_or_otp_required" });
   const newPasswordHash = b.password ? await auth.hashPassword(String(b.password)) : undefined;
 
   // Every check passed — apply.
@@ -2493,13 +2711,13 @@ app.put("/api/users/:id", requireAdmin, async (req, res) => {
 
 app.delete("/api/users/:id", requireAdmin, (req, res) => {
   const idx = USERS.findIndex(x => x.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: "User not found" });
-  if (USERS[idx].role === "admin" && adminCountExcluding(USERS[idx].id) === 0) return res.status(400).json({ error: "Cannot delete the last Admin" });
+  if (idx === -1) return res.status(404).json({ error: "User not found", code: "user_not_found" });
+  if (USERS[idx].role === "admin" && adminCountExcluding(USERS[idx].id) === 0) return res.status(400).json({ error: "Cannot delete the last Admin", code: "last_admin_delete" });
   // Same reasoning as the usersEnabled guard above: deleting the only
   // account left would leave a live public tunnel with no one who can log
   // in — block it here rather than silently stopping the tunnel.
   if (USERS.length === 1 && remoteAccess.getStatus().enabled) {
-    return res.status(400).json({ error: "Remote Access is on and needs at least one account. Turn off Remote Access first (Settings → Remote Access), then delete this account." });
+    return res.status(400).json({ error: "Remote Access is on and needs at least one account. Turn off Remote Access first (Settings → Remote Access), then delete this account.", code: "remote_access_needs_account" });
   }
   const [removed] = USERS.splice(idx, 1);
   try { saveUsers(); } catch (e) { USERS.splice(idx, 0, removed); return res.status(500).json({ error: e.message }); }
@@ -2520,7 +2738,7 @@ app.get("/api/groups", requireAdmin, (req, res) => {
 
 app.post("/api/groups", requireAdmin, (req, res) => {
   const name = String((req.body || {}).name || "").trim();
-  if (!name) return res.status(400).json({ error: "Group name required" });
+  if (!name) return res.status(400).json({ error: "Group name required", code: "group_name_required" });
   if (!Array.isArray(CFG.groups)) CFG.groups = [];
   const now = new Date().toISOString();
   const g = { id: newGroupId(), name, createdAt: now, updatedAt: now };
@@ -2533,10 +2751,10 @@ app.post("/api/groups", requireAdmin, (req, res) => {
 
 app.put("/api/groups/:id", requireAdmin, (req, res) => {
   const g = (CFG.groups || []).find(x => x.id === req.params.id);
-  if (!g) return res.status(404).json({ error: "Group not found" });
-  if (g.id === GROUP_EVERYONE_ID) return res.status(400).json({ error: "The Everyone group can't be renamed" });
+  if (!g) return res.status(404).json({ error: "Group not found", code: "group_not_found" });
+  if (g.id === GROUP_EVERYONE_ID) return res.status(400).json({ error: "The Everyone group can't be renamed", code: "group_everyone_immutable_rename" });
   const name = String((req.body || {}).name || "").trim();
-  if (!name) return res.status(400).json({ error: "Group name required" });
+  if (!name) return res.status(400).json({ error: "Group name required", code: "group_name_required" });
   const prevName = g.name;
   g.name = name;
   g.updatedAt = new Date().toISOString();
@@ -2548,9 +2766,9 @@ app.put("/api/groups/:id", requireAdmin, (req, res) => {
 
 app.delete("/api/groups/:id", requireAdmin, (req, res) => {
   const id = req.params.id;
-  if (id === GROUP_EVERYONE_ID) return res.status(400).json({ error: "The Everyone group can't be deleted" });
+  if (id === GROUP_EVERYONE_ID) return res.status(400).json({ error: "The Everyone group can't be deleted", code: "group_everyone_immutable_delete" });
   const idx = (CFG.groups || []).findIndex(x => x.id === id);
-  if (idx === -1) return res.status(404).json({ error: "Group not found" });
+  if (idx === -1) return res.status(404).json({ error: "Group not found", code: "group_not_found" });
 
   // Nothing is written to either file until both are known-good — restores
   // all three in-memory structures if either save fails, matching the
@@ -2639,7 +2857,7 @@ app.get("/api/printer-pools", requireAuth, (req, res) => {
 app.post("/api/printer-pools", requireAdmin, (req, res) => {
   const b = req.body || {};
   const name = String(b.name || "").trim();
-  if (!name) return res.status(400).json({ error: "Pool name required" });
+  if (!name) return res.status(400).json({ error: "Pool name required", code: "pool_name_required" });
   // Phase 1: only Manual pools exist — G-code/API land in Phase 2.
   if (b.type && b.type !== "manual") return res.status(400).json({ error: "Only Manual bed-clear pools are available right now" });
   if (!Array.isArray(CFG.printerPools)) CFG.printerPools = [];
@@ -2654,12 +2872,12 @@ app.post("/api/printer-pools", requireAdmin, (req, res) => {
 
 app.put("/api/printer-pools/:id", requireAdmin, (req, res) => {
   const pool = (CFG.printerPools || []).find(p => p.id === req.params.id);
-  if (!pool) return res.status(404).json({ error: "Pool not found" });
+  if (!pool) return res.status(404).json({ error: "Pool not found", code: "pool_not_found" });
   const b = req.body || {};
   const prevName = pool.name, prevAutoBalance = !!pool.autoBalance;
   if (b.name !== undefined) {
     const name = String(b.name || "").trim();
-    if (!name) return res.status(400).json({ error: "Pool name required" });
+    if (!name) return res.status(400).json({ error: "Pool name required", code: "pool_name_required" });
     pool.name = name;
   }
   if (b.bedClearOnDispatchFailure !== undefined) pool.bedClearOnDispatchFailure = !!b.bedClearOnDispatchFailure;
@@ -2675,7 +2893,7 @@ app.delete("/api/printer-pools/:id", requireAdmin, (req, res) => {
   const id = req.params.id;
   if (id === PRINTER_POOL_DEFAULT_MANUAL_ID) return res.status(400).json({ error: "The Unassigned pool can't be deleted" });
   const idx = (CFG.printerPools || []).findIndex(p => p.id === id);
-  if (idx === -1) return res.status(404).json({ error: "Pool not found" });
+  if (idx === -1) return res.status(404).json({ error: "Pool not found", code: "pool_not_found" });
   if (PRINTERS.some(p => p.printerPoolId === id)) return res.status(400).json({ error: "Printers are still assigned to this pool — reassign them first" });
   const removed = CFG.printerPools[idx];
   CFG.printerPools.splice(idx, 1);
@@ -2694,17 +2912,22 @@ app.post("/api/printer-pool", requireAdmin, (req, res) => {
   // position can briefly disagree with PRINTERS[]'s real order during an
   // unsaved drag-reorder, which a plain array index would silently trust.
   const p = printerId ? printerById(printerId) : PRINTERS[parseInt(printer, 10)];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  // code is additive alongside the existing error string — any other
+  // consumer of this route that only ever read `error` keeps working
+  // unchanged; the Settings > Printers tab's own frontend is the only
+  // current caller that looks at `code`, to render a translated message
+  // instead of this raw English fallback.
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
   const qs = queueStore.getPrinterState(p.id);
-  if (qs.queueState !== "idle" && qs.queueState !== "unmanaged") return res.status(409).json({ error: "This printer's queue must be idle before changing its pool" });
-  if (qs.queue.length) return res.status(409).json({ error: "Clear this printer's queue before changing its pool" });
+  if (qs.queueState !== "idle" && qs.queueState !== "unmanaged") return res.status(409).json({ error: "This printer's queue must be idle before changing its pool", code: "queue_not_idle" });
+  if (qs.queue.length) return res.status(409).json({ error: "Clear this printer's queue before changing its pool", code: "queue_not_empty" });
 
   if (!printerPoolId) {
     p.printerPoolId = undefined;
     queueStore.unassignPool(p.id);
   } else {
     const pool = (CFG.printerPools || []).find(x => x.id === printerPoolId);
-    if (!pool) return res.status(400).json({ error: "Unknown printer pool" });
+    if (!pool) return res.status(400).json({ error: "Unknown printer pool", code: "unknown_pool" });
     p.printerPoolId = printerPoolId;
     queueStore.assignPool(p.id);
   }
@@ -2717,14 +2940,14 @@ app.post("/api/printer-pool", requireAdmin, (req, res) => {
 // ---- Per-printer queue ----
 app.get("/api/queue/:printerId", requireAuth, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: "Unknown printer" });
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: "Unknown printer", code: "unknown_printer" });
   res.json({ printerId: p.id, printerPoolId: p.printerPoolId || null, ...redactQueueStateForResponse(queueStore.getPrinterState(p.id)) });
 });
 
 app.post("/api/queue/:printerId/items", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   if (!p.printerPoolId) return res.status(400).json({ error: "This printer has no Printer Pool assigned" });
   const b = req.body || {};
   const files = Array.isArray(b.files) ? b.files : [];
@@ -2752,7 +2975,7 @@ app.post("/api/queue/:printerId/items", requireRegular, (req, res) => {
   }
 
   const result = queueStore.applyIntent(p.id, (state) => ({ ...state, queue: [...state.queue, ...items], updatedAt: Date.now() }));
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now — " + (result.reason || "unknown error") });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now — " + (result.reason || "unknown error"), code: "queue_save_failed", detail: result.reason || null });
   auditLog.log({ category: "job", event: "queue-item-added", ...actor, printerId: p.id, printerName: p.name, detail: { count: items.length } });
   if (b.startImmediately) attemptQueueDispatch(p.id).catch(e => console.error("[queue] immediate dispatch error:", e.message));
   res.json({ ok: true, added: items.length, state: redactQueueStateForResponse(result.nextState) });
@@ -2760,8 +2983,8 @@ app.post("/api/queue/:printerId/items", requireRegular, (req, res) => {
 
 app.delete("/api/queue/:printerId/items/:itemId", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const result = queueStore.applyIntent(p.id, (state) => {
     const idx = state.queue.findIndex(i => i.id === req.params.itemId);
     if (idx === -1) return state; // already gone — not an error
@@ -2769,7 +2992,7 @@ app.delete("/api/queue/:printerId/items/:itemId", requireRegular, (req, res) => 
     const [removed] = next.splice(idx, 1);
     return { ...state, queue: next, recentHistory: QueueEngine.pushHistory(state.recentHistory, { ...removed, status: "removed", finishedAt: Date.now() }), updatedAt: Date.now() };
   });
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   auditLog.log({ category: "job", event: "queue-item-removed", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { itemId: req.params.itemId } });
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
@@ -2779,8 +3002,8 @@ app.delete("/api/queue/:printerId/items/:itemId", requireRegular, (req, res) => 
 // dependency on the future Shared Queue matcher).
 app.post("/api/queue/:printerId/items/:itemId/move", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const { toIndex, toPrinterId } = req.body || {};
 
   if (toPrinterId && toPrinterId !== p.id) {
@@ -2802,7 +3025,7 @@ app.post("/api/queue/:printerId/items/:itemId/move", requireRegular, (req, res) 
         [target.id]: { ...dst, queue: [...dst.queue, item], updatedAt: Date.now() }
       };
     });
-    if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+    if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
     auditLog.log({ category: "job", event: "queue-item-moved", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { itemId: item.id, toPrinterId: target.id } });
     return res.json({ ok: true });
   }
@@ -2816,16 +3039,16 @@ app.post("/api/queue/:printerId/items/:itemId/move", requireRegular, (req, res) 
     next.splice(target, 0, item);
     return { ...state, queue: next, updatedAt: Date.now() };
   });
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
 
 app.post("/api/queue/:printerId/pause", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const result = queueStore.applyIntent(p.id, QueueEngine.pauseQueue);
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   auditLog.log({ category: "job", event: "queue-paused", ...actorFromReq(req), printerId: p.id, printerName: p.name });
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
@@ -2836,8 +3059,8 @@ app.post("/api/queue/:printerId/pause", requireRegular, (req, res) => {
 // while could have had something started on it manually in the meantime.
 app.post("/api/queue/:printerId/resume", requireRegular, async (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const qs = queueStore.getPrinterState(p.id);
 
   let result;
@@ -2848,7 +3071,7 @@ app.post("/api/queue/:printerId/resume", requireRegular, async (req, res) => {
   } else {
     result = queueStore.applyIntent(p.id, QueueEngine.resumeQueue);
   }
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   auditLog.log({ category: "job", event: "queue-resumed", ...actorFromReq(req), printerId: p.id, printerName: p.name });
   attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-resume dispatch error:", e.message));
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
@@ -2856,10 +3079,10 @@ app.post("/api/queue/:printerId/resume", requireRegular, async (req, res) => {
 
 app.post("/api/queue/:printerId/stop", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const result = queueStore.applyIntent(p.id, QueueEngine.stopQueue);
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   auditLog.log({ category: "job", event: "queue-stopped", ...actorFromReq(req), printerId: p.id, printerName: p.name });
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
@@ -2870,8 +3093,8 @@ app.post("/api/queue/:printerId/stop", requireRegular, (req, res) => {
 // physically printing right now, then wipes the rest of the queue.
 app.post("/api/queue/:printerId/clear", requireRegular, async (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const qs = queueStore.getPrinterState(p.id);
   const wasPrinting = qs.queueState === "dispatching" || qs.queueState === "printing";
   if (wasPrinting) {
@@ -2880,7 +3103,7 @@ app.post("/api/queue/:printerId/clear", requireRegular, async (req, res) => {
   }
   const removedQueuedCount = qs.queue.length;
   const result = queueStore.applyIntent(p.id, QueueEngine.clearQueue);
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   auditLog.log({ category: "job", event: "queue-cleared", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { cancelledCurrent: wasPrinting, removedQueuedCount } });
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
@@ -2889,8 +3112,8 @@ app.post("/api/queue/:printerId/clear", requireRegular, async (req, res) => {
 // action (Correction 2), never a client-only state flip.
 app.post("/api/queue/:printerId/confirm-bed-clear", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const actor = actorFromReq(req);
   const result = queueStore.confirmManualBedClear(p.id, actor);
   if (!result.ok) return res.status(409).json({ error: "Could not confirm right now — " + (result.reason || "invalid state") });
@@ -2907,8 +3130,8 @@ app.post("/api/queue/:printerId/confirm-bed-clear", requireRegular, (req, res) =
 // before the queue's own state catches up to match.
 app.post("/api/queue/:printerId/resolve", requireRegular, async (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const { action } = req.body || {};
 
   if (action === "resume") {
@@ -2933,8 +3156,8 @@ app.post("/api/queue/:printerId/resolve", requireRegular, async (req, res) => {
 // the moment identity itself is being decided.
 app.post("/api/queue/:printerId/accept-file-change", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
   const qs = queueStore.getPrinterState(p.id);
   if (qs.attentionReason !== "file-changed" || !qs.currentItem) return res.status(409).json({ error: "Nothing to accept right now" });
   const item = qs.currentItem;
@@ -2958,7 +3181,7 @@ app.post("/api/queue/send", requireRegular, (req, res) => {
   const mode = b.mode === "distribute" ? "distribute" : "print-on-all";
   if (!files.length) return res.status(400).json({ error: "No files given" });
   const pool = (CFG.printerPools || []).find(x => x.id === poolId);
-  if (!pool) return res.status(400).json({ error: "Unknown printer pool" });
+  if (!pool) return res.status(400).json({ error: "Unknown printer pool", code: "unknown_pool" });
   const targetPrinters = PRINTERS.filter(p => p.printerPoolId === poolId && printerVisibleTo(req.user, p));
   if (!targetPrinters.length) return res.status(400).json({ error: "No printers available in this pool" });
 
@@ -3000,7 +3223,7 @@ app.post("/api/queue/send", requireRegular, (req, res) => {
     }
     return updates;
   });
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   auditLog.log({ category: "job", event: "queue-bulk-send", ...actor, detail: { poolId, mode, fileCount: resolved.length, totalItems: expanded.length, printerCount: targetPrinters.length } });
   if (b.startImmediately) targetPrinters.forEach(p => attemptQueueDispatch(p.id).catch(e => console.error("[queue] bulk-send dispatch error:", e.message)));
   res.json({ ok: true, printers: targetPrinters.map(p => p.id), totalItems: expanded.length });
@@ -3043,7 +3266,7 @@ app.post("/api/otp-test", requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (b.service === "ntfy") {
     const topic = (typeof b.ntfyTopic === "string" && b.ntfyTopic.trim()) ? b.ntfyTopic.trim() : ((CFG.otp && CFG.otp.ntfyTopic) || "");
-    if (!topic) return res.status(400).json({ error: "Enter a topic first" });
+    if (!topic) return res.status(400).json({ error: "Enter a topic first", code: "missing_topic" });
     try {
       await sendNtfy({ topic, title: "SnapCon OTP test", message: "This is a test OTP notification from SnapCon." });
       res.json({ ok: true });
@@ -3058,8 +3281,8 @@ app.post("/api/otp-test", requireAdmin, async (req, res) => {
     // own.
     const botToken = (CFG.notifications && CFG.notifications.telegramBotToken) || "";
     const chatId = (typeof b.chatId === "string" && b.chatId.trim()) ? b.chatId.trim() : ((CFG.otp && CFG.otp.telegramChatId) || "");
-    if (!botToken) return res.status(400).json({ error: "Configure a Telegram bot on the Notifications tab first" });
-    if (!chatId) return res.status(400).json({ error: "Enter a chat ID first" });
+    if (!botToken) return res.status(400).json({ error: "Configure a Telegram bot on the Notifications tab first", code: "missing_bot_config" });
+    if (!chatId) return res.status(400).json({ error: "Enter a chat ID first", code: "missing_chat_id" });
     try {
       await sendTelegram({ botToken, chatId, message: "This is a test OTP message from SnapCon." });
       res.json({ ok: true });
@@ -3071,9 +3294,9 @@ app.post("/api/otp-test", requireAdmin, async (req, res) => {
   const apiKey = (typeof b.apiKey === "string" && b.apiKey.trim()) ? b.apiKey.trim() : ((CFG.resend && CFG.resend.apiKey) || "");
   const fromAddress = String(b.fromAddress || (CFG.resend && CFG.resend.fromAddress) || "").trim();
   const to = String(b.to || "").trim();
-  if (!apiKey) return res.status(400).json({ error: "Enter a Resend API key first" });
-  if (!fromAddress) return res.status(400).json({ error: "Enter a from-address first" });
-  if (!to) return res.status(400).json({ error: "Enter a test recipient address" });
+  if (!apiKey) return res.status(400).json({ error: "Enter a Resend API key first", code: "missing_api_key" });
+  if (!fromAddress) return res.status(400).json({ error: "Enter a from-address first", code: "missing_from_address" });
+  if (!to) return res.status(400).json({ error: "Enter a test recipient address", code: "missing_recipient" });
   try {
     await sendResendEmail({ apiKey, fromAddress, to, subject: "SnapCon OTP test", text: "This is a test OTP email from SnapCon." });
     res.json({ ok: true });
@@ -3370,12 +3593,12 @@ app.post("/api/notify-test", requireAdmin, async (req, res) => {
   const b = req.body || {};
   const nf = CFG.notifications || {};
   const service = b.service === "telegram" ? "telegram" : "ntfy";
-  if (!PRINTERS.length) return res.status(400).json({ error: "Add a printer first" });
+  if (!PRINTERS.length) return res.status(400).json({ error: "Add a printer first", code: "no_printers" });
   const p = PRINTERS[0]; // any configured printer works for a connectivity test
 
   try {
     const st = await getConnector(p.connector).probe(p);
-    if (!st.online) return res.status(502).json({ error: p.name + " is offline: " + (st.error || "") });
+    if (!st.online) return res.status(502).json({ error: p.name + " is offline: " + (st.error || ""), code: "printer_offline", name: p.name, detail: st.error || "" });
     const ev = st.state || "idle"; // test uses the live state as the event
     let message = eventMessage(ev, st);
     let image = null;
@@ -3388,13 +3611,13 @@ app.post("/api/notify-test", requireAdmin, async (req, res) => {
       // Same "test with the form's current value, fall back to what's saved"
       // convention as the OTP/Resend test buttons — works before Save too.
       const botToken = (typeof b.botToken === "string" && b.botToken.trim()) ? b.botToken.trim() : (nf.telegramBotToken || "");
-      if (!chatId) return res.status(400).json({ error: "Enter a Telegram chat ID first" });
-      if (!botToken) return res.status(400).json({ error: "Enter a Telegram bot token first" });
+      if (!chatId) return res.status(400).json({ error: "Enter a Telegram chat ID first", code: "missing_chat_id" });
+      if (!botToken) return res.status(400).json({ error: "Enter a Telegram bot token first", code: "missing_bot_token" });
       await sendTelegram({ botToken, chatId, message: p.name + ": " + message, image });
       return res.json({ ok: true, service, printer: p.name });
     }
     const topic = String(b.topic || nf.ntfyTopic || "").trim();
-    if (!/^[-_A-Za-z0-9]{1,64}$/.test(topic)) return res.status(400).json({ error: "Enter a valid ntfy topic first" });
+    if (!/^[-_A-Za-z0-9]{1,64}$/.test(topic)) return res.status(400).json({ error: "Enter a valid ntfy topic first", code: "invalid_topic" });
     await sendNtfy({
       topic, title: p.name, message, image,
       iconUrl: "http://" + lanHost(req) + "/snapcon-icon-512.png"

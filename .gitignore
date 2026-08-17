@@ -12,6 +12,7 @@ remote-access-data/
 audit-data/
 sync-data/
 data/
+locales/
 .claude/
 .agents/
 skills-lock.json
@@ -22,3 +23,4 @@ VERIFIED_CODE_REVIEW.md
 CODE_AUDIT.md
 queue-management-design.md
 queue-management-implementation-plan.md
+FUTURE_WORK.md

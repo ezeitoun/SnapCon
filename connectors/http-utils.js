@@ -325,9 +325,9 @@ async function getFileMetadata(p, file) {
 // `st` is an already-resolved probe() result (the caller already has one from
 // probeCached — no reason to probe twice).
 async function queryFirmwareInfo(p, st) {
-  if (!st.online) return { name: p.name, online: false, skipped: true, reason: st.error || "offline" };
+  if (!st.online) return { name: p.name, online: false, skipped: true, reason: st.error || "offline", reasonCode: "offline", detail: st.error || "" };
   if (!["standby", "complete", "cancelled"].includes(st.state)) {
-    return { name: p.name, online: true, skipped: true, reason: "busy (" + st.state + ")" };
+    return { name: p.name, online: true, skipped: true, reason: "busy (" + st.state + ")", reasonCode: "busy", state: st.state };
   }
   const base = baseUrl(p);
   try {

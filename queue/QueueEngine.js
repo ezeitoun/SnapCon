@@ -318,7 +318,10 @@ function reconcileOnStartup(state, liveProbe) {
       return { ...state, queueState: "printing", updatedAt: Date.now() };
     }
     if (liveProbe.online && liveProbe.state === "printing") {
-      return attentionState(state, "recovery-mismatch", { code: "recovery-mismatch", message: "Printer is printing a file SnapCon didn't dispatch: " + liveProbe.filename });
+      // filename is additive — the frontend uses it to render a translated
+      // template instead of this concatenated message string, which stays
+      // for compatibility with any other consumer of attentionDetail.message.
+      return attentionState(state, "recovery-mismatch", { code: "recovery-mismatch", message: "Printer is printing a file SnapCon didn't dispatch: " + liveProbe.filename, filename: liveProbe.filename });
     }
     return attentionState(state, "recovery-interrupted", { code: "recovery-interrupted", message: "Dispatch was interrupted; outcome unknown" });
   }

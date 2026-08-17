@@ -161,7 +161,11 @@ test("QueueStore: acknowledgeReset requires the exact confirmation string and pr
   fs.writeFileSync(path.join(dataDir, "queue-data.json.bak"), "also corrupt {{{");
   const store = createQueueStore({ baseDir });
   store.load();
-  assert.equal(store.acknowledgeReset("wrong").ok, false);
+  const wrong = store.acknowledgeReset("wrong");
+  assert.equal(wrong.ok, false);
+  // Additive i18n field (see the frontend's queueErrorText() mapping) — must
+  // never replace or alter .error, only accompany it.
+  assert.equal(wrong.code, "reset_confirm_mismatch");
   assert.equal(store.getGlobalStatus().queueStoreRecoveryRequired, true, "a wrong confirmation must not clear it");
   const r = store.acknowledgeReset("RESET");
   assert.equal(r.ok, true);

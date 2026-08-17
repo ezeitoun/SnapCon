@@ -262,7 +262,7 @@ function createQueueStore({ baseDir, degradedRetryMs = 15000 }) {
   function stopAll() { storeStoppedByAdmin = true; }
   function resumeAll() { storeStoppedByAdmin = false; }
   function acknowledgeReset(confirmText) {
-    if (confirmText !== "RESET") return { ok: false, error: "Confirmation text did not match" };
+    if (confirmText !== "RESET") return { ok: false, error: "Confirmation text did not match", code: "reset_confirm_mismatch" };
     store = {};
     queueStoreRecoveryRequired = false;
     corruptFilePaths = [];

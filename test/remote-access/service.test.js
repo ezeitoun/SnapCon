@@ -151,6 +151,9 @@ test("validateRemoteAccessSecurity: disallowed when usersEnabled is false", () =
   const result = svc.validateRemoteAccessSecurity();
   assert.equal(result.allowed, false);
   assert.match(result.reason, /User Access Management|login/i);
+  // Additive i18n field (see the frontend's RA_ERROR_KEYS mapping) — must
+  // never replace or alter .reason, only accompany it.
+  assert.equal(result.code, "users_disabled");
 });
 
 test("validateRemoteAccessSecurity: disallowed when usersEnabled is true but no admin exists", () => {
@@ -159,12 +162,25 @@ test("validateRemoteAccessSecurity: disallowed when usersEnabled is true but no 
   const result = svc.validateRemoteAccessSecurity();
   assert.equal(result.allowed, false);
   assert.match(result.reason, /admin/i);
+  assert.equal(result.code, "no_admin");
 });
 
 test("validateRemoteAccessSecurity: allowed when usersEnabled is true and an admin exists", () => {
   const dir = tempBaseDir();
   const svc = makeService(dir, { usersEnabled: true, users: [{ role: "admin" }] });
-  assert.equal(svc.validateRemoteAccessSecurity().allowed, true);
+  const result = svc.validateRemoteAccessSecurity();
+  assert.equal(result.allowed, true);
+  // No code on the allowed path — there's no error to map to translated text.
+  assert.equal(result.code, undefined);
+});
+
+test("restart: returns the legacy error string plus an additive 'not_enabled' code when Remote Access isn't enabled — never starts a process", async () => {
+  const dir = tempBaseDir();
+  const svc = makeService(dir, { usersEnabled: true, users: [{ role: "admin" }] });
+  const result = await svc.restart();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /not enabled/i);
+  assert.equal(result.code, "not_enabled");
 });
 
 test("enable() refuses and never calls provisionHub when the security precondition fails", async () => {

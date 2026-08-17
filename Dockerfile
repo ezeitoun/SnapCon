@@ -18,13 +18,19 @@ RUN npm pkg delete devDependencies \
 # `Error: Cannot find module './auth'` the moment the container actually
 # runs. Keep this in sync with server.js's top-of-file require() list as new
 # top-level modules are added.
-COPY server.js parser.js auth.js groupAccess.js configLoader.js notifyToken.js pathSafety.js ./
+COPY server.js parser.js auth.js groupAccess.js configLoader.js notifyToken.js pathSafety.js locales.js ./
 COPY connectors ./connectors
 COPY remote-access ./remote-access
 COPY audit ./audit
 COPY sync ./sync
 COPY queue ./queue
 COPY public ./public
+# Bundled canonical locale originals (en.json + the shipped sample) — read
+# via fs, not require(), so docker.test.js's require()-graph check can't
+# catch a missing COPY here the way it does for locales.js above; seeded
+# into the writable runtime locales/ directory on first run (see
+# locales.seedDefaultLocales in server.js) and never overwritten after that.
+COPY locales-default ./locales-default
 
 # config.json and gcode/ are expected to be mounted as volumes (see
 # docker-compose.yml). The server creates sane defaults if they're absent.

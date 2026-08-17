@@ -91,13 +91,18 @@ function setOtpCode(loginNameLower) {
   OTP_CODES.set(loginNameLower, { code, expiresAt: Date.now() + OTP_TTL_MS, attempts: 0 });
   return code;
 }
+// `code` alongside `error` is additive presentation metadata for the
+// frontend's i18n layer (see AUTH_ERROR_KEYS in app.js) — the `error` string
+// itself is unchanged and still what a non-updated/API caller sees. Preserves
+// today's exact distinguishability between these four outcomes; none of that
+// enumeration-relevant behavior is altered here.
 function verifyOtpCode(loginNameLower, code) {
   const entry = OTP_CODES.get(loginNameLower);
-  if (!entry) return { ok: false, error: "Request a new code" };
-  if (Date.now() > entry.expiresAt) { OTP_CODES.delete(loginNameLower); return { ok: false, error: "Code expired — request a new one" }; }
-  if (entry.attempts >= OTP_MAX_ATTEMPTS) { OTP_CODES.delete(loginNameLower); return { ok: false, error: "Too many attempts — request a new code" }; }
+  if (!entry) return { ok: false, error: "Request a new code", code: "otp_verify_request_new" };
+  if (Date.now() > entry.expiresAt) { OTP_CODES.delete(loginNameLower); return { ok: false, error: "Code expired — request a new one", code: "otp_verify_expired" }; }
+  if (entry.attempts >= OTP_MAX_ATTEMPTS) { OTP_CODES.delete(loginNameLower); return { ok: false, error: "Too many attempts — request a new code", code: "otp_verify_too_many_attempts" }; }
   entry.attempts++;
-  if (String(code || "").toUpperCase() !== entry.code) return { ok: false, error: "Incorrect code" };
+  if (String(code || "").toUpperCase() !== entry.code) return { ok: false, error: "Incorrect code", code: "otp_verify_incorrect" };
   OTP_CODES.delete(loginNameLower);
   return { ok: true };
 }
@@ -128,7 +133,7 @@ function makeAuthMiddleware(getCfg, getUsers) {
     const users = getUsers();
     const u = users.find(u => u.id === session.userId);
     if (!u) { req.user = null; return next(); }
-    req.user = { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, groupIds: Array.isArray(u.groupIds) ? u.groupIds : [], theme: u.theme || null };
+    req.user = { id: u.id, loginName: u.loginName, firstName: u.firstName, lastName: u.lastName, role: u.role, groupIds: Array.isArray(u.groupIds) ? u.groupIds : [], theme: u.theme || null, locale: u.locale || null };
     req.sessionToken = token;
     // Refresh the cookie's expiry on every authenticated request — without
     // this, the browser drops the cookie 18h after LOGIN even for a

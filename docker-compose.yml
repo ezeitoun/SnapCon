@@ -59,3 +59,8 @@ services:
       # just re-upload/re-select). Same "pre-create as a FILE" caveat as
       # users.json above if you do mount it: touch queued-files.json first.
       # - ./queued-files.json:/app/queued-files.json
+      # Added languages, edits made through the Language Editor, and the
+      # first-run-seeded en.json/es.json all live here — without this mount,
+      # a container recreate silently reverts to the two bundled defaults
+      # and discards anything an admin added/edited.
+      - ./locales:/app/locales                       # installed/edited language files

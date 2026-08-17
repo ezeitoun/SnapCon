@@ -246,3 +246,26 @@ test("getFileMetadata: falls back to a header-window fetch for the Cura dialect 
   assert.equal(result.palette[0].wt, "5.25");
   assert.ok(calls.some(c => c.includes("bytes=3616-20000")), "must request a bounded window ending at gcode_start_byte, not the whole file");
 });
+
+test("queryFirmwareInfo: offline printer gets additive reasonCode/detail alongside the legacy reason string", async () => {
+  const result = await http.queryFirmwareInfo(p, { online: false, error: "Request timed out" });
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, "Request timed out"); // legacy prose field, unchanged for other consumers
+  assert.equal(result.reasonCode, "offline");
+  assert.equal(result.detail, "Request timed out");
+});
+
+test("queryFirmwareInfo: offline printer with no connector error falls back reason to 'offline', detail to empty string", async () => {
+  const result = await http.queryFirmwareInfo(p, { online: false });
+  assert.equal(result.reason, "offline");
+  assert.equal(result.reasonCode, "offline");
+  assert.equal(result.detail, "");
+});
+
+test("queryFirmwareInfo: busy printer (mid-print state) gets additive reasonCode/state, preserving the raw state identifier untranslated", async () => {
+  const result = await http.queryFirmwareInfo(p, { online: true, state: "printing" });
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, "busy (printing)");
+  assert.equal(result.reasonCode, "busy");
+  assert.equal(result.state, "printing"); // stable technical identifier, never translated server-side
+});

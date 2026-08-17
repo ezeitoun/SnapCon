@@ -117,3 +117,13 @@ test("Queue: docker-compose.yml mounts the whole data directory, not a single qu
   const hosts = composeHostVolumePaths();
   assert.ok(hosts.includes("./data"), "data must be mounted as a directory — queue-data.json's atomic temp-file-then-rename-with-backup sequence needs the temp file and the real file on the same underlying mount, or Queue Management state is wiped by recreating the container");
 });
+
+test("i18n: docker-compose.yml mounts the locales directory, or admin-added/edited languages are wiped by recreating the container", () => {
+  const hosts = composeHostVolumePaths();
+  assert.ok(hosts.includes("./locales"), "locales must be mounted as a directory — it's seeded once on first run and then holds every admin-added or admin-edited language; without this mount a container recreate reverts it to just the two bundled defaults");
+});
+
+test("i18n: Dockerfile COPYs locales-default (bundled originals, read via fs not require() so the C-1 require-graph check above can't catch a missing COPY here)", () => {
+  const copied = dockerfileCopySources();
+  assert.ok(copied.has("locales-default"), "locales-default must be COPYd or the container has nothing to seed BASE_DIR/locales/ from on first run");
+});

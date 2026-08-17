@@ -21,7 +21,8 @@
   "pkg": {
     "assets": [
       "public/**/*",
-      "parser.js"
+      "parser.js",
+      "locales-default/**/*"
     ],
     "targets": [
       "node22-win-x64",

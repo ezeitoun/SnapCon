@@ -18,34 +18,37 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<a href="#main" class="skip-link">Skip to main content</a>
+<a href="#main" class="skip-link" data-i18n="common.skip_to_main_content">Skip to main content</a>
 <div class="splash" id="splash">
   <img src="/snapcon-icon-large.svg" alt="SnapCon">
-  <div class="splash-sub" id="splashsub">connecting to printers…</div>
+  <div class="splash-sub" id="splashsub" data-i18n="global.splash.connecting">connecting to printers…</div>
 </div>
 <div class="login-overlay" id="loginOverlay" style="display:none">
   <div class="login-box">
     <img src="/snapcon-icon-large.svg" alt="SnapCon" class="login-logo">
     <div id="loginStep1">
-      <label class="fl" for="loginName">Login name</label>
+      <label class="fl" for="loginName" data-i18n="auth.login_name_label">Login name</label>
       <input class="field" id="loginName" autocomplete="username" spellcheck="false">
-      <label class="fl" for="loginPassword" style="margin-top:10px">Password</label>
+      <label class="fl" for="loginPassword" style="margin-top:10px" data-i18n="settings.users.password_label">Password</label>
       <input class="field" id="loginPassword" type="password" autocomplete="current-password">
       <div class="login-actions">
-        <button class="btn primary" id="loginSubmit">Log in</button>
-        <button class="btn ghost" id="loginOtpBtn">Send me a code instead</button>
+        <button class="btn primary" id="loginSubmit" data-i18n="auth.login_button">Log in</button>
+        <button class="btn ghost" id="loginOtpBtn" data-i18n="auth.request_otp_button">Send me a code instead</button>
       </div>
       <div class="pstatus" aria-live="polite" id="loginStatus"></div>
     </div>
     <div id="loginStep2" style="display:none">
-      <div class="hint" style="margin-bottom:10px">Enter the code sent to you.</div>
-      <label class="fl" for="otpCode">Code</label>
+      <div class="hint" style="margin-bottom:10px" data-i18n="auth.otp_hint">Enter the code sent to you.</div>
+      <label class="fl" for="otpCode" data-i18n="auth.otp_code_label">Code</label>
       <input class="field" id="otpCode" autocomplete="one-time-code" maxlength="8" spellcheck="false" style="text-transform:uppercase">
       <div class="login-actions">
-        <button class="btn primary" id="otpSubmit">Verify</button>
-        <button class="btn ghost" id="otpBack">Back</button>
+        <button class="btn primary" id="otpSubmit" data-i18n="auth.otp_verify_button">Verify</button>
+        <button class="btn ghost" id="otpBack" data-i18n="common.back">Back</button>
       </div>
       <div class="pstatus" aria-live="polite" id="otpStatus"></div>
+    </div>
+    <div class="login-locale-row">
+      <select class="login-locale-select" id="loginLocale" data-i18n-title="settings.view.system_default_locale_section_title" title="Language" data-i18n-aria-label="settings.view.system_default_locale_section_title" aria-label="Language"></select>
     </div>
   </div>
 </div>
@@ -53,30 +56,30 @@
   <aside class="side">
     <div class="head">
       <div class="sort-wrap">
-        <button class="refresh icon-btn" id="fileSortBtn" title="Sort: Newest"><img src="/file-sort.svg" class="side-icon" alt="Sort"></button>
+        <button class="refresh icon-btn" id="fileSortBtn" data-i18n-title="global.file_sort.title_new" title="Sort: Newest"><img src="/file-sort.svg" class="side-icon" data-i18n-alt="global.topbar.sort_alt" alt="Sort"></button>
         <div class="sort-menu left" id="fileSortMenu">
-          <button class="sort-opt" data-fsort="new"><span class="sort-check" id="fsc-new"></span>Newest</button>
-          <button class="sort-opt" data-fsort="old"><span class="sort-check" id="fsc-old"></span>Oldest</button>
-          <button class="sort-opt" data-fsort="az"><span class="sort-check" id="fsc-az"></span>A–Z</button>
-          <button class="sort-opt" data-fsort="za"><span class="sort-check" id="fsc-za"></span>Z–A</button>
-          <button class="sort-opt" data-fsort="big"><span class="sort-check" id="fsc-big"></span>Largest</button>
-          <button class="sort-opt" data-fsort="small"><span class="sort-check" id="fsc-small"></span>Smallest</button>
+          <button class="sort-opt" data-fsort="new"><span class="sort-check" id="fsc-new"></span><span data-i18n="global.file_sort.option_new">Newest</span></button>
+          <button class="sort-opt" data-fsort="old"><span class="sort-check" id="fsc-old"></span><span data-i18n="global.file_sort.option_old">Oldest</span></button>
+          <button class="sort-opt" data-fsort="az"><span class="sort-check" id="fsc-az"></span><span data-i18n="global.file_sort.option_az">A–Z</span></button>
+          <button class="sort-opt" data-fsort="za"><span class="sort-check" id="fsc-za"></span><span data-i18n="global.file_sort.option_za">Z–A</span></button>
+          <button class="sort-opt" data-fsort="big"><span class="sort-check" id="fsc-big"></span><span data-i18n="global.file_sort.option_big">Largest</span></button>
+          <button class="sort-opt" data-fsort="small"><span class="sort-check" id="fsc-small"></span><span data-i18n="global.file_sort.option_small">Smallest</span></button>
         </div>
       </div>
       <div class="head-btns">
-        <button class="refresh icon-btn" id="newFolderBtn" title="Create a new folder here"><img src="/new-folder.svg" class="side-icon" alt="New Folder"></button>
-        <button class="refresh icon-btn" id="uploadFilesBtn" title="Upload files from this computer"><img src="/upload-file.svg" class="side-icon" alt="Upload"></button>
-        <button class="refresh icon-btn" id="refresh" title="Refresh"><img src="/refresh-icon.svg" class="side-icon" alt="Refresh"></button>
+        <button class="refresh icon-btn" id="newFolderBtn" data-i18n-title="files.new_folder_title" title="Create a new folder here"><img src="/new-folder.svg" class="side-icon" data-i18n-alt="files.new_folder_alt" alt="New Folder"></button>
+        <button class="refresh icon-btn" id="uploadFilesBtn" data-i18n-title="files.upload_title" title="Upload files from this computer"><img src="/upload-file.svg" class="side-icon" data-i18n-alt="files.upload_alt" alt="Upload"></button>
+        <button class="refresh icon-btn" id="refresh" data-i18n-title="common.refresh" title="Refresh"><img src="/refresh-icon.svg" class="side-icon" data-i18n-alt="common.refresh" alt="Refresh"></button>
       </div>
     </div>
     <div class="folderline" id="folderline">…</div>
     <div class="multiselect-bar" id="multiselectBar" style="display:none">
       <span id="multiselectCount"></span>
-      <button class="btn ghost" id="sendToQueueBtn" style="display:none">Send to Queue</button>
-      <button class="btn ghost" id="multiselectClear">Clear</button>
+      <button class="btn ghost" id="sendToQueueBtn" data-i18n="queue.send_modal_title" style="display:none">Send to Queue</button>
+      <button class="btn ghost" id="multiselectClear" data-i18n="files.multiselect_clear">Clear</button>
     </div>
     <div class="pstatus" aria-live="polite" id="fileOpStatus" style="padding:0 14px"></div>
-    <div class="filter"><input id="filter" placeholder="Search files…" aria-label="Search files" /></div>
+    <div class="filter"><input id="filter" data-i18n-placeholder="files.search_placeholder" placeholder="Search files…" data-i18n-aria-label="files.search_aria" aria-label="Search files" /></div>
     <div class="list" id="list"></div>
     <input type="file" id="uploadFilesInput" multiple accept=".gcode,.gco,.g,.gx,.3mf" style="display:none">
   </aside>
@@ -88,45 +91,46 @@
         <span class="vbadge" id="vbadge"></span>
       </div>
       <span class="topbar-sitename" id="topbarSiteName" style="display:none"></span>
-      <input id="fleetSearch" class="fleet-search" placeholder="Search printers…" aria-label="Search printers" autocomplete="off">
-      <button class="gear" id="filesBtn" title="Show file list"><img src="/folder.svg" class="topbar-icon" alt="Files"></button>
+      <input id="fleetSearch" class="fleet-search" data-i18n-placeholder="global.topbar.fleet_search_placeholder" placeholder="Search printers…" data-i18n-aria-label="global.topbar.fleet_search_aria" aria-label="Search printers" autocomplete="off">
+      <button class="gear" id="filesBtn" data-i18n-title="global.topbar.files_show_title" title="Show file list"><img src="/folder.svg" class="topbar-icon" data-i18n-alt="global.topbar.files_alt" alt="Files"></button>
       <div class="sort-wrap">
-        <button class="gear" id="sortBtn" title="Sort printers"><img src="/sort.svg" class="topbar-icon" alt="Sort"></button>
+        <button class="gear" id="sortBtn" data-i18n-title="global.topbar.sort_button_title" title="Sort printers"><img src="/sort.svg" class="topbar-icon" data-i18n-alt="global.topbar.sort_alt" alt="Sort"></button>
         <div class="sort-menu" id="sortMenu">
-          <button class="sort-opt" data-sort="none"><span class="sort-check" id="sc-none"></span>No sort</button>
-          <button class="sort-opt" data-sort="status"><span class="sort-check" id="sc-status"></span>By status</button>
-          <button class="sort-opt" data-sort="time"><span class="sort-check" id="sc-time"></span>By time remaining</button>
-          <button class="sort-opt" data-sort="name"><span class="sort-check" id="sc-name"></span>By name</button>
+          <button class="sort-opt" data-sort="none"><span class="sort-check" id="sc-none"></span><span data-i18n="global.sort.option_none">No sort</span></button>
+          <button class="sort-opt" data-sort="status"><span class="sort-check" id="sc-status"></span><span data-i18n="global.sort.option_status">By status</span></button>
+          <button class="sort-opt" data-sort="time"><span class="sort-check" id="sc-time"></span><span data-i18n="global.sort.option_time">By time remaining</span></button>
+          <button class="sort-opt" data-sort="name"><span class="sort-check" id="sc-name"></span><span data-i18n="global.sort.option_name">By name</span></button>
         </div>
       </div>
-      <button class="gear" id="compactBtn" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" alt="Compact"></button>
-      <button class="gear" id="bulkHeatBtn" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" alt="Heat"></button>
-      <button class="gear" id="maintBtn" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" alt="Maintenance"></button>
-      <button class="gear" id="healthBtn" title="Printer health" aria-label="Printer health"><img src="/health.svg" class="topbar-icon" alt="Printer health"><span class="health-badge" id="healthBadge" style="display:none"></span></button>
+      <button class="gear" id="compactBtn" data-i18n-title="global.topbar.view_title_compact" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" data-i18n-alt="global.topbar.compact_alt" alt="Compact"></button>
+      <button class="gear" id="bulkHeatBtn" data-i18n-title="global.topbar.bulk_heat_title" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" data-i18n-alt="global.topbar.heat_alt" alt="Heat"></button>
+      <button class="gear" id="maintBtn" data-i18n-title="global.topbar.maintenance_title" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" data-i18n-alt="global.topbar.maintenance_title" alt="Maintenance"></button>
+      <button class="gear" id="healthBtn" data-i18n-title="global.topbar.health_title" title="Printer health" data-i18n-aria-label="global.topbar.health_title" aria-label="Printer health"><img src="/health.svg" class="topbar-icon" data-i18n-alt="global.topbar.health_title" alt="Printer health"><span class="health-badge" id="healthBadge" style="display:none"></span></button>
       <!-- Placeholder icon — a real one is coming later; shown only when Queue Management is enabled. -->
-      <button class="gear" id="queueBtn" title="Queue Management" style="display:none">
+      <button class="gear" id="queueBtn" data-i18n-title="settings.tabs.queue" title="Queue Management" style="display:none">
         <svg width="22.1" height="22.1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topbar-icon"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="12" height="4" rx="1"/></svg>
       </button>
       <button class="gear" id="themeBtn" title="Switch to light theme" aria-pressed="false"><img src="/moon.svg" class="topbar-icon" id="themeBtnIcon" alt="Dark theme"></button>
-      <button class="gear" id="gear" title="Settings"><img src="/gear.svg" class="topbar-icon" alt="Settings"></button>
+      <button class="gear" id="gear" data-i18n-title="settings.title" title="Settings"><img src="/gear.svg" class="topbar-icon" data-i18n-alt="settings.title" alt="Settings"></button>
       <span class="topbar-clock" id="topbarClock"></span>
       <div class="user-badge" id="userBadge" style="display:none">
-        <button class="gear" id="logoutBtn" title="Logout"><img src="/logout.svg" class="topbar-icon" alt="Logout"></button>
+        <select class="topbar-locale-select" id="topbarLocale" data-i18n-title="settings.view.my_language_short" title="My language" data-i18n-aria-label="settings.view.my_language_short" aria-label="My language"></select>
+        <button class="gear" id="logoutBtn" title="Logout"><img src="/logout.svg" class="topbar-icon" data-i18n-alt="global.topbar.logout_title" alt="Logout"></button>
       </div>
     </div>
     <div class="setup" id="setup">
-      <div class="sechead"><h2>Settings</h2><span class="count" id="setupmsg"></span></div>
+      <div class="sechead"><h2 data-i18n="settings.title">Settings</h2><span class="count" id="setupmsg"></span></div>
 
       <div class="set-tabs">
-        <button class="set-tab active" data-tab="general">General</button>
-        <button class="set-tab" data-tab="prefs">View</button>
-        <button class="set-tab" data-tab="notif">Notifications</button>
-        <button class="set-tab" data-tab="printers">Printers</button>
-        <button class="set-tab" data-tab="firmware">Firmware</button>
-        <button class="set-tab" data-tab="users">Users</button>
-        <button class="set-tab" data-tab="remote">Remote Access</button>
-        <button class="set-tab" data-tab="logs">Logs</button>
-        <button class="set-tab" data-tab="queue">Queue Management</button>
+        <button class="set-tab active" data-tab="general" data-i18n="settings.tabs.general">General</button>
+        <button class="set-tab" data-tab="prefs" data-i18n="settings.tabs.view">View</button>
+        <button class="set-tab" data-tab="notif" data-i18n="settings.tabs.notif">Notifications</button>
+        <button class="set-tab" data-tab="printers" data-i18n="settings.tabs.printers">Printers</button>
+        <button class="set-tab" data-tab="firmware" data-i18n="settings.tabs.firmware">Firmware</button>
+        <button class="set-tab" data-tab="users" data-i18n="settings.tabs.users">Users</button>
+        <button class="set-tab" data-tab="remote" data-i18n="settings.tabs.remote">Remote Access</button>
+        <button class="set-tab" data-tab="logs" data-i18n="settings.tabs.logs">Logs</button>
+        <button class="set-tab" data-tab="queue" data-i18n="settings.tabs.queue">Queue Management</button>
       </div>
 
       <div class="set-panel" id="tab-general">
@@ -135,14 +139,14 @@
         <div class="settings-warning" id="configLoadWarningCard" style="display:none;margin-bottom:16px"></div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Files</div>
-          <div class="settings-section-desc">Where SnapCon reads sliced files from.</div>
+          <div class="settings-section-title" data-i18n="settings.files.title">Files</div>
+          <div class="settings-section-desc" data-i18n="settings.files.description">Where SnapCon reads sliced files from.</div>
           <div class="settings-section-body">
             <div class="settings-field">
-              <label class="settings-label" for="setFolder">G-code folder</label>
+              <label class="settings-label" for="setFolder" data-i18n="settings.files.gcode_folder">G-code folder</label>
               <div style="display:flex;gap:8px">
-                <input class="field" id="setFolder" placeholder="e.g. C:/Users/you/gcode" style="flex:1" />
-                <button class="btn ghost" id="browseBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                <input class="field" id="setFolder" data-i18n-placeholder="settings.files.gcode_folder_placeholder" placeholder="e.g. C:/Users/you/gcode" style="flex:1" />
+                <button class="btn ghost" id="browseBtn" data-i18n="common.browse" style="flex:none;white-space:nowrap">Browse…</button>
               </div>
               <div class="settings-help" id="folderCheckStatus"></div>
             </div>
@@ -157,48 +161,48 @@
              from the PRINTER after it's confirmed synced here first — never
              by age alone. -->
         <div class="settings-section">
-          <div class="settings-section-title">Printer sync</div>
-          <div class="settings-section-desc">Where synced files land on this SnapCon host. Each printer gets its own subfolder, named after the printer.</div>
+          <div class="settings-section-title" data-i18n="settings.printer_sync.title">Printer sync</div>
+          <div class="settings-section-desc" data-i18n="settings.printer_sync.description">Where synced files land on this SnapCon host. Each printer gets its own subfolder, named after the printer.</div>
           <div class="settings-section-body">
             <div class="sync-table">
               <div class="sync-row sync-head" aria-hidden="true">
-                <div>What</div><div>Destination</div><div>Delete after</div>
+                <div data-i18n="settings.printer_sync.col_what">What</div><div data-i18n="settings.printer_sync.col_destination">Destination</div><div data-i18n="settings.printer_sync.col_delete_after">Delete after</div>
               </div>
               <div class="sync-row">
-                <div class="sync-what">Logs</div>
+                <div class="sync-what" data-i18n="settings.printer_sync.logs">Logs</div>
                 <div class="sync-dest">
-                  <input class="field" id="setLogsFolder" placeholder="e.g. C:/Users/you/snapcon-logs" style="flex:1" aria-label="Logs folder" />
-                  <button class="btn ghost" id="browseLogsBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                  <input class="field" id="setLogsFolder" data-i18n-placeholder="settings.printer_sync.logs_folder_placeholder" placeholder="e.g. C:/Users/you/snapcon-logs" style="flex:1" data-i18n-aria-label="settings.printer_sync.logs_folder_aria" aria-label="Logs folder" />
+                  <button class="btn ghost" id="browseLogsBtn" data-i18n="common.browse" style="flex:none;white-space:nowrap">Browse…</button>
                 </div>
-                <input class="field" id="setLogsRetentionDays" type="number" min="1" step="1" placeholder="Never" aria-label="Delete Logs from printer after sync, older than, in days" />
+                <input class="field" id="setLogsRetentionDays" type="number" min="1" step="1" data-i18n-placeholder="settings.printer_sync.retention_placeholder" placeholder="Never" data-i18n-aria-label="settings.printer_sync.logs_retention_aria" aria-label="Delete Logs from printer after sync, older than, in days" />
               </div>
               <div class="sync-row">
-                <div class="sync-what">Camera<div class="sync-what-sub">Snapshots and timelapse</div></div>
+                <div class="sync-what"><span data-i18n="settings.printer_sync.camera">Camera</span><div class="sync-what-sub" data-i18n="settings.printer_sync.camera_sub">Snapshots and timelapse</div></div>
                 <div class="sync-dest">
-                  <input class="field" id="setCameraFolder" placeholder="e.g. C:/Users/you/snapcon-camera" style="flex:1" aria-label="Camera folder" />
-                  <button class="btn ghost" id="browseCameraBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                  <input class="field" id="setCameraFolder" data-i18n-placeholder="settings.printer_sync.camera_folder_placeholder" placeholder="e.g. C:/Users/you/snapcon-camera" style="flex:1" data-i18n-aria-label="settings.printer_sync.camera_folder_aria" aria-label="Camera folder" />
+                  <button class="btn ghost" id="browseCameraBtn" data-i18n="common.browse" style="flex:none;white-space:nowrap">Browse…</button>
                 </div>
-                <input class="field" id="setCameraRetentionDays" type="number" min="1" step="1" placeholder="Never" aria-label="Delete Camera files from printer after sync, older than, in days" />
+                <input class="field" id="setCameraRetentionDays" type="number" min="1" step="1" data-i18n-placeholder="settings.printer_sync.retention_placeholder" placeholder="Never" data-i18n-aria-label="settings.printer_sync.camera_retention_aria" aria-label="Delete Camera files from printer after sync, older than, in days" />
               </div>
               <div class="sync-row">
-                <div class="sync-what">G-code archive<div class="sync-what-sub">The printer's own storage, not the folder above</div></div>
+                <div class="sync-what"><span data-i18n="settings.printer_sync.gcode_archive">G-code archive</span><div class="sync-what-sub" data-i18n="settings.printer_sync.gcode_archive_sub">The printer's own storage, not the folder above</div></div>
                 <div class="sync-dest">
-                  <input class="field" id="setGcodeSyncFolder" placeholder="e.g. C:/Users/you/snapcon-gcode-archive" style="flex:1" aria-label="G-code archive folder" />
-                  <button class="btn ghost" id="browseGcodeSyncBtn" style="flex:none;white-space:nowrap">Browse…</button>
+                  <input class="field" id="setGcodeSyncFolder" data-i18n-placeholder="settings.printer_sync.gcode_archive_folder_placeholder" placeholder="e.g. C:/Users/you/snapcon-gcode-archive" style="flex:1" data-i18n-aria-label="settings.printer_sync.gcode_archive_folder_aria" aria-label="G-code archive folder" />
+                  <button class="btn ghost" id="browseGcodeSyncBtn" data-i18n="common.browse" style="flex:none;white-space:nowrap">Browse…</button>
                 </div>
-                <input class="field" id="setGcodeSyncRetentionDays" type="number" min="1" step="1" placeholder="Never" aria-label="Delete G-code archive files from printer after sync, older than, in days" />
+                <input class="field" id="setGcodeSyncRetentionDays" type="number" min="1" step="1" data-i18n-placeholder="settings.printer_sync.retention_placeholder" placeholder="Never" data-i18n-aria-label="settings.printer_sync.gcode_archive_retention_aria" aria-label="Delete G-code archive files from printer after sync, older than, in days" />
               </div>
             </div>
-            <div class="settings-note">Delete after is in days, and only ever removes files already confirmed synced to the destination. Leave blank to never delete from the printer.</div>
+            <div class="settings-note" data-i18n="settings.printer_sync.note">Delete after is in days, and only ever removes files already confirmed synced to the destination. Leave blank to never delete from the printer.</div>
           </div>
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Fleet polling</div>
-          <div class="settings-section-desc">How often SnapCon checks every printer's status.</div>
+          <div class="settings-section-title" data-i18n="settings.general.fleet_polling_title">Fleet polling</div>
+          <div class="settings-section-desc" data-i18n="settings.general.fleet_polling_desc">How often SnapCon checks every printer's status.</div>
           <div class="settings-section-body">
             <div class="settings-field">
-              <label class="settings-label" for="setRefresh">Refresh interval, seconds</label>
+              <label class="settings-label" for="setRefresh" data-i18n="settings.general.refresh_interval_label">Refresh interval, seconds</label>
               <input class="field" id="setRefresh" type="number" min="1" max="60" placeholder="2" style="max-width:140px" />
               <div class="settings-help" id="refreshHelper"></div>
             </div>
@@ -206,12 +210,23 @@
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Costs</div>
-          <div class="settings-section-desc">Used to estimate filament and energy cost per print.</div>
+          <div class="settings-section-title" data-i18n="settings.view.system_default_locale_section_title">Language</div>
+          <div class="settings-section-body">
+            <div class="settings-field" style="max-width:260px">
+              <label class="settings-label" for="setLocale" data-i18n="settings.view.system_default_locale_label">Default language</label>
+              <select class="field" id="setLocale"></select>
+              <div class="settings-help" data-i18n="settings.view.system_default_locale_hint">used for anyone who hasn't picked their own interface language</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <div class="settings-section-title" data-i18n="settings.general.costs_title">Costs</div>
+          <div class="settings-section-desc" data-i18n="settings.general.costs_desc">Used to estimate filament and energy cost per print.</div>
           <div class="settings-section-body">
             <div class="settings-grid">
               <div class="settings-field">
-                <label class="settings-label" for="setCurrency">Currency</label>
+                <label class="settings-label" for="setCurrency" data-i18n="settings.general.currency_label">Currency</label>
                 <select class="field" id="setCurrency">
                   <option value="$">USD $</option>
                   <option value="€">EUR €</option>
@@ -223,41 +238,41 @@
                 </select>
               </div>
               <div class="settings-field">
-                <label class="settings-label" for="setFilamentCost">Filament, per spool</label>
+                <label class="settings-label" for="setFilamentCost" data-i18n="settings.general.filament_cost_label">Filament, per spool</label>
                 <input class="field" id="setFilamentCost" type="number" min="0" placeholder="20" />
-                <div class="settings-help"><span id="filamentCostCurrency">$</span> per spool</div>
+                <div class="settings-help"><span id="filamentCostCurrency">$</span> <span data-i18n="settings.general.per_spool_suffix">per spool</span></div>
               </div>
               <div class="settings-field">
-                <label class="settings-label" for="setElectricityRate">Electricity rate</label>
+                <label class="settings-label" for="setElectricityRate" data-i18n="settings.general.electricity_rate_label">Electricity rate</label>
                 <div style="display:flex;align-items:center;gap:8px">
                   <input class="field" id="setElectricityRate" type="number" min="0" step="0.001" placeholder="0.13" />
-                  <button class="btn ghost" id="elecSearch" title="Looks up your area's average residential electricity rate via the OpenEI utility-rate database and fills it in for you." style="padding:5px 10px;flex:none;display:flex;align-items:center;gap:4px">
+                  <button class="btn ghost" id="elecSearch" data-i18n-title="settings.general.elec_search_title" title="Looks up your area's average residential electricity rate via the OpenEI utility-rate database and fills it in for you." style="padding:5px 10px;flex:none;display:flex;align-items:center;gap:4px">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> ZIP
                   </button>
                 </div>
-                <div class="settings-help"><span id="elecRateCurrency">$</span> per kWh. ZIP fills this from OpenEI.</div>
+                <div class="settings-help"><span id="elecRateCurrency">$</span> <span data-i18n="settings.general.per_kwh_suffix">per kWh. ZIP fills this from OpenEI.</span></div>
               </div>
             </div>
           </div>
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title">Sending prints</div>
-          <div class="settings-section-desc">Color-to-toolhead assignment when you send a file to a printer.</div>
+          <div class="settings-section-title" data-i18n="settings.general.sending_prints_title">Sending prints</div>
+          <div class="settings-section-desc" data-i18n="settings.general.sending_prints_desc">Color-to-toolhead assignment when you send a file to a printer.</div>
           <div class="settings-section-body">
-            <label class="switch-row" for="setAllowMapping"><input type="checkbox" role="switch" id="setAllowMapping" class="switch-input"><span class="switch-text"><span class="switch-label">Head mapping</span><span class="switch-desc">Show color-to-head assignment UI when sending prints</span></span></label>
+            <label class="switch-row" for="setAllowMapping"><input type="checkbox" role="switch" id="setAllowMapping" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.head_mapping_label">Head mapping</span><span class="switch-desc" data-i18n="settings.general.head_mapping_desc">Show color-to-head assignment UI when sending prints</span></span></label>
             <div class="settings-nested" id="autoMatchNest">
-              <label class="switch-row" for="setSuggestMatching"><input type="checkbox" role="switch" id="setSuggestMatching" class="switch-input"><span class="switch-text"><span class="switch-label">Auto-match colors</span><span class="switch-desc">Suggest the closest head color; off uses T1→T1 order</span></span></label>
+              <label class="switch-row" for="setSuggestMatching"><input type="checkbox" role="switch" id="setSuggestMatching" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.auto_match_label">Auto-match colors</span><span class="switch-desc" data-i18n="settings.general.auto_match_desc">Suggest the closest head color; off uses T1→T1 order</span></span></label>
             </div>
           </div>
         </div>
 
         <div class="settings-section" id="dockerRestartRow" style="display:none">
-          <div class="settings-section-title">Application</div>
+          <div class="settings-section-title" data-i18n="maintenance.application_section_title">Application</div>
           <div class="settings-section-body">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <button class="btn ghost" id="dockerRestartBtn">Restart App</button>
-              <span class="settings-help">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
+              <button class="btn ghost" id="dockerRestartBtn" data-i18n="maintenance.docker_restart_button">Restart App</button>
+              <span class="settings-help" data-i18n="maintenance.docker_restart_help">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
               <span class="pstatus" aria-live="polite" id="dockerRestartStatus"></span>
             </div>
           </div>
@@ -267,8 +282,8 @@
           <span class="dirty-text"></span>
           <span class="pstatus" aria-live="polite" id="generalSaveStatus"></span>
           <div class="settings-dirty-actions">
-            <button class="btn ghost" id="generalDiscard">Discard</button>
-            <button class="btn primary" id="generalSaveBtn">Save</button>
+            <button class="btn ghost" id="generalDiscard" data-i18n="common.discard">Discard</button>
+            <button class="btn primary" id="generalSaveBtn" data-i18n="common.save">Save</button>
           </div>
         </div>
 
@@ -277,33 +292,38 @@
 
       <div class="set-panel" id="tab-prefs" style="display:none">
       <div class="setcard">
-        <label class="switch-row" for="setTNotation"><input type="checkbox" role="switch" id="setTNotation" class="switch-input"><span class="switch-text"><span class="switch-label">Use T0/T1/T2/T3 notation</span><span class="switch-desc">default: 1–4</span></span></label>
+        <label class="fl" for="setUserLocale" data-i18n="settings.view.language_label">My interface language</label>
+        <select class="field" id="setUserLocale" style="max-width:260px"></select>
+        <div class="settings-help" data-i18n="settings.view.language_help" style="margin-top:4px;max-width:420px">Applies to your account only. Drop a new locale JSON file into the locales folder and press Refresh in the language editor to add a language without restarting.</div>
+        <button class="btn ghost" id="editLanguagesBtn" data-i18n="settings.view.edit_languages" style="margin-top:8px;align-self:flex-start">Edit languages</button>
 
-        <label class="fl" for="setAltDisplay" style="margin-top:14px">Alternate Display <span class="hint">what the header's view button switches to and from Regular view</span></label>
+        <label class="switch-row" for="setTNotation" style="margin-top:18px"><input type="checkbox" role="switch" id="setTNotation" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.view.t_notation_label">Use T0/T1/T2/T3 notation</span><span class="switch-desc" data-i18n="settings.view.t_notation_desc">default: 1–4</span></span></label>
+
+        <label class="fl" for="setAltDisplay" style="margin-top:14px"><span data-i18n="settings.view.alt_display_label">Alternate Display</span> <span class="hint" data-i18n="settings.view.alt_display_hint">what the header's view button switches to and from Regular view</span></label>
         <select class="field" id="setAltDisplay" style="max-width:220px">
-          <option value="all">All (cycle through every view)</option>
-          <option value="compact">Compact View</option>
-          <option value="camera">Camera View</option>
-          <option value="list">List View</option>
-          <option value="printfarm">Print Farm</option>
+          <option value="all" data-i18n="settings.view.view_option_all">All (cycle through every view)</option>
+          <option value="compact" data-i18n="settings.view.view_option_compact">Compact View</option>
+          <option value="camera" data-i18n="settings.view.view_option_camera">Camera View</option>
+          <option value="list" data-i18n="settings.view.view_option_list">List View</option>
+          <option value="printfarm" data-i18n="settings.view.view_option_printfarm">Print Farm</option>
         </select>
 
-        <label class="fl" for="setDefaultView" style="margin-top:14px">Default View to Launch <span class="hint">which view the app opens to on load</span></label>
+        <label class="fl" for="setDefaultView" style="margin-top:14px"><span data-i18n="settings.view.default_view_label">Default View to Launch</span> <span class="hint" data-i18n="settings.view.default_view_hint">which view the app opens to on load</span></label>
         <select class="field" id="setDefaultView" style="max-width:220px">
-          <option value="regular">Full View</option>
-          <option value="compact">Compact View</option>
-          <option value="camera">Camera View</option>
-          <option value="list">List View</option>
-          <option value="printfarm">Print Farm</option>
+          <option value="regular" data-i18n="settings.view.view_option_full">Full View</option>
+          <option value="compact" data-i18n="settings.view.view_option_compact">Compact View</option>
+          <option value="camera" data-i18n="settings.view.view_option_camera">Camera View</option>
+          <option value="list" data-i18n="settings.view.view_option_list">List View</option>
+          <option value="printfarm" data-i18n="settings.view.view_option_printfarm">Print Farm</option>
         </select>
 
-        <label class="fl" for="setSiteName" style="margin-top:14px">Site Name <span class="hint">shown in the topbar next to the SnapCon logo — leave blank to show nothing</span></label>
-        <input class="field" id="setSiteName" placeholder="e.g. Shop Floor 2" maxlength="60" style="max-width:220px" />
+        <label class="fl" for="setSiteName" style="margin-top:14px"><span data-i18n="settings.view.site_name_label">Site Name</span> <span class="hint" data-i18n="settings.view.site_name_hint">shown in the topbar next to the SnapCon logo — leave blank to show nothing</span></label>
+        <input class="field" id="setSiteName" data-i18n-placeholder="settings.view.site_name_placeholder" placeholder="e.g. Shop Floor 2" maxlength="60" style="max-width:220px" />
 
-        <label class="fl" for="setCameraRefresh" style="margin-top:14px">Camera View refresh interval <span class="hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
+        <label class="fl" for="setCameraRefresh" style="margin-top:14px"><span data-i18n="settings.view.camera_refresh_label">Camera View refresh interval</span> <span class="hint" data-i18n="settings.view.camera_refresh_hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
         <input class="field" id="setCameraRefresh" type="number" min="3" max="60" placeholder="6" style="max-width:100px" />
 
-        <label class="switch-row" for="setCameraStagger" style="margin-top:14px"><input type="checkbox" role="switch" id="setCameraStagger" class="switch-input" checked><span class="switch-text"><span class="switch-label">Stagger camera refresh across printers</span><span class="switch-desc">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></span></label>
+        <label class="switch-row" for="setCameraStagger" style="margin-top:14px"><input type="checkbox" role="switch" id="setCameraStagger" class="switch-input" checked><span class="switch-text"><span class="switch-label" data-i18n="settings.view.camera_stagger_label">Stagger camera refresh across printers</span><span class="switch-desc" data-i18n="settings.view.camera_stagger_desc">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></span></label>
       </div>
       </div>
 
@@ -311,31 +331,31 @@
       <div class="settings-container">
 
         <div class="settings-section">
-          <label class="switch-row" for="ntfEnabled"><input type="checkbox" role="switch" id="ntfEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" style="font-size:16px;font-weight:500">Enable Notifications</span></span></label>
-          <div class="settings-section-desc">Push alerts about your fleet, sent by a background watcher independent of whether the dashboard is open.</div>
+          <label class="switch-row" for="ntfEnabled"><input type="checkbox" role="switch" id="ntfEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.enable_label" style="font-size:16px;font-weight:500">Enable Notifications</span></span></label>
+          <div class="settings-section-desc" data-i18n="settings.notif.enable_desc">Push alerts about your fleet, sent by a background watcher independent of whether the dashboard is open.</div>
         </div>
 
         <div class="ntf-body" id="ntfBody">
 
           <div class="settings-section">
-            <label class="switch-row" for="ntfImage"><input type="checkbox" role="switch" id="ntfImage" class="switch-input"><span class="switch-text"><span class="switch-label">Include camera image</span><span class="switch-desc">Attach a live snapshot when the printer has one</span></span></label>
+            <label class="switch-row" for="ntfImage"><input type="checkbox" role="switch" id="ntfImage" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.include_image_label">Include camera image</span><span class="switch-desc" data-i18n="settings.notif.include_image_desc">Attach a live snapshot when the printer has one</span></span></label>
           </div>
 
           <div class="settings-section">
-            <div class="settings-section-title">Events</div>
-            <div class="settings-section-desc">Which print state changes send a notification.</div>
+            <div class="settings-section-title" data-i18n="settings.notif.events_title">Events</div>
+            <div class="settings-section-desc" data-i18n="settings.notif.events_desc">Which print state changes send a notification.</div>
             <div class="settings-section-body">
               <div class="settings-grid">
-                <label class="switch-row" for="ntfEvStart"><input type="checkbox" role="switch" id="ntfEvStart" class="switch-input"><span class="switch-text"><span class="switch-label">Print started</span></span></label>
-                <label class="switch-row" for="ntfEvPause"><input type="checkbox" role="switch" id="ntfEvPause" class="switch-input"><span class="switch-text"><span class="switch-label">Print paused</span></span></label>
-                <label class="switch-row" for="ntfEvError"><input type="checkbox" role="switch" id="ntfEvError" class="switch-input"><span class="switch-text"><span class="switch-label">Error or failure</span></span></label>
-                <label class="switch-row" for="ntfEvComplete"><input type="checkbox" role="switch" id="ntfEvComplete" class="switch-input"><span class="switch-text"><span class="switch-label">Print finished</span></span></label>
+                <label class="switch-row" for="ntfEvStart"><input type="checkbox" role="switch" id="ntfEvStart" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.event_start">Print started</span></span></label>
+                <label class="switch-row" for="ntfEvPause"><input type="checkbox" role="switch" id="ntfEvPause" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.event_pause">Print paused</span></span></label>
+                <label class="switch-row" for="ntfEvError"><input type="checkbox" role="switch" id="ntfEvError" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.event_error">Error or failure</span></span></label>
+                <label class="switch-row" for="ntfEvComplete"><input type="checkbox" role="switch" id="ntfEvComplete" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.event_complete">Print finished</span></span></label>
               </div>
             </div>
           </div>
 
           <div class="settings-section">
-            <label class="switch-row" for="ntfMilestones"><input type="checkbox" role="switch" id="ntfMilestones" class="switch-input"><span class="switch-text"><span class="switch-label">Milestone updates</span><span class="switch-desc">Notify when a print crosses chosen progress percentages</span></span></label>
+            <label class="switch-row" for="ntfMilestones"><input type="checkbox" role="switch" id="ntfMilestones" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.milestones_label">Milestone updates</span><span class="switch-desc" data-i18n="settings.notif.milestones_desc">Notify when a print crosses chosen progress percentages</span></span></label>
             <div class="settings-nested" id="ntfMilestoneNest">
               <div class="ntf-chip-row" id="ntfMilestoneChips">
                 <button type="button" class="btn-chip" data-pct="10">10%</button>
@@ -349,24 +369,24 @@
           </div>
 
           <div class="settings-section">
-            <div class="settings-section-title">Providers</div>
-            <div class="settings-section-desc">Either, both, or neither can be on at once.</div>
+            <div class="settings-section-title" data-i18n="settings.notif.providers_title">Providers</div>
+            <div class="settings-section-desc" data-i18n="settings.notif.providers_desc">Either, both, or neither can be on at once.</div>
             <div class="settings-section-body">
 
               <div class="ntf-provider-card">
                 <label class="switch-row" for="ntfyEnabled"><input type="checkbox" role="switch" id="ntfyEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">ntfy.sh</span></span></label>
                 <div class="ntf-provider-body" id="ntfyBody">
                   <div class="settings-field">
-                    <label class="settings-label" for="ntfTopic">Topic</label>
+                    <label class="settings-label" for="ntfTopic" data-i18n="settings.notif.topic_label">Topic</label>
                     <div style="display:flex;gap:8px">
                       <input class="field" id="ntfTopic" placeholder="my-printfarm" style="flex:1">
-                      <button class="btn ghost" type="button" id="ntfTopicCopy" style="flex:none;white-space:nowrap">Copy</button>
-                      <button class="btn ghost" type="button" id="ntfGenTopic" style="flex:none;white-space:nowrap">Regenerate</button>
+                      <button class="btn ghost" type="button" id="ntfTopicCopy" data-i18n="common.copy" style="flex:none;white-space:nowrap">Copy</button>
+                      <button class="btn ghost" type="button" id="ntfGenTopic" data-i18n="settings.notif.regenerate_button" style="flex:none;white-space:nowrap">Regenerate</button>
                     </div>
-                    <div class="settings-help warn">The topic acts as a shared secret — anyone who knows it receives your notifications. Regenerating stops delivery to anyone already subscribed to the old one.</div>
+                    <div class="settings-help warn" data-i18n="settings.notif.topic_warn">The topic acts as a shared secret — anyone who knows it receives your notifications. Regenerating stops delivery to anyone already subscribed to the old one.</div>
                   </div>
                   <div class="ntf-provider-footer">
-                    <button class="btn ghost" type="button" id="ntfTestNtfy">Send test to ntfy.sh</button>
+                    <button class="btn ghost" type="button" id="ntfTestNtfy" data-i18n="settings.notif.send_test_ntfy">Send test to ntfy.sh</button>
                     <span class="pstatus" aria-live="polite" id="ntfTestNtfyStatus"></span>
                   </div>
                 </div>
@@ -377,24 +397,24 @@
                 <div class="ntf-provider-body" id="telegramBody">
                   <div class="settings-grid">
                     <div class="settings-field">
-                      <label class="settings-label">Bot token</label>
+                      <label class="settings-label" data-i18n="settings.notif.bot_token_label">Bot token</label>
                       <div class="secret-field" id="ntfBotTokenField" data-cleared="0">
                         <input type="password" class="field secret-input" id="ntfBotToken" placeholder="123456:ABC-token-from-BotFather" autocomplete="off">
                         <div class="secret-chip" style="display:none">
-                          <span class="status-badge" style="--status-color:var(--ok)">Configured</span>
-                          <button type="button" class="btn ghost secret-replace">Replace</button>
-                          <button type="button" class="btn ghost secret-clear">Clear</button>
+                          <span class="status-badge" style="--status-color:var(--ok)" data-i18n="common.secret_configured">Configured</span>
+                          <button type="button" class="btn ghost secret-replace" data-i18n="common.secret_replace">Replace</button>
+                          <button type="button" class="btn ghost secret-clear" data-i18n="common.secret_clear">Clear</button>
                         </div>
                       </div>
                     </div>
                     <div class="settings-field">
-                      <label class="settings-label" for="ntfChatId">Chat ID</label>
+                      <label class="settings-label" for="ntfChatId" data-i18n="settings.notif.chat_id_label">Chat ID</label>
                       <input class="field" id="ntfChatId" placeholder="123456789">
-                      <div class="settings-help">A leading minus means a group chat; a plain positive number is a direct message.</div>
+                      <div class="settings-help" data-i18n="settings.notif.chat_id_help">A leading minus means a group chat; a plain positive number is a direct message.</div>
                     </div>
                   </div>
                   <div class="ntf-provider-footer">
-                    <button class="btn ghost" type="button" id="ntfTestTelegram">Send test to Telegram</button>
+                    <button class="btn ghost" type="button" id="ntfTestTelegram" data-i18n="settings.notif.send_test_telegram">Send test to Telegram</button>
                     <span class="pstatus" aria-live="polite" id="ntfTestTelegramStatus"></span>
                   </div>
                 </div>
@@ -409,8 +429,8 @@
           <span class="dirty-text"></span>
           <span class="pstatus" aria-live="polite" id="notifSaveStatus"></span>
           <div class="settings-dirty-actions">
-            <button class="btn ghost" id="notifDiscard">Discard</button>
-            <button class="btn primary" id="notifSaveBtn">Save</button>
+            <button class="btn ghost" id="notifDiscard" data-i18n="common.discard">Discard</button>
+            <button class="btn primary" id="notifSaveBtn" data-i18n="common.save">Save</button>
           </div>
         </div>
 
@@ -419,11 +439,11 @@
 
       <div class="set-panel" id="tab-printers" style="display:none">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-        <input class="field" id="printerSearch" placeholder="Search printers…" aria-label="Search printers" style="max-width:264px;flex:1;min-width:160px" />
+        <input class="field" id="printerSearch" data-i18n-placeholder="settings.printers.toolbar_search_placeholder" placeholder="Search printers…" data-i18n-aria-label="settings.printers.toolbar_search_aria" aria-label="Search printers" style="max-width:264px;flex:1;min-width:160px" />
         <button class="btn ghost" id="collapseAll" style="white-space:nowrap;flex:none">Collapse All</button>
-        <button class="btn ghost" id="addPrinter" style="white-space:nowrap;flex:none">+ Add</button>
+        <button class="btn ghost" id="addPrinter" data-i18n="settings.printers.add_button" style="white-space:nowrap;flex:none">+ Add</button>
         <button class="btn ghost" id="discover" style="white-space:nowrap;flex:none;display:flex;align-items:center;gap:6px">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12h-8a1 1 0 1 0 -1 1v8a9 9 0 0 0 9 -9" /><path d="M16 9a5 5 0 1 0 -7 7" /><path d="M20.486 9a9 9 0 1 0 -11.482 11.495" /></svg> Discover
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12h-8a1 1 0 1 0 -1 1v8a9 9 0 0 0 9 -9" /><path d="M16 9a5 5 0 1 0 -7 7" /><path d="M20.486 9a9 9 0 1 0 -11.482 11.495" /></svg> <span data-i18n="settings.printers.discover_button">Discover</span>
         </button>
       </div>
       <div id="setPrinters"></div>
@@ -436,10 +456,10 @@
       <div class="set-panel" id="tab-firmware" style="display:none">
         <div class="setcard">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <button class="btn ghost" id="fwGet">Get Firmware</button>
-            <button class="btn ghost" id="fwSelect">Select Firmware</button>
-            <button class="btn primary" id="fwDeploy">Deploy Firmware</button>
-            <span class="hint">reads idle printers only</span>
+            <button class="btn ghost" id="fwGet" data-i18n="settings.firmware.get_button">Get Firmware</button>
+            <button class="btn ghost" id="fwSelect" data-i18n="settings.firmware.select_button">Select Firmware</button>
+            <button class="btn primary" id="fwDeploy" data-i18n="settings.firmware.deploy_button">Deploy Firmware</button>
+            <span class="hint" data-i18n="settings.firmware.idle_only_hint">reads idle printers only</span>
             <span class="pstatus" aria-live="polite" id="fwStatus"></span>
           </div>
           <div id="fwResults" style="margin-top:14px"></div>
@@ -448,32 +468,32 @@
 
       <div class="set-panel" id="tab-users" style="display:none">
         <div class="setcard">
-          <label class="switch-row" for="setUsersEnabled"><input type="checkbox" role="switch" id="setUsersEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">Enable user access management</span><span class="switch-desc">Require login to use SnapCon; gates everything else on this tab</span></span></label>
+          <label class="switch-row" for="setUsersEnabled"><input type="checkbox" role="switch" id="setUsersEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.users.enable_label">Enable user access management</span><span class="switch-desc" data-i18n="settings.users.enable_desc">Require login to use SnapCon; gates everything else on this tab</span></span></label>
           <div class="bootstrap-admin" id="bootstrapAdmin" style="display:none">
-            <div class="hint" style="margin-bottom:8px">Create the first Admin account — it must use a password, not an emailed code.</div>
+            <div class="hint" style="margin-bottom:8px" data-i18n="settings.users.bootstrap_hint">Create the first Admin account — it must use a password, not an emailed code.</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-              <input class="field" id="bootFirst" placeholder="First name (optional)" style="max-width:150px">
-              <input class="field" id="bootLast" placeholder="Last name (optional)" style="max-width:150px">
-              <input class="field" id="bootLogin" placeholder="Login name" style="max-width:150px" autocomplete="off">
-              <input class="field" id="bootPassword" type="password" placeholder="Password" style="max-width:150px" autocomplete="new-password">
+              <input class="field" id="bootFirst" placeholder="First name (optional)" data-i18n-placeholder="settings.users.bootstrap_first_placeholder" style="max-width:150px">
+              <input class="field" id="bootLast" placeholder="Last name (optional)" data-i18n-placeholder="settings.users.bootstrap_last_placeholder" style="max-width:150px">
+              <input class="field" id="bootLogin" placeholder="Login name" data-i18n-placeholder="settings.users.login_label" style="max-width:150px" autocomplete="off">
+              <input class="field" id="bootPassword" type="password" placeholder="Password" data-i18n-placeholder="settings.users.password_label" style="max-width:150px" autocomplete="new-password">
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
-              <button class="btn primary" id="bootSubmit">Create Admin</button>
+              <button class="btn primary" id="bootSubmit" data-i18n="settings.users.bootstrap_submit">Create Admin</button>
               <span class="pstatus" aria-live="polite" id="bootStatus"></span>
             </div>
           </div>
         </div>
         <div class="setcard" style="margin-top:10px">
-          <div class="fl" style="margin-bottom:8px">OTP Configuration</div>
+          <div class="fl" style="margin-bottom:8px" data-i18n="settings.users.otp_config_title">OTP Configuration</div>
           <label style="display:flex;align-items:center;gap:6px">
             <input type="radio" name="otpService" id="otpSvcResend" value="resend" checked> Resend
           </label>
           <div id="otpResendBody" style="margin:8px 0 12px 24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span class="pi-lbl">Resend API Key</span>
+              <span class="pi-lbl" data-i18n="settings.users.resend_api_key_label">Resend API Key</span>
               <input class="field" id="setResendKey" type="password" placeholder="re_..." style="max-width:280px" autocomplete="off">
             </div>
-            <label class="fl" for="setResendFrom" style="margin-top:10px">From address</label>
+            <label class="fl" for="setResendFrom" style="margin-top:10px" data-i18n="settings.users.from_address_label">From address</label>
             <input class="field" id="setResendFrom" placeholder="snapcon@yourdomain.com" style="max-width:280px">
           </div>
           <label style="display:flex;align-items:center;gap:6px">
@@ -481,9 +501,9 @@
           </label>
           <div id="otpNtfyBody" style="margin:8px 0 12px 24px;display:none">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span class="pi-lbl">Topic</span>
+              <span class="pi-lbl" data-i18n="settings.notif.topic_label">Topic</span>
               <input class="field" id="otpNtfyTopic" placeholder="my-printfarm-otp" style="max-width:220px">
-              <button class="btn ghost" type="button" id="otpNtfyGenTopic" style="flex:none;white-space:nowrap">Generate</button>
+              <button class="btn ghost" type="button" id="otpNtfyGenTopic" data-i18n="settings.notif.regenerate_button" style="flex:none;white-space:nowrap">Generate</button>
             </div>
           </div>
           <label style="display:flex;align-items:center;gap:6px">
@@ -492,21 +512,21 @@
           <div id="otpTelegramBody" style="margin:8px 0 12px 24px;display:none">
             <div class="settings-help" id="otpTelegramBotHint" style="margin-bottom:8px">Uses the Telegram bot configured on the Notifications tab.</div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span class="pi-lbl">Chat ID</span>
+              <span class="pi-lbl" data-i18n="settings.notif.chat_id_label">Chat ID</span>
               <input class="field" id="otpTelegramChatId" placeholder="123456789" style="max-width:220px">
             </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
-            <button class="btn ghost" type="button" id="otpTest">Test OTP</button>
+            <button class="btn ghost" type="button" id="otpTest" data-i18n="settings.users.otp_test_button">Test OTP</button>
             <span class="pstatus" aria-live="polite" id="otpTestStatus"></span>
           </div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;margin:14px 0 10px">
-          <input class="field" id="userSearch" placeholder="Search users…" aria-label="Search users" style="max-width:220px" />
+          <input class="field" id="userSearch" placeholder="Search users…" data-i18n-placeholder="settings.users.search_placeholder" aria-label="Search users" data-i18n-aria-label="settings.users.search_placeholder" style="max-width:220px" />
         </div>
         <div id="setUsers"></div>
         <div class="row" style="margin-top:8px">
-          <button class="btn ghost" id="addUser">+ Add User</button>
+          <button class="btn ghost" id="addUser" data-i18n="settings.users.add_button">+ Add User</button>
         </div>
       </div>
 
@@ -516,62 +536,62 @@
         <div class="settings-section">
           <label class="switch-row" for="raEnabled" id="raSwitchRow">
             <input type="checkbox" role="switch" id="raEnabled" class="switch-input">
-            <span class="switch-text"><span class="switch-label" style="font-size:16px;font-weight:500">Enable Remote Access</span>
-            <span class="switch-desc" id="raSwitchDesc">Get a public HTTPS address for this SnapCon, tunnelled through Cloudflare.</span></span>
+            <span class="switch-text"><span class="switch-label" data-i18n="settings.remote_access.enable_label" style="font-size:16px;font-weight:500">Enable Remote Access</span>
+            <span class="switch-desc" id="raSwitchDesc" data-i18n="settings.remote_access.enable_desc">Get a public HTTPS address for this SnapCon, tunnelled through Cloudflare.</span></span>
           </label>
-          <div id="raInsecureWarning" class="settings-warning" style="display:none;margin-top:12px">⚠ The tunnel token is stored in an INSECURE local file fallback (no OS credential store was available). This is not real secure storage.</div>
+          <div id="raInsecureWarning" class="settings-warning" style="display:none;margin-top:12px" data-i18n="settings.remote_access.insecure_warning">⚠ The tunnel token is stored in an INSECURE local file fallback (no OS credential store was available). This is not real secure storage.</div>
         </div>
 
         <div class="settings-section" id="raGateSection" style="display:none">
           <div class="settings-warning">
-            <div class="settings-warning-title">Turn on User Access Management first</div>
-            <div>A public address with no login lets anyone who has the link start prints and heat beds. Turn on User Access Management and create at least one account before enabling Remote Access.</div>
-            <button class="btn ghost" id="raGoToUsersBtn" style="margin-top:10px">Go to Users</button>
+            <div class="settings-warning-title" data-i18n="settings.remote_access.gate_title">Turn on User Access Management first</div>
+            <div data-i18n="settings.remote_access.gate_body">A public address with no login lets anyone who has the link start prints and heat beds. Turn on User Access Management and create at least one account before enabling Remote Access.</div>
+            <button class="btn ghost" id="raGoToUsersBtn" data-i18n="settings.remote_access.go_to_users" style="margin-top:10px">Go to Users</button>
           </div>
         </div>
 
         <div class="settings-section" id="raOffSection" style="display:none">
-          <div class="settings-section-desc" id="raOffLine">Off. No tunnel running, public address not reachable.</div>
+          <div class="settings-section-desc" id="raOffLine" data-i18n="settings.remote_access.off_line">Off. No tunnel running, public address not reachable.</div>
           <div class="settings-help" id="raLastConnLine" style="margin-top:6px">Last connected: —</div>
         </div>
 
         <div class="settings-section" id="raOnSection" style="display:none">
           <div id="raRegisterBlock" style="display:none">
-            <div class="settings-label">Verification needed</div>
-            <div class="settings-help">One-time step: open this link and complete the verification challenge in your browser to finish setting up this device.</div>
-            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener" style="margin-top:10px;align-self:flex-start">Open Verification Page</a>
+            <div class="settings-label" data-i18n="settings.remote_access.verification_needed_label">Verification needed</div>
+            <div class="settings-help" data-i18n="settings.remote_access.verification_needed_desc">One-time step: open this link and complete the verification challenge in your browser to finish setting up this device.</div>
+            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener" data-i18n="settings.remote_access.open_verification_page" style="margin-top:10px;align-self:flex-start">Open Verification Page</a>
           </div>
 
           <div id="raConnectedBlock" class="settings-section-body">
             <div class="settings-field">
-              <label class="settings-label">Public address</label>
+              <label class="settings-label" data-i18n="settings.remote_access.public_address_label">Public address</label>
               <div class="ra-url-row">
                 <code id="raPublicUrl" class="ra-url-field">—</code>
-                <button class="btn ghost" id="raCopyBtn">Copy</button>
-                <a class="btn ghost" id="raOpenBtn" href="#" target="_blank" rel="noopener">Open</a>
+                <button class="btn ghost" id="raCopyBtn" data-i18n="common.copy">Copy</button>
+                <a class="btn ghost" id="raOpenBtn" href="#" target="_blank" rel="noopener" data-i18n="settings.remote_access.open_button">Open</a>
               </div>
             </div>
 
             <div class="settings-field">
-              <label class="settings-label">Connection</label>
+              <label class="settings-label" data-i18n="settings.remote_access.connection_label">Connection</label>
               <div class="ra-chain" id="raChain"></div>
             </div>
           </div>
         </div>
 
         <div class="settings-section" id="raAccountsSection" style="display:none">
-          <div class="settings-section-title" style="font-size:13px">Who can sign in</div>
-          <div class="settings-section-desc">Anyone signing in through the public address uses one of these accounts.</div>
+          <div class="settings-section-title" data-i18n="settings.remote_access.who_can_sign_in_title" style="font-size:13px">Who can sign in</div>
+          <div class="settings-section-desc" data-i18n="settings.remote_access.who_can_sign_in_desc">Anyone signing in through the public address uses one of these accounts.</div>
           <div id="raAccountList" style="margin-top:10px;display:flex;flex-direction:column;gap:6px"></div>
-          <button class="btn ghost" id="raManageUsersBtn" style="margin-top:10px;align-self:flex-start">Manage Users</button>
+          <button class="btn ghost" id="raManageUsersBtn" data-i18n="settings.remote_access.manage_users_button" style="margin-top:10px;align-self:flex-start">Manage Users</button>
         </div>
 
         <div class="settings-section">
-          <div class="settings-section-title" style="font-size:13px">Diagnostics</div>
+          <div class="settings-section-title" data-i18n="settings.remote_access.diagnostics_title" style="font-size:13px">Diagnostics</div>
           <div class="settings-section-body" style="flex-direction:row;gap:8px;flex-wrap:wrap;align-items:center">
-            <button class="btn ghost" id="raRestartBtn" disabled>Restart tunnel</button>
-            <button class="btn ghost" id="raLogBtn" disabled>View tunnel log</button>
-            <button class="btn ghost danger" id="raRemoveBtn" style="margin-left:auto" disabled>Remove Remote Access</button>
+            <button class="btn ghost" id="raRestartBtn" data-i18n="settings.remote_access.restart_button" disabled>Restart tunnel</button>
+            <button class="btn ghost" id="raLogBtn" data-i18n="settings.remote_access.view_log_button" disabled>View tunnel log</button>
+            <button class="btn ghost danger" id="raRemoveBtn" data-i18n="settings.remote_access.remove_button" style="margin-left:auto" disabled>Remove Remote Access</button>
           </div>
           <pre id="raLogView" class="ra-log" style="display:none"></pre>
         </div>
@@ -583,34 +603,34 @@
       <div class="set-panel" id="tab-logs" style="display:none">
       <div class="setcard">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input class="field" id="logSearch" placeholder="Search…" aria-label="Search audit log" style="max-width:200px;flex:1;min-width:140px">
+          <input class="field" id="logSearch" data-i18n-placeholder="settings.logs.search_placeholder" placeholder="Search…" data-i18n-aria-label="settings.logs.search_aria" aria-label="Search audit log" style="max-width:200px;flex:1;min-width:140px">
           <select class="field" id="logCategory" style="max-width:150px">
-            <option value="">All categories</option>
-            <option value="auth">Sign-ins</option>
-            <option value="job">Jobs</option>
-            <option value="admin">Admin</option>
+            <option value="" data-i18n="settings.logs.category_all">All categories</option>
+            <option value="auth" data-i18n="settings.logs.category_auth">Sign-ins</option>
+            <option value="job" data-i18n="settings.logs.category_job">Jobs</option>
+            <option value="admin" data-i18n="settings.logs.category_admin">Admin</option>
           </select>
-          <input class="field" id="logFrom" type="date" title="From" style="max-width:150px">
-          <input class="field" id="logTo" type="date" title="To" style="max-width:150px">
-          <button class="btn ghost" id="logFilterBtn">Filter</button>
+          <input class="field" id="logFrom" type="date" data-i18n-title="settings.logs.from_title" title="From" style="max-width:150px">
+          <input class="field" id="logTo" type="date" data-i18n-title="settings.logs.to_title" title="To" style="max-width:150px">
+          <button class="btn ghost" id="logFilterBtn" data-i18n="settings.logs.filter_button">Filter</button>
           <span class="pstatus" aria-live="polite" id="logStatus"></span>
         </div>
         <div class="maint-scroll" id="logTableWrap" style="max-height:420px">
           <table class="maint-table" id="logTable">
-            <thead><tr><th>Time</th><th>Event</th><th>User</th><th>Printer</th><th>Detail</th></tr></thead>
+            <thead><tr><th data-i18n="settings.logs.col_time">Time</th><th data-i18n="settings.logs.col_event">Event</th><th data-i18n="settings.logs.col_user">User</th><th data-i18n="settings.logs.col_printer">Printer</th><th data-i18n="settings.logs.col_detail">Detail</th></tr></thead>
             <tbody id="logTableBody"></tbody>
           </table>
         </div>
         <div style="margin-top:10px">
-          <button class="btn ghost" id="logLoadMore" style="display:none">Load more</button>
+          <button class="btn ghost" id="logLoadMore" style="display:none" data-i18n="settings.logs.load_more">Load more</button>
         </div>
       </div>
       <div class="setcard" style="margin-top:10px">
         <div class="settings-field">
-          <label class="settings-label" for="setAuditRetention">Keep logs for, days</label>
+          <label class="settings-label" for="setAuditRetention" data-i18n="settings.logs.retention_label">Keep logs for, days</label>
           <div style="display:flex;gap:8px;align-items:center">
-            <input class="field" id="setAuditRetention" type="number" min="1" placeholder="90" style="max-width:120px">
-            <button class="btn ghost" id="saveAuditRetention">Save</button>
+            <input class="field" id="setAuditRetention" type="number" min="1" data-i18n-placeholder="settings.logs.retention_placeholder" placeholder="90" style="max-width:120px">
+            <button class="btn ghost" id="saveAuditRetention" data-i18n="common.save">Save</button>
             <span class="pstatus" aria-live="polite" id="auditRetentionStatus"></span>
           </div>
         </div>
@@ -619,12 +639,12 @@
 
       <div class="set-panel" id="tab-queue" style="display:none">
       <div class="setcard">
-        <label class="switch-row" for="setQueueEnabled"><input type="checkbox" role="switch" id="setQueueEnabled" class="switch-input"><span class="switch-text"><span class="switch-label">Enable Queue Management</span><span class="switch-desc">Ordered per-printer queues, with a defined way to handle the gap between prints</span></span></label>
+        <label class="switch-row" for="setQueueEnabled"><input type="checkbox" role="switch" id="setQueueEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.queue.enable_label">Enable Queue Management</span><span class="switch-desc" data-i18n="settings.queue.enable_desc">Ordered per-printer queues, with a defined way to handle the gap between prints</span></span></label>
         <div id="queueModeRow" style="margin-top:12px;display:none">
-          <label class="fl" for="setQueueMode">Mode</label>
+          <label class="fl" for="setQueueMode" data-i18n="settings.queue.mode_label">Mode</label>
           <select class="field" id="setQueueMode" style="max-width:240px">
-            <option value="per-printer">Per-Printer Queue</option>
-            <option value="shared-queue" disabled>Shared Queue (coming later)</option>
+            <option value="per-printer" data-i18n="settings.queue.mode_per_printer">Per-Printer Queue</option>
+            <option value="shared-queue" disabled data-i18n="settings.queue.mode_shared_queue">Shared Queue (coming later)</option>
           </select>
         </div>
       </div>
@@ -634,19 +654,19 @@
       </div>
 
       <div class="setcard" id="printerPoolsCard" style="margin-top:10px;display:none">
-        <div class="fl" style="margin-bottom:8px">Printer Pools</div>
-        <div class="settings-help" style="margin-bottom:10px">Each printer belongs to one pool, which defines how the bed gets cleared between prints. "Unassigned" is built in and protected. G-code and API bed-clear are coming in a later update — every pool is Manual for now.</div>
+        <div class="fl" style="margin-bottom:8px" data-i18n="settings.queue.printer_pools_title">Printer Pools</div>
+        <div class="settings-help" style="margin-bottom:10px" data-i18n="settings.queue.printer_pools_desc">Each printer belongs to one pool, which defines how the bed gets cleared between prints. "Unassigned" is built in and protected. G-code and API bed-clear are coming in a later update — every pool is Manual for now.</div>
         <div id="printerPoolsList"></div>
         <div class="row" style="margin-top:8px">
-          <input class="field" id="newPrinterPoolName" placeholder="New pool name" style="max-width:220px" maxlength="40">
-          <button class="btn ghost" id="addPrinterPoolBtn">+ Add Pool</button>
+          <input class="field" id="newPrinterPoolName" placeholder="New pool name" data-i18n-placeholder="settings.queue.new_pool_placeholder" style="max-width:220px" maxlength="40">
+          <button class="btn ghost" id="addPrinterPoolBtn" data-i18n="settings.queue.add_pool_button">+ Add Pool</button>
         </div>
         <span class="pstatus" aria-live="polite" id="printerPoolStatus"></span>
       </div>
       </div>
 
       <div class="row" style="margin-top:16px" id="globalSaveRow">
-        <button class="btn primary" id="saveCfg">Save</button>
+        <button class="btn primary" id="saveCfg" data-i18n="common.save">Save</button>
         <button class="btn primary" id="addAllSave" style="display:none">Add All &amp; Save</button>
         <span class="pstatus" aria-live="polite" id="cfgStatus"></span>
       </div>
@@ -666,7 +686,7 @@
       <div class="health-page-hdr">
         <div class="health-picker" id="healthPicker"></div>
         <span class="health-updated-at" id="healthUpdatedAt"></span>
-        <button class="btn ghost" id="healthRefreshBtn" title="Re-fetch this printer's health data">Refresh</button>
+        <button class="btn ghost" id="healthRefreshBtn" data-i18n-title="health.refresh_title" title="Re-fetch this printer's health data" data-i18n="common.refresh">Refresh</button>
       </div>
       <div id="healthBody"></div>
       <!-- Inline service form (not a modal, per spec) — one static instance,
@@ -675,54 +695,54 @@
            own field-group classes (.maint-field/.maint-row2/.fl/.hint/
            .maint-readonly/.maint-offline-check) for visual consistency. -->
       <div class="health-card" id="healthServiceForm" style="display:none">
-        <div class="health-card-hdr">Log service</div>
-        <div class="maint-field"><label class="fl">Component</label>
+        <div class="health-card-hdr" data-i18n="health.service.card_title">Log service</div>
+        <div class="maint-field"><label class="fl" data-i18n="maintenance.field_component">Component</label>
           <div class="health-svc-chips" id="healthSvcChips"></div>
-          <input class="field" id="healthSvcComponentOther" placeholder="Or type a new component" style="margin-top:6px">
+          <input class="field" id="healthSvcComponentOther" data-i18n-placeholder="maintenance.health_component_placeholder" placeholder="Or type a new component" style="margin-top:6px">
         </div>
         <div class="maint-row2" style="margin-top:10px">
-          <div class="maint-field"><label class="fl">Date</label><input type="date" class="field" id="healthSvcDate"></div>
-          <div class="maint-field"><label class="fl">Remind me</label><select class="field" id="healthSvcFrequency"><option value="none">Don't remind</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option></select></div>
+          <div class="maint-field"><label class="fl" data-i18n="maintenance.field_date">Date</label><input type="date" class="field" id="healthSvcDate"></div>
+          <div class="maint-field"><label class="fl" data-i18n="maintenance.field_remind_me">Remind me</label><select class="field" id="healthSvcFrequency"><option value="none" data-i18n="maintenance.frequency_none">Don't remind</option><option value="weekly" data-i18n="maintenance.frequency_weekly">Weekly</option><option value="monthly" data-i18n="maintenance.frequency_monthly">Monthly</option><option value="quarterly" data-i18n="maintenance.frequency_quarterly">Quarterly</option></select></div>
         </div>
-        <div class="maint-field" style="margin-top:10px"><label class="fl">Next due</label><div class="field maint-readonly" id="healthSvcNextDue">—</div><span class="hint" id="healthSvcNextHint"></span></div>
+        <div class="maint-field" style="margin-top:10px"><label class="fl" data-i18n="maintenance.field_next_due">Next due</label><div class="field maint-readonly" id="healthSvcNextDue">—</div><span class="hint" id="healthSvcNextHint"></span></div>
         <div class="maint-row2" style="margin-top:10px">
-          <div class="maint-field"><label class="fl">Cost</label><input type="number" class="field" id="healthSvcCost" step="0.01" value="0.00"></div>
-          <div class="maint-field"><label class="fl">Part or supplier (optional)</label><input class="field" id="healthSvcPart"></div>
+          <div class="maint-field"><label class="fl" data-i18n="maintenance.field_cost">Cost</label><input type="number" class="field" id="healthSvcCost" step="0.01" value="0.00"></div>
+          <div class="maint-field"><label class="fl"><span data-i18n="maintenance.field_part">Part or supplier</span> (<span data-i18n="maintenance.field_optional_hint">optional</span>)</label><input class="field" id="healthSvcPart"></div>
         </div>
-        <div class="maint-field" style="margin-top:10px"><label class="fl">Notes</label><textarea class="field" id="healthSvcComment"></textarea></div>
-        <label class="maint-offline-check" style="margin-top:10px"><input type="checkbox" id="healthSvcOffline"> Take printer offline</label>
-        <div class="settings-help" style="margin-top:6px">Printer hours at time of service: <span id="healthSvcHours">—</span></div>
+        <div class="maint-field" style="margin-top:10px"><label class="fl" data-i18n="maintenance.field_notes">Notes</label><textarea class="field" id="healthSvcComment"></textarea></div>
+        <label class="maint-offline-check" style="margin-top:10px"><input type="checkbox" id="healthSvcOffline"> <span data-i18n="maintenance.take_offline_label">Take printer offline</span></label>
+        <div class="settings-help" style="margin-top:6px"><span data-i18n="health.service.hours_prefix">Printer hours at time of service:</span> <span id="healthSvcHours">—</span></div>
         <div class="pstatus" id="healthSvcStatus"></div>
         <div class="unload-footer" style="margin-top:12px">
-          <button type="button" class="btn ghost" id="healthSvcCancel">Cancel</button>
-          <button type="button" class="btn primary" id="healthSvcSave" disabled>Save</button>
+          <button type="button" class="btn ghost" id="healthSvcCancel" data-i18n="common.cancel">Cancel</button>
+          <button type="button" class="btn primary" id="healthSvcSave" disabled data-i18n="common.save">Save</button>
         </div>
       </div>
     </div>
 
     <div class="queue-dashboard" id="queueDashboard">
       <div class="queue-stat-cards">
-        <div class="queue-stat-card queue-stat-util"><span class="queue-stat-value" id="queueUtilPct">0%</span><span class="queue-stat-label">Fleet Utilization</span><span class="queue-stat-frac" id="queueUtilFrac">(0/0)</span></div>
-        <div class="queue-stat-card queue-stat-printing"><span class="queue-stat-value" id="statPrinting">0</span><span class="queue-stat-label">Printing</span></div>
-        <div class="queue-stat-card queue-stat-idle"><span class="queue-stat-value" id="statIdle">0</span><span class="queue-stat-label">Idle</span></div>
-        <div class="queue-stat-card queue-stat-awaiting"><span class="queue-stat-value" id="statAwaiting">0</span><span class="queue-stat-label">Awaiting Sign-off</span></div>
-        <div class="queue-stat-card queue-stat-parts"><span class="queue-stat-value" id="statPartsToday">0</span><span class="queue-stat-label">Parts Today</span></div>
+        <div class="queue-stat-card queue-stat-util"><span class="queue-stat-value" id="queueUtilPct">0%</span><span class="queue-stat-label" data-i18n="queue.stat_utilization">Fleet Utilization</span><span class="queue-stat-frac" id="queueUtilFrac">(0/0)</span></div>
+        <div class="queue-stat-card queue-stat-printing"><span class="queue-stat-value" id="statPrinting">0</span><span class="queue-stat-label" data-i18n="queue.stat_printing">Printing</span></div>
+        <div class="queue-stat-card queue-stat-idle"><span class="queue-stat-value" id="statIdle">0</span><span class="queue-stat-label" data-i18n="queue.stat_idle">Idle</span></div>
+        <div class="queue-stat-card queue-stat-awaiting"><span class="queue-stat-value" id="statAwaiting">0</span><span class="queue-stat-label" data-i18n="queue.stat_awaiting">Awaiting Sign-off</span></div>
+        <div class="queue-stat-card queue-stat-parts"><span class="queue-stat-value" id="statPartsToday">0</span><span class="queue-stat-label" data-i18n="queue.stat_parts_today">Parts Today</span></div>
       </div>
       <div class="settings-warning" id="queueViewStoreWarning" style="display:none;margin-bottom:10px"></div>
       <div id="queueDashboardBody"></div>
     </div>
 
-    <div class="sechead" id="jobsechead" style="display:none"><h2>Selected Model</h2><span class="count" id="needcount"></span></div>
+    <div class="sechead" id="jobsechead" style="display:none"><h2 data-i18n="fleet.job.section_title">Selected Model</h2><span class="count" id="needcount"></span></div>
     <div class="jobloading" id="jobloading"><div class="jlname" id="jlname"></div><div class="jlbar"><div class="jlfill"></div></div></div>
     <div class="jobcard" id="jobcard">
       <div class="jobcard-hdr">
-        <img id="jthumb" class="jthumb" alt="Preview" style="display:none">
+        <img id="jthumb" class="jthumb" data-i18n-alt="fleet.job.preview_alt" alt="Preview" style="display:none">
         <div class="jobcard-hdr-text">
           <div class="jt-row">
             <div class="jt" id="jt"></div>
             <div class="jcard-actions">
-              <button class="jcard-btn" id="jobEject" title="Deselect job"><img src="/eject-pill.svg" class="jcard-icon" alt="Deselect"></button>
-              <button class="jcard-btn" id="jobSend" title="Send to printers"><img src="/send-pill.svg" class="jcard-icon" alt="Send to printers"></button>
+              <button class="jcard-btn" id="jobEject" data-i18n-title="fleet.job.deselect_title" title="Deselect job"><img src="/eject-pill.svg" class="jcard-icon" data-i18n-alt="fleet.job.deselect_alt" alt="Deselect"></button>
+              <button class="jcard-btn" id="jobSend" data-i18n-title="fleet.modal.send.title" title="Send to printers"><img src="/send-pill.svg" class="jcard-icon" data-i18n-alt="fleet.modal.send.title" alt="Send to printers"></button>
             </div>
           </div>
           <div class="jmeta" id="jmeta"></div>
@@ -733,26 +753,26 @@
         </div>
       </div>
     </div>
-    <div class="sechead"><h2>Fleet</h2><span class="count" id="fleetcount"></span></div>
+    <div class="sechead"><h2 data-i18n="fleet.section_title">Fleet</h2><span class="count" id="fleetcount"></span></div>
     <div id="fleet-wrap">
       <div class="camtoolbar" id="camViewBar">
         <div class="cambar">
           <div class="camtabs" id="camTabs">
-            <button data-camtab="all">All</button>
-            <button data-camtab="printing">Printing</button>
-            <button data-camtab="attention">Attention Needed</button>
-            <button data-camtab="idle">Idle</button>
-            <button data-camtab="offline">Offline</button>
+            <button data-camtab="all" data-i18n="fleet.toolbar.tab_all">All</button>
+            <button data-camtab="printing" data-i18n="printer_status.printing">Printing</button>
+            <button data-camtab="attention" data-i18n="fleet.toolbar.tab_attention">Attention Needed</button>
+            <button data-camtab="idle" data-i18n="printer_status.idle">Idle</button>
+            <button data-camtab="offline" data-i18n="printer_status.offline">Offline</button>
             <span class="cambar-divider"></span>
-            <select id="camTagFilter"><option value="">All tags</option></select>
+            <select id="camTagFilter"><option value="" data-i18n="fleet.toolbar.all_tags">All tags</option></select>
           </div>
           <div class="cambar-actions">
             <label class="camselall" for="camSelectAll">
               <input type="checkbox" id="camSelectAll" class="checkbox-input">
-              <span id="camSelCount">Select all</span>
+              <span id="camSelCount" data-i18n="fleet.toolbar.select_all">Select all</span>
             </label>
             <span id="camBulkActions"></span>
-            <button id="camEditTags" class="btn ghost">Edit Tags</button>
+            <button id="camEditTags" class="btn ghost" data-i18n="fleet.toolbar.edit_tags">Edit Tags</button>
           </div>
         </div>
         <span id="camBulkMsg" class="pstatus" aria-live="polite"></span>
@@ -763,7 +783,7 @@
 
   <div class="modal" id="platemodal">
     <div class="modalbox plate-box">
-      <div class="modalhdr"><span id="platetitle">Exclude objects</span><button class="modalx" id="platex">✕</button></div>
+      <div class="modalhdr"><span id="platetitle" data-i18n="fleet.modal.plate.title_default">Exclude objects</span><button class="modalx" id="platex">✕</button></div>
       <div class="hint plate-subtitle" id="plateSubtitle"></div>
       <div class="plate-layout">
         <div class="plate-left">
@@ -776,8 +796,8 @@
       <div class="plate-footer">
         <span class="plate-footer-status" id="plateSelStatus"></span>
         <div class="plate-footer-actions">
-          <button class="btn ghost" id="plateCancel">Cancel</button>
-          <button class="btn-base plate-skip-btn" id="plateSkip" disabled>Exclude</button>
+          <button class="btn ghost" id="plateCancel" data-i18n="common.cancel">Cancel</button>
+          <button class="btn-base plate-skip-btn" id="plateSkip" disabled data-i18n="fleet.modal.plate.exclude_button">Exclude</button>
         </div>
       </div>
       <span class="pstatus" aria-live="polite" id="plateStatus"></span>
@@ -811,8 +831,8 @@
             <div class="unload-spool-info">
               <div class="unload-spool-line1" id="unloadLine1"></div>
             </div>
-            <button type="button" class="btn ghost btn-sm" id="unloadEditColorBtn" style="display:none">Edit color</button>
-            <span class="unload-rfid-badge" id="unloadRfidBadge" style="display:none">RFID</span>
+            <button type="button" class="btn ghost btn-sm" id="unloadEditColorBtn" style="display:none" data-i18n="fleet.modal.unload.edit_color_button">Edit color</button>
+            <span class="unload-rfid-badge" id="unloadRfidBadge" style="display:none" data-i18n="fleet.modal.unload.rfid_badge">RFID</span>
           </div>
         </div>
 
@@ -829,11 +849,11 @@
       <!-- Color mode: entered via "Edit color", replaces the unload body
            entirely — no unload controls visible while picking a color. -->
       <div id="unloadColorMode" style="display:none">
-        <div class="unload-color-helper">Used for head matching when sending prints. Written to the printer itself.</div>
+        <div class="unload-color-helper" data-i18n="fleet.modal.unload.color_helper">Used for head matching when sending prints. Written to the printer itself.</div>
         <div class="unload-compare">
           <div class="unload-compare-now">
             <div class="unload-compare-swatch-sm" id="unloadNowSwatch"></div>
-            <div class="unload-compare-label">Now</div>
+            <div class="unload-compare-label" data-i18n="fleet.modal.unload.now_label">Now</div>
           </div>
           <div class="unload-compare-arrow">→</div>
           <div class="unload-compare-pending">
@@ -846,23 +866,23 @@
         </div>
 
         <div class="scc-tabs" id="unloadColorTabs">
-          <button type="button" class="scc-tab active" data-scctab="palette">Palette</button>
-          <button type="button" class="scc-tab" data-scctab="custom">Custom</button>
+          <button type="button" class="scc-tab active" data-scctab="palette" data-i18n="fleet.modal.unload.palette_tab">Palette</button>
+          <button type="button" class="scc-tab" data-scctab="custom" data-i18n="fleet.modal.unload.custom_tab">Custom</button>
         </div>
         <div class="scc-tabpane" id="unloadPalettePane">
           <div class="color-grid scc-grid" id="unloadPaletteGrid"></div>
-          <div class="scc-recent-hdr" id="unloadRecentHdr" style="display:none">Recent on this fleet</div>
+          <div class="scc-recent-hdr" id="unloadRecentHdr" style="display:none" data-i18n="fleet.modal.unload.recent_header">Recent on this fleet</div>
           <div class="color-grid scc-grid" id="unloadRecentGrid"></div>
         </div>
         <div class="scc-tabpane" id="unloadCustomPane" style="display:none">
-          <div class="unload-field-label">Hex</div>
+          <div class="unload-field-label" data-i18n="fleet.modal.unload.hex_label">Hex</div>
           <div class="scc-custom-row">
             <input class="field scc-hex-field" id="unloadHexField" placeholder="#RRGGBB" maxlength="7">
-            <input type="color" id="unloadColorInput" class="scc-native-color" title="Pick with the OS color picker">
-            <button type="button" class="btn ghost scc-eyedropper" id="unloadEyedropper" style="display:none" title="Pick a color from anywhere on screen">👁</button>
+            <input type="color" id="unloadColorInput" class="scc-native-color" data-i18n-title="fleet.modal.unload.os_picker_title" title="Pick with the OS color picker">
+            <button type="button" class="btn ghost scc-eyedropper" id="unloadEyedropper" style="display:none" data-i18n-title="fleet.modal.unload.eyedropper_title" title="Pick a color from anywhere on screen">👁</button>
           </div>
           <div class="scc-hex-error" id="unloadHexError" style="display:none"></div>
-          <div class="unload-field-label">RGB</div>
+          <div class="unload-field-label" data-i18n="fleet.modal.unload.rgb_label">RGB</div>
           <div class="scc-rgb-row">
             <label>R<input type="number" min="0" max="255" step="1" id="unloadR"></label>
             <label>G<input type="number" min="0" max="255" step="1" id="unloadG"></label>
@@ -874,9 +894,9 @@
       <div class="pstatus" aria-live="polite" id="unloadStatus"></div>
 
       <div class="unload-footer">
-        <button class="btn ghost" id="unloadNo">Cancel</button>
+        <button class="btn ghost" id="unloadNo" data-i18n="common.cancel">Cancel</button>
         <div class="unload-footer-right">
-          <button class="btn primary" id="unloadSaveColorBtn" style="display:none" disabled>Apply</button>
+          <button class="btn primary" id="unloadSaveColorBtn" style="display:none" disabled data-i18n="fleet.modal.unload.apply_button">Apply</button>
           <button class="btn danger-filled" id="unloadYes">Unload</button>
         </div>
       </div>
@@ -885,45 +905,119 @@
 
   <div class="modal" id="groupsModal">
     <div class="modalbox" style="max-width:420px">
-      <div class="modalhdr"><span>Groups</span><button class="modalx" id="groupsModalX">✕</button></div>
-      <div class="settings-help" style="margin-bottom:10px">Which groups can <b id="groupsModalUserName"></b> see and use printers for? Nothing checked falls back to Everyone. Click Save here, then Save on the user's row to apply.</div>
+      <div class="modalhdr"><span data-i18n="settings.users.groups_button">Groups</span><button class="modalx" id="groupsModalX">✕</button></div>
+      <div class="settings-help" style="margin-bottom:10px"><span data-i18n="settings.users.groups_modal_desc_lead">Which groups can</span> <b id="groupsModalUserName"></b> <span data-i18n="settings.users.groups_modal_desc_trail">see and use printers for? Nothing checked falls back to Everyone. Click Save here, then Save on the user's row to apply.</span></div>
       <div id="groupsCheckList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px"></div>
       <div style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
-        <div class="fl">Manage groups</div>
+        <div class="fl" data-i18n="settings.users.manage_groups_title">Manage groups</div>
         <div id="groupsManageList" style="display:flex;flex-direction:column;gap:6px;margin:8px 0"></div>
         <div style="display:flex;gap:6px">
-          <input class="field" id="newGroupName" placeholder="New group name" style="flex:1" maxlength="40">
-          <button class="btn ghost" id="addGroupBtn">Add</button>
+          <input class="field" id="newGroupName" placeholder="New group name" data-i18n-placeholder="settings.users.new_group_placeholder" style="flex:1" maxlength="40">
+          <button class="btn ghost" id="addGroupBtn" data-i18n="settings.users.add_group_button">Add</button>
         </div>
         <span class="pstatus" aria-live="polite" id="groupsManageStatus"></span>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-        <button class="btn ghost" id="groupsModalCancel">Cancel</button>
-        <button class="btn primary" id="groupsModalSave">Save</button>
+        <button class="btn ghost" id="groupsModalCancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn primary" id="groupsModalSave" data-i18n="common.save">Save</button>
       </div>
     </div>
   </div>
 
   <div class="modal" id="tagsmodal">
     <div class="modalbox" style="max-width:480px">
-      <div class="modalhdr"><span>Edit tags</span><button class="modalx" id="tagsx">✕</button></div>
+      <div class="modalhdr"><span data-i18n="fleet.modal.tags.title">Edit tags</span><button class="modalx" id="tagsx">✕</button></div>
       <div class="tags-list" id="tagsList"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
-        <button class="btn ghost" id="tagsCancel">Cancel</button>
-        <button class="btn primary" id="tagsSave">Save</button>
+        <button class="btn ghost" id="tagsCancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn primary" id="tagsSave" data-i18n="common.save">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="langEditorModal">
+    <div class="modalbox" style="max-width:900px">
+      <div class="modalhdr"><span data-i18n="settings.language_editor.title">Language Editor</span><button class="modalx" id="langEditorX">✕</button></div>
+
+      <div id="langChipsRow" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
+
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <button class="btn ghost" id="langNewBtn" data-i18n="settings.language_editor.new_language">New language</button>
+        <button class="btn ghost" id="langImportBtn" data-i18n="settings.language_editor.import">Import</button>
+        <button class="btn ghost" id="langExportBtn" data-i18n="settings.language_editor.export">Export</button>
+        <button class="btn ghost" id="langRefreshBtn" data-i18n="common.refresh">Refresh</button>
+      </div>
+
+      <div id="langNewForm" style="display:none;border:1px solid var(--line-soft);border-radius:8px;padding:12px;margin-bottom:12px">
+        <div class="settings-grid">
+          <div class="settings-field">
+            <label class="settings-label" for="langNewLocale" data-i18n="settings.language_editor.new_locale_code_label">Locale code</label>
+            <input class="field" id="langNewLocale" placeholder="es" maxlength="6">
+            <div class="settings-help" data-i18n="settings.language_editor.new_locale_code_hint">e.g. es, fr, pt-BR</div>
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="langNewLanguage" data-i18n="settings.language_editor.new_language_label">Language name (English)</label>
+            <input class="field" id="langNewLanguage" maxlength="60">
+          </div>
+          <div class="settings-field">
+            <label class="settings-label" for="langNewNativeName" data-i18n="settings.language_editor.new_native_name_label">Native name</label>
+            <input class="field" id="langNewNativeName" maxlength="60">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+          <button class="btn ghost" id="langNewCancel" data-i18n="common.cancel">Cancel</button>
+          <button class="btn primary" id="langNewCreate" data-i18n="settings.language_editor.create">Create</button>
+        </div>
+        <div class="pstatus" aria-live="polite" id="langNewStatus"></div>
+      </div>
+
+      <div id="langImportForm" style="display:none;border:1px solid var(--line-soft);border-radius:8px;padding:12px;margin-bottom:12px">
+        <input type="file" id="langImportFile" accept="application/json">
+        <div id="langImportPreview" style="margin-top:8px;font-size:13px;color:var(--ink-dim)"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+          <button class="btn ghost" id="langImportCancel" data-i18n="common.cancel">Cancel</button>
+          <button class="btn primary" id="langImportCommit" data-i18n="settings.language_editor.import" disabled>Import</button>
+        </div>
+        <div class="pstatus" aria-live="polite" id="langImportStatus"></div>
+      </div>
+
+      <div id="langMetaPanel" class="settings-grid" style="margin-bottom:12px"></div>
+      <div class="settings-help err" id="langStaleNote" style="display:none;margin-bottom:8px"></div>
+      <div class="settings-warning" id="langConflictWarning" style="display:none;margin-bottom:8px"></div>
+
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <input class="field" id="langSearch" data-i18n-placeholder="settings.language_editor.search_placeholder" placeholder="Search key or English text…" style="flex:1;min-width:180px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap;cursor:pointer"><input type="checkbox" id="langUntranslatedOnly" class="checkbox-input"> <span data-i18n="settings.language_editor.untranslated_only">Untranslated only</span></label>
+        <span class="settings-help" id="langUntranslatedCount"></span>
+      </div>
+
+      <div id="langKeyList" style="max-height:320px;overflow:auto;border:1px solid var(--line-soft);border-radius:8px"></div>
+
+      <div id="langOrphanedSection" style="display:none;margin-top:12px">
+        <div class="fl" data-i18n="settings.language_editor.orphaned_title">Orphaned keys</div>
+        <div class="settings-help" data-i18n="settings.language_editor.orphaned_desc">Present in this translation but not in the current English source — safe to remove.</div>
+        <div id="langOrphanedList" style="margin-top:6px;display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;gap:10px;flex-wrap:wrap">
+        <span class="settings-help" id="langFooterProgress"></span>
+        <div style="display:flex;gap:8px">
+          <button class="btn ghost" id="langEditorCancel" data-i18n="common.cancel">Cancel</button>
+          <button class="btn primary" id="langEditorSave" data-i18n="common.save">Save</button>
+        </div>
       </div>
     </div>
   </div>
 
   <div class="modal" id="bedmodal">
     <div class="modalbox" style="text-align:center;max-width:340px">
-      <div class="modalhdr"><span id="bedmodaltitle">Set bed temperature</span><button class="modalx" id="bedmodalx">✕</button></div>
-      <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px">Enter target temperature (0–100°C, 0 to turn off)</p>
+      <div class="modalhdr"><span id="bedmodaltitle" data-i18n="fleet.modal.bed.title_default">Set bed temperature</span><button class="modalx" id="bedmodalx">✕</button></div>
+      <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px" data-i18n="fleet.modal.bed.helper">Enter target temperature (0–100°C, 0 to turn off)</p>
       <input class="field" id="bedmodalinput" type="number" min="0" max="100" placeholder="60" style="text-align:center;font-size:18px;max-width:120px;margin:0 auto">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
-        <button class="btn primary" id="bedmodalset">Set</button>
-        <button class="btn ghost" id="bedmodaloff">Off</button>
-        <button class="btn ghost" id="bedmodalcancel">Cancel</button>
+        <button class="btn primary" id="bedmodalset" data-i18n="fleet.modal.bed.set_button">Set</button>
+        <button class="btn ghost" id="bedmodaloff" data-i18n="fleet.modal.bed.off_button">Off</button>
+        <button class="btn ghost" id="bedmodalcancel" data-i18n="common.cancel">Cancel</button>
       </div>
       <div class="pstatus" aria-live="polite" id="bedmodalstatus" style="margin-top:10px"></div>
     </div>
@@ -931,37 +1025,37 @@
 
   <div class="modal" id="bulkheatmodal">
     <div class="modalbox" style="max-width:480px">
-      <div class="modalhdr"><span>Heat multiple printers</span><button class="modalx" id="bulkheatx">✕</button></div>
+      <div class="modalhdr"><span data-i18n="global.topbar.bulk_heat_title">Heat multiple printers</span><button class="modalx" id="bulkheatx">✕</button></div>
 
       <div class="bulkheat-toolbar">
-        <label class="bulkheat-selectall"><input type="checkbox" id="bulkheatSelectAll" class="checkbox-input"> Select all</label>
+        <label class="bulkheat-selectall"><input type="checkbox" id="bulkheatSelectAll" class="checkbox-input"> <span data-i18n="fleet.toolbar.select_all">Select all</span></label>
         <span class="bulkheat-count" id="bulkheatCount">0 of 0 selected</span>
       </div>
       <div class="bulkheat-list" id="bulkheatList"></div>
 
-      <label class="fl" for="bulkheatSlider" style="margin-top:14px">Bed temperature <span class="hint" id="bulkheatCapNote"></span></label>
+      <label class="fl" for="bulkheatSlider" style="margin-top:14px"><span data-i18n="fleet.modal.bulkheat.bed_temp_label">Bed temperature</span> <span class="hint" id="bulkheatCapNote"></span></label>
       <div class="bulkheat-presets" id="bulkheatPresets">
         <button type="button" class="btn-chip" data-preset="60">PLA <span>60°</span></button>
         <button type="button" class="btn-chip" data-preset="80">PETG <span>80°</span></button>
         <button type="button" class="btn-chip" data-preset="100">ABS <span>100°</span></button>
-        <button type="button" class="btn-chip" data-preset="0">Off</button>
+        <button type="button" class="btn-chip" data-preset="0" data-i18n="fleet.modal.bed.off_button">Off</button>
       </div>
       <div class="bulkheat-slider-row">
         <input type="range" class="bulkheat-slider" id="bulkheatSlider" min="0" max="120" step="1" value="60">
         <span class="bulkheat-readout" id="bulkheatReadout">60°C</span>
       </div>
 
-      <label class="bulkheat-stagger-label"><input type="checkbox" id="bulkheatStagger" checked> Staggered heating</label>
-      <div class="hint bulkheat-stagger-hint">Start each printer a few seconds after the last, instead of all at once.</div>
+      <label class="bulkheat-stagger-label"><input type="checkbox" id="bulkheatStagger" checked> <span data-i18n="fleet.modal.bulkheat.staggered_heating_label">Staggered heating</span></label>
+      <div class="hint bulkheat-stagger-hint" data-i18n="fleet.modal.bulkheat.staggered_heating_helper">Start each printer a few seconds after the last, instead of all at once.</div>
       <div class="bulkheat-stagger-row" id="bulkheatStaggerRow">
         <input class="field" id="bulkheatStaggerSecs" type="number" min="5" max="600" step="5" value="60" style="max-width:90px">
-        <span class="hint">seconds between each printer</span>
+        <span class="hint" data-i18n="fleet.modal.bulkheat.staggered_seconds_suffix">seconds between each printer</span>
       </div>
       <div class="bulkheat-summary" id="bulkheatSummary">All start together</div>
 
       <div class="bulkheat-footer">
-        <button class="btn ghost" id="bulkheatCancelQueue" style="display:none">Stop remaining</button>
-        <button class="btn ghost" id="bulkheatCancel">Cancel</button>
+        <button class="btn ghost" id="bulkheatCancelQueue" style="display:none" data-i18n="fleet.modal.bulkheat.stop_remaining_button">Stop remaining</button>
+        <button class="btn ghost" id="bulkheatCancel" data-i18n="common.cancel">Cancel</button>
         <button class="btn primary" id="bulkheatGo">Heat</button>
       </div>
       <div class="bulkheat-status" id="bulkheatStatus"></div>
@@ -970,16 +1064,16 @@
 
   <div class="modal" id="subnetModal">
     <div class="modalbox" style="text-align:center;max-width:380px">
-      <div class="modalhdr"><span>Discover printers</span><button class="modalx" id="subnetModalX">✕</button></div>
+      <div class="modalhdr"><span data-i18n="settings.printers.discover_title">Discover printers</span><button class="modalx" id="subnetModalX">✕</button></div>
       <div style="display:flex;gap:18px;justify-content:center;margin-bottom:10px">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeLocal" value="local" checked> Local network</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeSubnet" value="subnet"> Specific subnet</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeLocal" value="local" checked> <span data-i18n="settings.printers.discover_scope_local">Local network</span></label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeSubnet" value="subnet"> <span data-i18n="settings.printers.discover_scope_subnet">Specific subnet</span></label>
       </div>
       <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px" id="discoverScopeHint">Scans every subnet this SnapCon host is connected to.</p>
-      <input class="field" id="subnetModalInput" placeholder="192.168.2.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto;display:none">
+      <input class="field" id="subnetModalInput" data-i18n-placeholder="settings.printers.discover_subnet_placeholder" placeholder="192.168.2.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto;display:none">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
-        <button class="btn purple" id="subnetModalScan">Scan</button>
-        <button class="btn ghost" id="subnetModalCancel">Cancel</button>
+        <button class="btn purple" id="subnetModalScan" data-i18n="settings.printers.discover_scan_button">Scan</button>
+        <button class="btn ghost" id="subnetModalCancel" data-i18n="common.cancel">Cancel</button>
       </div>
       <div class="pstatus" aria-live="polite" id="subnetModalStatus" style="margin-top:10px"></div>
     </div>
@@ -987,11 +1081,11 @@
 
   <div class="modal" id="newFolderModal">
     <div class="modalbox" style="text-align:center;max-width:340px">
-      <div class="modalhdr"><span>New folder</span><button class="modalx" id="newFolderModalX">✕</button></div>
-      <input class="field" id="newFolderModalInput" placeholder="Folder name" maxlength="80" style="text-align:center;font-size:14px;max-width:240px;margin:8px auto 0">
+      <div class="modalhdr"><span data-i18n="files.new_folder_modal_title">New folder</span><button class="modalx" id="newFolderModalX">✕</button></div>
+      <input class="field" id="newFolderModalInput" data-i18n-placeholder="files.new_folder_name_placeholder" placeholder="Folder name" maxlength="80" style="text-align:center;font-size:14px;max-width:240px;margin:8px auto 0">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
-        <button class="btn purple" id="newFolderModalCreate">Create</button>
-        <button class="btn ghost" id="newFolderModalCancel">Cancel</button>
+        <button class="btn purple" id="newFolderModalCreate" data-i18n="files.create_button">Create</button>
+        <button class="btn ghost" id="newFolderModalCancel" data-i18n="common.cancel">Cancel</button>
       </div>
       <div class="pstatus" aria-live="polite" id="newFolderModalStatus" style="margin-top:10px"></div>
     </div>
@@ -999,44 +1093,44 @@
 
   <div class="modal" id="maintReportModal">
     <div class="modalbox" style="max-width:520px">
-      <div class="modalhdr"><span>Maintenance</span><button class="modalx" id="maintReportX">✕</button></div>
+      <div class="modalhdr"><span data-i18n="global.topbar.maintenance_title">Maintenance</span><button class="modalx" id="maintReportX">✕</button></div>
       <div class="maint-toprow">
         <div class="maint-field" style="flex:1">
-          <label class="fl" for="maintPrinterSel">Printer</label>
+          <label class="fl" for="maintPrinterSel" data-i18n="maintenance.field_printer">Printer</label>
           <select class="field" id="maintPrinterSel"></select>
         </div>
         <div class="maint-field" style="flex:none;width:150px">
-          <label class="fl" for="maintDate">Date</label>
+          <label class="fl" for="maintDate" data-i18n="maintenance.field_date">Date</label>
           <input class="field" id="maintDate" type="date">
         </div>
       </div>
       <div id="maintDetail">
         <div class="maint-stats">
-          <div class="maint-stat"><div class="maint-stat-label">Printer hours</div><div class="maint-stat-value" id="maintHours">—</div></div>
-          <div class="maint-stat"><div class="maint-stat-label">Warranty</div><div class="maint-stat-value" id="maintWarranty">—</div></div>
-          <div class="maint-stat"><div class="maint-stat-label">Last service</div><div class="maint-stat-value" id="maintLastService">—</div></div>
+          <div class="maint-stat"><div class="maint-stat-label" data-i18n="maintenance.stat_printer_hours">Printer hours</div><div class="maint-stat-value" id="maintHours">—</div></div>
+          <div class="maint-stat"><div class="maint-stat-label" data-i18n="maintenance.stat_warranty">Warranty</div><div class="maint-stat-value" id="maintWarranty">—</div></div>
+          <div class="maint-stat"><div class="maint-stat-label" data-i18n="maintenance.stat_last_service">Last service</div><div class="maint-stat-value" id="maintLastService">—</div></div>
         </div>
 
         <div class="maint-form">
           <div class="maint-field">
-            <label class="fl" for="maintComponentFilter">Component</label>
-            <input class="field" id="maintComponentFilter" placeholder="Filter or type a new component…" autocomplete="off">
+            <label class="fl" for="maintComponentFilter" data-i18n="maintenance.field_component">Component</label>
+            <input class="field" id="maintComponentFilter" data-i18n-placeholder="maintenance.modal_component_placeholder" placeholder="Filter or type a new component…" autocomplete="off">
           </div>
 
           <div class="maint-row2">
             <div class="maint-field">
-              <label class="fl" for="maintFrequency">Remind me</label>
+              <label class="fl" for="maintFrequency" data-i18n="maintenance.field_remind_me">Remind me</label>
               <select class="field" id="maintFrequency">
-                <option value="none">Don't remind</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly" selected>Monthly</option>
-                <option value="quarterly">Quarterly</option>
-                <option value="hours250" disabled title="Needs print-hours-based scheduling, not built yet">Every 250 print hours (coming soon)</option>
-                <option value="hours500" disabled title="Needs print-hours-based scheduling, not built yet">Every 500 print hours (coming soon)</option>
+                <option value="none" data-i18n="maintenance.frequency_none">Don't remind</option>
+                <option value="weekly" data-i18n="maintenance.frequency_weekly">Weekly</option>
+                <option value="monthly" selected data-i18n="maintenance.frequency_monthly">Monthly</option>
+                <option value="quarterly" data-i18n="maintenance.frequency_quarterly">Quarterly</option>
+                <option value="hours250" disabled data-i18n-title="maintenance.frequency_hours_disabled_title" title="Needs print-hours-based scheduling, not built yet" data-i18n="maintenance.frequency_hours250">Every 250 print hours (coming soon)</option>
+                <option value="hours500" disabled data-i18n-title="maintenance.frequency_hours_disabled_title" title="Needs print-hours-based scheduling, not built yet" data-i18n="maintenance.frequency_hours500">Every 500 print hours (coming soon)</option>
               </select>
             </div>
             <div class="maint-field">
-              <label class="fl">Next due</label>
+              <label class="fl" data-i18n="maintenance.field_next_due">Next due</label>
               <div class="field maint-readonly" id="maintNextScheduled">—</div>
             </div>
           </div>
@@ -1044,26 +1138,26 @@
 
           <div class="maint-row2">
             <div class="maint-field">
-              <label class="fl" for="maintCost">Cost (<span id="maintCostCurrency">$</span>)</label>
+              <label class="fl" for="maintCost"><span data-i18n="maintenance.field_cost">Cost</span> (<span id="maintCostCurrency">$</span>)</label>
               <input class="field" id="maintCost" type="number" min="0" step="0.01" value="0.00">
             </div>
             <div class="maint-field">
-              <label class="fl" for="maintPart">Part or supplier <span class="hint">optional</span></label>
-              <input class="field" id="maintPart" placeholder="e.g. E3D, Amazon…">
+              <label class="fl" for="maintPart"><span data-i18n="maintenance.field_part">Part or supplier</span> <span class="hint" data-i18n="maintenance.field_optional_hint">optional</span></label>
+              <input class="field" id="maintPart" data-i18n-placeholder="maintenance.field_part_placeholder" placeholder="e.g. E3D, Amazon…">
             </div>
           </div>
 
           <div class="maint-field">
-            <label class="fl" for="maintComment">Notes</label>
-            <textarea class="field" id="maintComment" rows="2" placeholder="What was done…" style="resize:vertical"></textarea>
+            <label class="fl" for="maintComment" data-i18n="maintenance.field_notes">Notes</label>
+            <textarea class="field" id="maintComment" rows="2" data-i18n-placeholder="maintenance.field_notes_placeholder" placeholder="What was done…" style="resize:vertical"></textarea>
           </div>
 
           <div class="pstatus" aria-live="polite" id="maintStatus"></div>
           <div class="maint-footer">
-            <label class="maint-offline-check"><input type="checkbox" id="maintOfflineToggle"> Take printer offline</label>
+            <label class="maint-offline-check"><input type="checkbox" id="maintOfflineToggle"> <span data-i18n="maintenance.take_offline_label">Take printer offline</span></label>
             <div class="maint-footer-actions">
-              <button class="btn ghost" id="maintCancel">Cancel</button>
-              <button class="btn primary" id="maintSave" disabled>Save</button>
+              <button class="btn ghost" id="maintCancel" data-i18n="common.cancel">Cancel</button>
+              <button class="btn primary" id="maintSave" disabled data-i18n="common.save">Save</button>
             </div>
           </div>
         </div>
@@ -1078,32 +1172,32 @@
 
   <div class="modal" id="browsemodal">
     <div class="modalbox" style="max-width:520px">
-      <div class="modalhdr"><span>Browse for folder</span><button class="modalx" id="browsex">✕</button></div>
+      <div class="modalhdr"><span data-i18n="settings.browse.title">Browse for folder</span><button class="modalx" id="browsex">✕</button></div>
       <div style="display:flex;gap:6px;margin-bottom:10px">
-        <input class="field" id="browsepath" style="flex:1;font-family:var(--mono);font-size:12px" placeholder="Type a path or network location…">
-        <button class="btn ghost" id="browsego" style="white-space:nowrap;flex:none">Open</button>
+        <input class="field" id="browsepath" style="flex:1;font-family:var(--mono);font-size:12px" data-i18n-placeholder="settings.browse.path_placeholder" placeholder="Type a path or network location…">
+        <button class="btn ghost" id="browsego" style="white-space:nowrap;flex:none" data-i18n="settings.browse.open_button">Open</button>
       </div>
       <div id="browselist" style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;max-height:340px;overflow:auto;min-height:60px"></div>
       <div style="display:flex;gap:8px;margin-top:12px;align-items:center">
-        <span style="font-size:11px;color:var(--ink-faint);flex:1">For network paths type the address and press Open</span>
-        <button class="btn ghost" id="browsecancel">Cancel</button>
-        <button class="btn primary" id="browseok">Select</button>
+        <span style="font-size:11px;color:var(--ink-faint);flex:1" data-i18n="settings.browse.network_hint">For network paths type the address and press Open</span>
+        <button class="btn ghost" id="browsecancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn primary" id="browseok" data-i18n="settings.browse.select_button">Select</button>
       </div>
     </div>
   </div>
 
   <div class="modal" id="elecmodal">
     <div class="modalbox" style="max-width:380px">
-      <div class="modalhdr"><span>Look up electricity rate</span><button class="modalx" id="elecmodalx">✕</button></div>
-      <label class="fl" for="elecZip" style="margin-bottom:8px">US ZIP code</label>
+      <div class="modalhdr"><span data-i18n="settings.electricity.title">Look up electricity rate</span><button class="modalx" id="elecmodalx">✕</button></div>
+      <label class="fl" for="elecZip" style="margin-bottom:8px" data-i18n="settings.electricity.zip_label">US ZIP code</label>
       <div style="display:flex;gap:8px">
         <input class="field" id="elecZip" placeholder="e.g. 33301" maxlength="5" style="max-width:130px">
-        <button class="btn primary" id="elecLookup">Look up</button>
+        <button class="btn primary" id="elecLookup" data-i18n="settings.electricity.lookup_button">Look up</button>
       </div>
       <div id="elecResult" style="margin-top:14px;min-height:36px;font-size:13px;line-height:1.5"></div>
       <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end">
-        <button class="btn ghost" id="elecmodalcancel">Cancel</button>
-        <button class="btn primary" id="elecApply" style="display:none">Apply rate</button>
+        <button class="btn ghost" id="elecmodalcancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn primary" id="elecApply" style="display:none" data-i18n="settings.electricity.apply_button">Apply rate</button>
       </div>
     </div>
   </div>
@@ -1111,9 +1205,9 @@
   <div class="modal" id="snapmodal">
     <div class="modalbox" style="max-width:680px;text-align:center">
       <div class="modalhdr">
-        <span id="snaptitle">Camera snapshot</span>
+        <span id="snaptitle" data-i18n="fleet.modal.snapshot.title_default">Camera snapshot</span>
         <div style="display:flex;align-items:center;gap:8px">
-          <button class="btn ghost" id="snaprefresh" style="padding:4px 10px;font-size:11px">↺ Refresh</button>
+          <button class="btn ghost" id="snaprefresh" style="padding:4px 10px;font-size:11px">↺ <span data-i18n="common.refresh">Refresh</span></button>
           <button class="modalx" id="snapx">✕</button>
         </div>
       </div>
@@ -1127,7 +1221,7 @@
       <div class="modalhdr"><span id="pfiletitle">Print from printer</span><button class="modalx" id="pfilex">✕</button></div>
       <div class="pfile-body">
         <div class="pfile-left">
-          <input class="field" id="pfileSearch" placeholder="Search files…" aria-label="Search files" style="width:100%;margin-bottom:8px">
+          <input class="field" id="pfileSearch" data-i18n-placeholder="fleet.modal.pfile.search_placeholder" placeholder="Search files…" data-i18n-aria-label="fleet.modal.pfile.search_aria" aria-label="Search files" style="width:100%;margin-bottom:8px">
           <div class="pfile-list" id="pfilelist"></div>
         </div>
         <div class="pfile-right">
@@ -1138,54 +1232,54 @@
       <div class="send-footer">
         <div class="print-opts" id="pfileOpts"></div>
         <span class="send-footer-status" id="pfileStatus"></span>
-        <button class="btn-base btn-cancel" id="pfilecancel">Cancel</button>
-        <button class="btn-base btn-start" id="pfilego" disabled>Print</button>
+        <button class="btn-base btn-cancel" id="pfilecancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn-base btn-start" id="pfilego" data-i18n="printer.action_print" disabled>Print</button>
       </div>
     </div>
   </div>
 
   <div class="modal" id="sendmodal">
     <div class="modalbox" style="max-width:440px">
-      <div class="modalhdr"><span id="sendtitle">Send to printers</span><button class="modalx" id="sendmodalx">✕</button></div>
+      <div class="modalhdr"><span id="sendtitle" data-i18n="fleet.modal.send.title">Send to printers</span><button class="modalx" id="sendmodalx">✕</button></div>
       <div style="font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);word-break:break-all" id="sendfilename"></div>
       <div style="display:flex;align-items:center;gap:10px;margin-top:10px;margin-bottom:2px">
-        <span style="font-size:12px;color:var(--ink-faint)">Printers</span>
-        <button class="btn ghost" id="sendSelectAll" style="padding:3px 9px;font-size:11px">Select all</button>
-        <button class="btn ghost" id="sendSelectIdle" style="padding:3px 9px;font-size:11px">Idle only</button>
+        <span style="font-size:12px;color:var(--ink-faint)" data-i18n="settings.tabs.printers">Printers</span>
+        <button class="btn ghost" id="sendSelectAll" style="padding:3px 9px;font-size:11px" data-i18n="fleet.toolbar.select_all">Select all</button>
+        <button class="btn ghost" id="sendSelectIdle" style="padding:3px 9px;font-size:11px" data-i18n="fleet.modal.send.idle_only">Idle only</button>
       </div>
       <div class="send-list" id="sendlist"></div>
       <div class="print-opts" id="sendOpts"></div>
       <div class="send-footer">
         <span class="send-footer-status" id="sendFooterStatus"></span>
-        <button class="btn ghost" id="sendmodalcancel">Cancel</button>
-        <button class="btn ghost" id="doUpload">Upload</button>
-        <button class="btn primary" id="doUploadPrint">Upload &amp; Print</button>
+        <button class="btn ghost" id="sendmodalcancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn ghost" id="doUpload" data-i18n="printer.action_upload">Upload</button>
+        <button class="btn primary" id="doUploadPrint" data-i18n="fleet.modal.send.upload_and_print">Upload &amp; Print</button>
       </div>
     </div>
   </div>
 
   <div class="modal" id="sendQueueModal">
     <div class="modalbox" style="max-width:560px">
-      <div class="modalhdr"><span>Send to Queue</span><button class="modalx" id="sendQueueX">✕</button></div>
+      <div class="modalhdr"><span data-i18n="queue.send_modal_title">Send to Queue</span><button class="modalx" id="sendQueueX">✕</button></div>
       <div id="sendQueueFiles" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px"></div>
       <div class="maint-field" style="margin-bottom:10px">
-        <label class="fl" for="sendQueuePool">Printer Pool</label>
+        <label class="fl" for="sendQueuePool" data-i18n="queue.printer_pool_label">Printer Pool</label>
         <select class="field" id="sendQueuePool" style="max-width:100%"></select>
       </div>
       <div class="maint-field" style="margin-bottom:10px" id="sendQueueModeWrap">
-        <label class="fl">How to send</label>
+        <label class="fl" data-i18n="queue.how_to_send_label">How to send</label>
         <div style="display:flex;gap:14px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="print-on-all" checked> Print on All</label>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="distribute"> Distribute</label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="print-on-all" checked> <span data-i18n="queue.mode_print_on_all">Print on All</span></label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="distribute"> <span data-i18n="queue.mode_distribute">Distribute</span></label>
         </div>
       </div>
-      <div class="settings-help" style="margin-bottom:8px">Preview</div>
+      <div class="settings-help" style="margin-bottom:8px" data-i18n="queue.preview_label">Preview</div>
       <div class="maint-scroll" id="sendQueuePreview" style="max-height:160px;margin-bottom:10px"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
         <span class="pstatus" aria-live="polite" id="sendQueueStatus" style="margin-right:auto"></span>
-        <button class="btn ghost" id="sendQueueCancel">Cancel</button>
-        <button class="btn ghost" id="sendQueueAdd" title="Starts eligible idle printers immediately. Jobs for busy printers remain queued.">Add to Queue</button>
-        <button class="btn primary" id="sendQueueAddStart" title="Starts eligible idle printers immediately. Jobs for busy printers remain queued.">Add &amp; Start Now</button>
+        <button class="btn ghost" id="sendQueueCancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn ghost" id="sendQueueAdd" title="Adds these files to each printer's queue. Idle printers pick them up automatically; busy printers keep them queued until they're free." data-i18n-title="queue.add_to_queue_title" data-i18n="queue.add_to_queue_button">Add to Queue</button>
+        <button class="btn primary" id="sendQueueAddStart" title="Starts eligible idle printers immediately. Jobs for busy printers remain queued." data-i18n-title="queue.send_button_title" data-i18n="queue.add_and_start_button">Add &amp; Start Now</button>
       </div>
     </div>
   </div>
@@ -1196,11 +1290,11 @@
        silently using the printer's configured defaults. -->
   <div class="modal" id="quickPrintModal">
     <div class="modalbox" style="max-width:380px">
-      <div class="modalhdr"><span>Print options</span><button class="modalx" id="qpX">✕</button></div>
+      <div class="modalhdr"><span data-i18n="fleet.modal.quickprint.title">Print options</span><button class="modalx" id="qpX">✕</button></div>
       <div class="scc-subtitle" id="qpSubtitle"></div>
       <div id="qpOpts"></div>
       <div class="settings-nested" id="qpExtruderWrap" style="display:none;margin-top:12px">
-        <label class="qp-nested-label">Calibrate flow on</label>
+        <label class="qp-nested-label" data-i18n="fleet.modal.quickprint.calibrate_flow_on">Calibrate flow on</label>
         <div class="qp-extruder-row" id="qpExtruderRow"></div>
         <div class="qp-extruder-footer" id="qpExtruderFooter"></div>
       </div>
@@ -1214,14 +1308,15 @@
         <span class="send-status-txt" id="qpUploadStatus" style="position:relative"></span>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
-        <button class="btn ghost" id="qpCancel">Cancel</button>
-        <button class="btn primary" id="qpPrint">Start print</button>
+        <button class="btn ghost" id="qpCancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn primary" id="qpPrint" data-i18n="fleet.modal.quickprint.start_print_button">Start print</button>
       </div>
     </div>
   </div>
 </div>
 
 <script src="/error-codes.js"></script>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

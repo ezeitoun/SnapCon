@@ -281,6 +281,10 @@ test("reconcileOnStartup: dispatching + printer printing something else -> recov
   const state = baseState({ queueState: "dispatching", currentItem: item("i1", { status: "dispatching" }) });
   const next = E.reconcileOnStartup(state, { online: true, state: "printing", filename: "something-else.gcode" });
   assert.equal(next.attentionReason, "recovery-mismatch");
+  // filename is additive (see server.js/app.js's translated recovery-mismatch
+  // template) — message stays for compatibility with any other consumer.
+  assert.equal(next.attentionDetail.filename, "something-else.gcode");
+  assert.match(next.attentionDetail.message, /something-else\.gcode/);
 });
 
 test("reconcileOnStartup: dispatching + printer idle -> recovery-interrupted (never silently re-queued)", () => {

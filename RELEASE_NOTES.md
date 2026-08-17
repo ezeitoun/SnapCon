@@ -129,4 +129,25 @@ printer doesn't erase its history. Filterable by date, category, and free-text s
 Users can be scoped to specific printer groups instead of seeing the whole fleet, managed from
 Settings → Users.
 
+0.6.0
+### Multi-Language Support (English + Spanish)
+SnapCon's interface can now be used in English or Spanish, with the whole app — Fleet, Health,
+Maintenance, Settings, Queue Management, and the login screen itself — fully translated.
+- **Pick your language before you even log in.** The login screen has its own language selector, so
+  you don't need an account to read it in your language.
+- **Each user can set their own language**, independent of what everyone else on the account sees —
+  from the topbar's language picker or Settings → View. Admins can also set the site-wide default for
+  anyone who hasn't chosen one yet.
+- **Bundled languages are plain JSON files** (`locales-default/en.json`, `locales-default/es.json`),
+  with English always the authoritative source. A live copy is kept in a `locales/` folder next to
+  wherever SnapCon is running (alongside `config.json`), so an update to SnapCon never silently
+  overwrites a language file you've customized.
+- **Falls back to English automatically** wherever a translation is missing, blank, or doesn't match —
+  you'll never see a broken or half-translated screen.
+- **A built-in Language Editor** (Settings → View → Edit languages, admin-only) lets you add a new
+  language, edit any existing translation key-by-key, see translation completeness at a glance, and
+  import or export a language as a JSON file — so a translation can be prepared externally and dropped
+  in without editing anything by hand.
+- Snapmaker's own printer error-code catalog (titles, descriptions, help links) is deliberately left
+  exactly as Snapmaker wrote it — those are reference material, not SnapCon's own UI text.
 
