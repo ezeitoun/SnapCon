@@ -3,9 +3,17 @@
 // top of stock Klipper: 4-toolhead print_task_config (filament/color state),
 // structured error codes, print-preference/head-mapping macros, a camera
 // plugin RPC, and product_info/serial fields not present on vanilla Moonraker.
+//
+// NOT a selectable connector any more — it isn't in connectors/index.js's
+// REGISTRY, so no printer can be configured with it and this label never
+// reaches the UI. The module itself is still live on every U1:
+// snapmaker-u1-klipper-ws.js requires it directly, delegates every export
+// but probe() to it, and falls back to this probe() whenever its WebSocket
+// is unhealthy. Kept intact for that, and as the reference implementation
+// for future investigation — do not treat it as dead code.
 const http = require("./http-utils");
 
-exports.label = "SnapMaker (U1-Klipper)";
+exports.label = "SnapMaker U1 (Old)";
 exports.brand = "SnapMaker";
 exports.capabilities = {
   camera: true, filamentHeads: true, excludeObject: true, autoLevel: true,

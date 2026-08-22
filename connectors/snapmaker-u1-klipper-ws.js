@@ -1,19 +1,24 @@
-// connectors/snapmaker-u1-klipper-ws.js — experimental parallel connector for
-// the Snapmaker U1. Same normalized status as connectors/snapmaker-u1-klipper.js
-// (the known-good, unmodified original), but sourced from a persistent
-// Moonraker `printer.objects.subscribe` WebSocket instead of a fresh HTTP
+// connectors/snapmaker-u1-klipper-ws.js — THE Snapmaker U1 connector. Same
+// normalized status as connectors/snapmaker-u1-klipper.js (the original,
+// unmodified), but sourced from a persistent Moonraker
+// `printer.objects.subscribe` WebSocket instead of a fresh HTTP
 // `printer.objects.query` on every probe(). HTTP remains the fallback —
-// literally the existing connector's own probe(), called as-is — whenever
+// literally the original connector's own probe(), called as-is — whenever
 // the WebSocket isn't healthy.
 //
-// Deliberately NOT wired into the existing connector: every export below
-// other than probe()/label/capabilities is a direct passthrough to
+// Deliberately NOT merged into the original: every export below other than
+// probe()/label/capabilities is a direct passthrough to
 // connectors/snapmaker-u1-klipper.js, so there is exactly one implementation
 // of everything except status acquisition. The status normalization logic IS
 // duplicated (see normalizeU1State below) rather than extracted/shared, on
-// purpose — this file must never require touching the known-good connector,
-// which stays the immediate rollback path (just switch a printer's connector
-// type back in Settings) if this one misbehaves on some printer's firmware.
+// purpose — this file must never require touching the original, which stays
+// intact as the delegate underneath it and as the reference implementation.
+//
+// This connector replaced the original as the only selectable U1 connector:
+// the original is no longer in the REGISTRY and existing configs naming it
+// are rewritten here at startup (connectors/migrateU1Connector.js). The
+// automatic HTTP fallback below — not a connector switch in Settings — is
+// what covers a printer whose firmware the WebSocket path doesn't suit.
 //
 // Camera is completely out of scope here — getCameraSnapshot is re-exported
 // from the existing connector unchanged, and this file never touches its
@@ -22,7 +27,7 @@
 const http = require("./http-utils");
 const base = require("./snapmaker-u1-klipper");
 
-exports.label = "SnapMaker U1 Enhanced";
+exports.label = "SnapMaker U1";
 exports.brand = "SnapMaker";
 exports.capabilities = base.capabilities;
 

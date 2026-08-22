@@ -1,8 +1,16 @@
 // connectors/index.js — registry mapping a printer's `connector` config field
 // to its implementation. Adding a new brand means adding one file + one line
 // here — nothing else in the app should need to change.
+//
+// "snapmaker-u1-klipper" is deliberately NOT registered here any more. Its
+// module is still very much live code — snapmaker-u1-klipper-ws.js requires
+// it directly and delegates everything but status acquisition to it — it
+// just isn't a connector a printer can be configured with. Existing configs
+// are rewritten to the WS connector at startup (see
+// connectors/migrateU1Connector.js), and because an unregistered type falls
+// back to DEFAULT_TYPE below, a hand-edited config.json naming the old type
+// resolves to the same connector the migration would have given it.
 const REGISTRY = {
-  "snapmaker-u1-klipper": () => require("./snapmaker-u1-klipper"),
   "snapmaker-u1-klipper-ws": () => require("./snapmaker-u1-klipper-ws"),
   "klipper-moonraker": () => require("./klipper-moonraker"),
   "creality-klipper": () => require("./creality-klipper"),
@@ -11,7 +19,7 @@ const REGISTRY = {
   "simulator": () => require("./dummy-simulator")
 };
 
-const DEFAULT_TYPE = "snapmaker-u1-klipper";
+const DEFAULT_TYPE = "snapmaker-u1-klipper-ws";
 
 // Falls back to the default connector for an unknown/missing type — same
 // fallback POST /api/config already applies when validating a printer's

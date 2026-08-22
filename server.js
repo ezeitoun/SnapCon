@@ -186,6 +186,23 @@ const { migratePrinterPoolConfig } = require("./queue/migratePrinterPool");
   PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
   if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 })();
+// Retires the original U1 connector in favor of the WebSocket one (see
+// connectors/migrateU1Connector.js for the pure logic and why the swap is
+// safe to apply without asking). Same unconditional-every-startup shape as
+// the migration above: a no-op once no printer names the old connector.
+// Deliberately runs before anything is served, so no route, no probe and no
+// Settings row ever sees a printer on a connector that is no longer in the
+// REGISTRY. Even if the write below fails, CFG in memory is already migrated.
+const { migrateU1ConnectorConfig } = require("./connectors/migrateU1Connector");
+(function migrateU1ConnectorOnStartup() {
+  const { cfg, changed } = migrateU1ConnectorConfig(CFG);
+  CFG = cfg;
+  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  if (changed && !CONFIG_LOAD_FAILED) {
+    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
+    console.log("[config] migrated printers from the retired snapmaker-u1-klipper connector to snapmaker-u1-klipper-ws");
+  }
+})();
 function ensureGroupsSchema() {
   if (!Array.isArray(CFG.groups)) CFG.groups = [];
   let changed = false;
