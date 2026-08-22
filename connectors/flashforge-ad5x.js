@@ -122,7 +122,12 @@ async function startPrintFile(p, filename) {
       };
     });
   }
-  return ff.ffPost(p, "/printGcode", body, 8000);
+  // Goes through issuePrintAndConfirm, not a bare ffPost, for the same reason
+  // the single-nozzle path does — /printGcode reports Success for commands it
+  // silently discards after an upload (see that function's comment). This
+  // connector builds a different body but hits the identical endpoint, so it
+  // needs the identical confirmation.
+  return ff.issuePrintAndConfirm(p, body);
 }
 exports.applyHeadMapping = applyHeadMapping;
 exports.startPrintFile = startPrintFile;

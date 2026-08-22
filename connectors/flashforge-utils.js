@@ -77,6 +77,46 @@ const STATE_MAP = {
   error: "error", calibrate_doing: "busy"
 };
 
+// /detail really does carry an `errorCode` — confirmed live on a 5M Pro
+// (firmware 3.1.5), where it reads "" on a healthy machine. It used to be
+// hardcoded to "" here and discarded, even though the rest of SnapCon already
+// consumes this field: http-utils.js's fault history reads st.errorCode, and
+// the fleet card's error panel (public/app.js's lookupKlipperError) renders
+// it — both escaped, so a printer-controlled string is safe to pass through.
+//
+// Only a genuinely non-empty, non-zero code is reported. public/app.js:330
+// treats ANY truthy errorCode as 'attention', so a firmware that reports a
+// benign "0"/"0000" sentinel would otherwise pin every FlashForge printer to
+// a permanent attention badge — snapmaker-u1-klipper.js filters exactly such
+// a sentinel ("0000-0000-0000-0000") for the same reason. Only string/number
+// are accepted so an unexpected object can't stringify to "[object Object]".
+function faultCode(d) {
+  const raw = d.errorCode;
+  if (typeof raw !== "string" && typeof raw !== "number") return "";
+  const code = String(raw).trim();
+  return (!code || /^0+$/.test(code)) ? "" : code;
+}
+
+// A real 5M Pro reports `coolingFanSpeed`; `coolingFanLeftSpeed` — the name
+// taken from the documented example payload — does not appear anywhere in its
+// /detail (confirmed by dumping all 52 fields off firmware 3.1.5), which is
+// why fanPct was always null on real hardware. Both names are tried,
+// preferring the confirmed one, because this function is shared with
+// flashforge-ad5x.js and no AD5X was available to check which name that model
+// uses — so this can only add a reading, never take one away.
+//
+// STILL UNVERIFIED: the 0-255 PWM scale. The documented example value (128)
+// implies PWM, but a live idle printer reads 0, so this can only be settled
+// while a print is actually running. If the field turns out to be a 0-100
+// percentage instead, this under-reports by 2.55x.
+function fanPercent(d) {
+  const raw = (typeof d.coolingFanSpeed === "number") ? d.coolingFanSpeed
+    : (typeof d.coolingFanLeftSpeed === "number") ? d.coolingFanLeftSpeed
+      : null;
+  if (raw === null) return null;
+  return Math.max(0, Math.min(100, Math.round(raw / 255 * 100)));
+}
+
 // d = the raw /detail object. Shared by both connectors — AD5X's probe()
 // calls this then layers matlStationInfo-derived heads[] on top.
 function decodeCommonStatus(p, d) {
@@ -92,7 +132,7 @@ function decodeCommonStatus(p, d) {
     name: p.name, online: true,
     state: STATE_MAP[d.status] || d.status || "unknown",
     message: d.status === "error" ? String(d.errorMessage || d.status || "") : "",
-    errorCode: "",
+    errorCode: faultCode(d),
     filename: d.printFileName || "",
     progress,
     elapsed: typeof d.printDuration === "number" ? d.printDuration : null,
@@ -101,9 +141,7 @@ function decodeCommonStatus(p, d) {
     hotend: hotendSrc ? { temp: Math.round(hotendSrc.t), target: Math.round(hotendSrc.tt || 0) } : null,
     layer: (typeof d.printLayer === "number") ? { current: d.printLayer, total: d.targetPrintLayer || 0 } : null,
     speed: null, // not present in the documented /detail schema
-    // coolingFanLeftSpeed's example value (128) reads as a 0-255 PWM value —
-    // assumed, not confirmed against a real printer.
-    fanPct: (typeof d.coolingFanLeftSpeed === "number") ? Math.round(d.coolingFanLeftSpeed / 255 * 100) : null,
+    fanPct: fanPercent(d),
     activeExt: null,
     plate: null // FlashForge's API has no documented exclude_object equivalent
   };
@@ -170,7 +208,101 @@ async function estop(p) {
 const NO_CHANGE = -200;
 const bedTemp = (p, t) => ffControl(p, "temperatureCtl_cmd", { platform: Math.round(t), rightNozzle: NO_CHANGE, leftNozzle: NO_CHANGE, chamber: NO_CHANGE });
 
-const startPrintFile = (p, filename) => ffPost(p, "/printGcode", { fileName: filename, levelingBeforePrint: false }, 8000);
+// /printGcode answers {"code":0,"message":"Success"} even when it silently
+// discards the command. Confirmed live on a 5M Pro (firmware 3.1.5): a start
+// issued 1ms after uploadFile() resolved was acknowledged and then ignored
+// (the printer sat at "ready", never heated), while a byte-identical call
+// 1857ms later actually printed. server.js's /api/print fires the start the
+// instant the upload resolves, so Send to Printers landed inside that window
+// every time — and because the response says Success, SnapCon reported the
+// job done and wrote a "print-started" audit entry for a print that never
+// happened. The silent false success was the more dangerous half of the bug.
+//
+// A fixed sleep would only ever be a guess: that measurement used a 1MB file,
+// and the window plausibly scales with upload size. So the command is
+// confirmed against the printer's OWN state instead and re-issued if it
+// didn't take — self-calibrating, and free when the first attempt works
+// (the common case, since /api/printfile starts prints with no upload
+// before them and has never had this problem).
+//
+// Deliberately NOT retried when the printer is ALREADY behind an on-screen
+// dialog before the start is issued: the "clear the plate" prompt after a
+// finished/cancelled job (see eject()) leaves it busy/cancel and legitimately
+// refusing new jobs until an operator presses OK — confirmed live. That is a
+// human-blocked printer, not a dropped command, so it fails immediately with
+// something actionable rather than firing print commands at a machine that is
+// waiting on a person.
+//
+// That check is a PRE-FLIGHT ONLY and is deliberately never applied during
+// the confirmation window. Confirmed live on a 5M Pro: the printer passes
+// through a blocked-looking state on its way INTO a print — the window caught
+// it there while it was in fact heating the bed toward 50C, and it went on to
+// print the job normally. Failing on that transient reported a false failure
+// for a print that was genuinely running, which is a worse bug than the one
+// this function exists to fix. Inside the window, only reaching "printing"
+// counts; every other state simply keeps polling.
+// DEFAULT IS 1 — the start is verified but deliberately NOT re-issued.
+//
+// Re-issuing looked right on paper (the first /printGcode after an upload is
+// provably inert: measured "ready" 1800ms after it) and the second command
+// did make the printer report "printing". But confirmed live on a 5M Pro, it
+// never actually printed: heaters reached 220C/50C, printDuration ticked up,
+// and printProgress/currentPrintSpeed/coolingFanSpeed stayed at 0 with
+// printLayer pinned at the layer TOTAL — a phantom job that sat at full
+// temperature until cancelled. Reporting "printing" for that is worse than
+// the silent no-op this function was written to fix, and re-sending a
+// physical state-changing command to a machine whose API acknowledges
+// commands it discards is not a safe thing to do blind.
+//
+// So: keep the verification (which is what stops SnapCon lying about a print
+// that never began) and drop the automatic retry until the underlying
+// sequencing is actually understood. The loop still honours a higher
+// attempts override so the behaviour remains testable/measurable, but no
+// production path re-issues a start today.
+const PRINT_CONFIRM_ATTEMPTS = 1;
+const PRINT_CONFIRM_WINDOW_MS = 2500;
+const PRINT_CONFIRM_POLL_MS = 500;
+// Mapped states (STATE_MAP output) that mean "a person has to act", not
+// "the command was dropped".
+const PRINT_BLOCKED_STATES = new Set(["busy", "paused", "cancelled"]);
+
+// opts is a named-option override for the three timings above; production
+// callers pass nothing and get the measured defaults. It exists so the
+// confirmation logic can be tested without spending its real wall-clock
+// budget — the defaults are the contract, not the parameters.
+async function issuePrintAndConfirm(p, body, opts = {}) {
+  const attempts = opts.attempts || PRINT_CONFIRM_ATTEMPTS;
+  const windowMs = opts.windowMs || PRINT_CONFIRM_WINDOW_MS;
+  const pollMs = opts.pollMs || PRINT_CONFIRM_POLL_MS;
+  // Pre-flight (see above): only a printer that is blocked BEFORE anything is
+  // sent counts as human-blocked. A failed read here is not evidence of
+  // anything, so it falls through and the start is attempted normally.
+  let pre = "";
+  try { pre = STATE_MAP[(await ffDetail(p)).status] || ""; } catch { /* not evidence */ }
+  if (PRINT_BLOCKED_STATES.has(pre)) {
+    throw new Error("The printer isn't ready for a new job — its screen is showing a dialog. Clear it on the printer, then try again.");
+  }
+
+  let seen = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const res = await ffPost(p, "/printGcode", body, 8000);
+    const deadline = Date.now() + windowMs;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, pollMs));
+      let state;
+      // A transient read failure is not evidence either way — keep polling
+      // rather than treating it as a dropped command and re-issuing a start.
+      try { state = STATE_MAP[(await ffDetail(p)).status] || ""; } catch { continue; }
+      if (state === "printing") return res;
+      seen = state;
+    }
+  }
+  throw new Error("The printer acknowledged the print but never started it (still "
+    + (seen === "standby" || !seen ? "idle" : seen) + " after " + attempts
+    + " attempts) — this can happen right after a large upload. Try again.");
+}
+
+const startPrintFile = (p, filename) => issuePrintAndConfirm(p, { fileName: filename, levelingBeforePrint: false });
 
 // ---- File management ----
 async function listFiles(p) {
@@ -307,6 +439,6 @@ async function getCameraSnapshot(p) {
 
 module.exports = {
   baseUrl, fetchTimeout, ffPost, ffDetail, ffControl, STATE_MAP, decodeCommonStatus,
-  pause, resume, cancel, eject, estop, bedTemp, startPrintFile,
+  pause, resume, cancel, eject, estop, bedTemp, startPrintFile, issuePrintAndConfirm,
   listFiles, getThumbnail, getFileMetadata, uploadFile, getCameraSnapshot
 };
