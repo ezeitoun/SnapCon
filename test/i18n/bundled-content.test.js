@@ -342,10 +342,36 @@ test("the printer.* and fleet.* namespaces exist — Regular/Compact/Camera card
     "fleet.queued.starting_print_status", "fleet.queued.printing_status",
     "fleet.status.connecting_short", "fleet.status.connecting_badge", "fleet.status.reconnecting",
     "fleet.status.unreachable", "fleet.status.count_online",
-    "fleet.confirm_estop", "fleet.confirm_cancel_print", "fleet.estop_status_sending", "fleet.estop_status_done",
+    "fleet.estop_status_sending", "fleet.estop_status_done",
     "fleet.ctl_status_working_pause", "fleet.ctl_status_working_resume", "fleet.ctl_status_working_cancel",
     "fleet.ctl_status_done_resume"]
     .forEach(k => assert.ok(k in enFlat, `${k} must exist`));
+  // The E-Stop confirmation moved from a native confirm() (fleet.confirm_estop,
+  // now removed) to the hold-to-confirm dialog — every string it needs lives
+  // under fleet.estop.*, translatable (the native dialog's OK/Cancel never
+  // could be) and reused by the generic openHoldConfirmDialog() component.
+  assert.equal("fleet.confirm_estop" in enFlat, false, "replaced by the fleet.estop.* hold-to-confirm dialog");
+  ["title", "consequences_title", "consequence_halt", "consequence_lose_print", "consequence_restart",
+    "alternative_note", "progress_line", "hold_label", "hold_label_countdown", "helper_idle", "helper_holding"]
+    .forEach(k => assert.ok(`fleet.estop.${k}` in enFlat, `fleet.estop.${k} must exist`));
+  assert.ok(enFlat["fleet.estop.progress_line"].includes("{elapsed}") && enFlat["fleet.estop.progress_line"].includes("{remaining}"));
+  assert.ok(enFlat["fleet.estop.hold_label"].includes("{printer}"));
+  assert.ok(enFlat["fleet.estop.hold_label_countdown"].includes("{n}"));
+
+  // Cancel print also moved off a native confirm() (fleet.confirm_cancel_print,
+  // now removed) onto the SAME generic dialog component, in its click (not
+  // hold) variant — reuses fleet.estop.consequences_title ("This will:")
+  // rather than duplicating it, and fleet.progress.elapsed_label/
+  // filament_label/remaining_label for its stats strip (see doCancelPrint).
+  assert.equal("fleet.confirm_cancel_print" in enFlat, false, "replaced by the fleet.cancelPrint.* click-confirm dialog");
+  ["title", "consequence_stops", "consequence_lost", "consequence_queue_managed",
+    "consequence_queue_standalone", "alternative_note", "keep_printing", "confirm_button"]
+    .forEach(k => assert.ok(`fleet.cancelPrint.${k}` in enFlat, `fleet.cancelPrint.${k} must exist`));
+  assert.ok(enFlat["fleet.cancelPrint.consequence_lost"].includes("{elapsed}") && enFlat["fleet.cancelPrint.consequence_lost"].includes("{filament}"));
+  // The dismiss button deliberately does NOT reuse common.cancel — the
+  // action itself is also called "cancel," so a button labeled "Cancel"
+  // would be ambiguous about which of the two opposite meanings it has.
+  assert.notEqual(enFlat["fleet.cancelPrint.keep_printing"], enFlat["common.cancel"]);
 
   // Camera offline placeholder deliberately REUSES printer_status.offline
   // (identical meaning) rather than a duplicate fleet.camera key.
@@ -437,7 +463,8 @@ test("fleet toolbar, printer-detail modals, file sidebar, and file/send/print wo
   // status vocabulary, distinct complete templates rather than a suffix
   // concatenated onto a translated base.
   ["status_uploading", "status_uploading_pct", "status_queued_will_upload", "status_queued_short",
-    "status_setting_head_mapping", "status_printing_on", "status_printing_on_mapped",
+    "status_setting_head_mapping", "status_leveling_bed", "status_calibrating_flow", "status_preparing_timelapse",
+    "status_printing_on", "status_printing_on_mapped",
     "status_uploaded", "status_uploaded_mapped"]
     .forEach(k => assert.ok(`fleet.print.${k}` in enFlat, `fleet.print.${k} must exist`));
   assert.ok(enFlat["fleet.print.status_printing_on"].includes("{printer}"));
@@ -489,7 +516,7 @@ test("fleet toolbar, printer-detail modals, file sidebar, and file/send/print wo
   assert.ok(enFlat["fleet.modal.snapshot.captured_at"].includes("{time}"));
 
   // Send / Quick Print / pfile workflow modals.
-  ["title", "select_one", "done_summary", "error_summary", "idle_only", "upload_and_print"]
+  ["title", "select_one", "done_summary", "error_summary", "idle_only", "compatible_only", "confirm_incompatible", "upload_and_print"]
     .forEach(k => assert.ok(`fleet.modal.send.${k}` in enFlat, `fleet.modal.send.${k} must exist`));
   assert.ok(enFlat["fleet.modal.send.done_summary"].includes("{ok}") && enFlat["fleet.modal.send.done_summary"].includes("{total}"));
 
@@ -670,19 +697,32 @@ test("the health.* namespace exists — page chrome, the Needs Attention code-ke
   assert.notEqual(enFlat["health.toolheads.state_active"], enFlat["fleet.card.afc_active"]);
 
   // Controller/System/Heaters/Fans/Faults/Storage cards.
-  ["card_title", "desc", "reading_retransmits", "reading_invalid_bytes", "reading_task_load",
-    "rate_unit", "explain_retransmits", "explain_invalid", "explain_task_load"]
+  // Controller link is a table now: no "desc" paragraph, and no "rate_unit"
+  // — the per-1M-bytes unit moved into the column header, where it's stated
+  // once instead of on every value.
+  ["card_title", "col_controller", "reading_retransmits", "reading_invalid_bytes", "reading_task_load",
+    "unit_per_million", "unit_bytes", "unit_ms", "warn_line",
+    "explain_retransmits", "explain_invalid", "explain_task_load"]
     .forEach(k => assert.ok(`health.controller.${k}` in enFlat, `health.controller.${k} must exist`));
-  ["card_title", "desc", "reading_cpu_temp", "reading_cpu_usage", "reading_memory"]
+  assert.ok("health.controller.warn_more_one" in enFlat && "health.controller.warn_more_other" in enFlat);
+  // No "desc" here either: System, like Storage, dropped its description
+  // paragraph when it moved under the metrics row at one tile wide.
+  ["card_title", "reading_cpu_temp", "reading_cpu_usage", "reading_memory"]
     .forEach(k => assert.ok(`health.system.${k}` in enFlat, `health.system.${k} must exist`));
-  ["card_title", "desc", "state_idle", "state_heating", "state_cooling", "state_settling",
+  // No "desc": Heaters dropped its description paragraph along with the other
+  // cards that moved into the one-tile-wide metrics columns.
+  ["card_title", "state_idle", "state_heating", "state_cooling", "state_settling",
     "reading_transit", "reading_stable", "imbalance_note"]
     .forEach(k => assert.ok(`health.heaters.${k}` in enFlat, `health.heaters.${k} must exist`));
-  ["card_title", "desc", "reading_commanded", "reading_rpm", "reading_not_measurable", "show_all_button"]
+  // No "desc", "show_all_button" or summary_all_stopped_*: the Fans card
+  // dropped its description and now always lists every fan, so there is no
+  // collapsed summary to expand.
+  ["card_title", "reading_commanded", "reading_rpm", "reading_not_measurable"]
     .forEach(k => assert.ok(`health.fans.${k}` in enFlat, `health.fans.${k} must exist`));
-  assert.ok("health.fans.summary_all_stopped_one" in enFlat && "health.fans.summary_all_stopped_other" in enFlat);
   ["card_title", "none", "active_badge", "unknown_error"].forEach(k => assert.ok(`health.faults.${k}` in enFlat, `health.faults.${k} must exist`));
-  ["card_title", "desc", "critical_banner", "cat_gcode", "unused_suffix", "totals",
+  // No "desc": the Storage card dropped its description paragraph when it
+  // moved under the Print time metric at one tile wide.
+  ["card_title", "critical_banner", "cat_gcode", "sync_root_gcodes", "unused_suffix", "totals",
     "sync_title_unsupported", "sync_title_not_configured", "sync_title_running",
     "sync_button_syncing", "sync_button_idle", "sync_status_listing", "sync_status_downloading",
     "sync_status_downloading_file", "sync_status_cleaning", "sync_status_error", "unknown_error",
@@ -695,8 +735,13 @@ test("the health.* namespace exists — page chrome, the Needs Attention code-ke
   // settings.printer_sync.gcode_archive ("G-code archive" — a different
   // phrase) — while Logs/Camera DO reuse settings.printer_sync.logs/.camera
   // (exact wording match confirmed against current source).
-  assert.notEqual(enFlat["health.storage.cat_gcode"], enFlat["settings.printer_sync.gcode_archive"]);
+  assert.notEqual(enFlat["health.storage.sync_root_gcodes"], enFlat["settings.printer_sync.gcode_archive"]);
+  // Two labels for one root, on purpose: the legend names the disk-usage
+  // CATEGORY, the sync button names what's being synced. Collapsing them
+  // back into one key would silently rename whichever side loses.
   assert.equal(enFlat["health.storage.cat_gcode"], "G-code");
+  assert.equal(enFlat["health.storage.sync_root_gcodes"], "Jobs");
+  assert.notEqual(enFlat["health.storage.cat_gcode"], enFlat["health.storage.sync_root_gcodes"]);
 
   ["card_title", "hours_prefix"].forEach(k => assert.ok(`health.service.${k}` in enFlat));
   ["card_title", "add_button", "none"].forEach(k => assert.ok(`health.service_history.${k}` in enFlat));
@@ -762,11 +807,11 @@ test("final i18n v1 closure fixes exist — queueBtn's imperative title bug (sam
   // Fleet's "Selected Model" preview card (renderJob()) — deferred out of
   // Fleet Phase 3's named scope, now converted.
   ["section_title", "preview_alt", "deselect_title", "deselect_alt", "fs_fork_fallback",
-    "full_spectrum_title", "compat_warning", "uses_colors_prefix", "hint_full_spectrum",
+    "full_spectrum_title", "detected_printer", "brand_unknown", "uses_colors_prefix", "hint_full_spectrum",
     "hint_over_toolheads", "hint_confirm_mapping", "no_colors_warning"]
     .forEach(k => assert.ok(`fleet.job.${k}` in enFlat, `fleet.job.${k} must exist`));
   assert.ok("fleet.job.needed_colors_one" in enFlat && "fleet.job.needed_colors_other" in enFlat);
-  assert.ok(enFlat["fleet.job.compat_warning"].includes("{model}"), "the raw slicer-reported printerModel stays a parameter, never baked into the sentence");
+  assert.ok(enFlat["fleet.job.detected_printer"].includes("{brand}"), "the detected connector brand stays a parameter, never baked into the sentence");
   assert.ok(enFlat["fleet.job.full_spectrum_title"].includes("{fork}"));
   // The card's own "Send to printers" button reuses the Send modal's title —
   // no duplicate fleet.job.send_title.
@@ -822,5 +867,14 @@ test("final i18n v1 closure sweep — General tab's Fleet polling/Costs/Sending 
   assert.equal("settings.language_editor.col_translation" in enFlat, false);
   assert.equal("settings.language_editor.import_title" in enFlat, false);
   assert.equal("settings.language_editor.import_choose_file" in enFlat, false);
+});
+
+test("printer_status has short badge labels for the mapping-phase status override (leveling/calibrating/mapping heads/preparing)", () => {
+  // STATUS_OVERRIDE (public/app.js) shows one of these on the fleet card's
+  // status badge itself while a job's applyHeadMapping step is actually
+  // running — a real, multi-minute physical operation (e.g. Creality's G29)
+  // that Klipper's own reported state doesn't reflect (stays "standby").
+  ["leveling", "calibrating", "mapping_heads", "preparing"]
+    .forEach(k => assert.ok(`printer_status.${k}` in enFlat, `printer_status.${k} must exist`));
 });
 

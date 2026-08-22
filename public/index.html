@@ -106,11 +106,10 @@
       <button class="gear" id="bulkHeatBtn" data-i18n-title="global.topbar.bulk_heat_title" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" data-i18n-alt="global.topbar.heat_alt" alt="Heat"></button>
       <button class="gear" id="maintBtn" data-i18n-title="global.topbar.maintenance_title" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" data-i18n-alt="global.topbar.maintenance_title" alt="Maintenance"></button>
       <button class="gear" id="healthBtn" data-i18n-title="global.topbar.health_title" title="Printer health" data-i18n-aria-label="global.topbar.health_title" aria-label="Printer health"><img src="/health.svg" class="topbar-icon" data-i18n-alt="global.topbar.health_title" alt="Printer health"><span class="health-badge" id="healthBadge" style="display:none"></span></button>
-      <!-- Placeholder icon — a real one is coming later; shown only when Queue Management is enabled. -->
-      <button class="gear" id="queueBtn" data-i18n-title="settings.tabs.queue" title="Queue Management" style="display:none">
-        <svg width="22.1" height="22.1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="topbar-icon"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="12" height="4" rx="1"/></svg>
-      </button>
-      <button class="gear" id="themeBtn" title="Switch to light theme" aria-pressed="false"><img src="/moon.svg" class="topbar-icon" id="themeBtnIcon" alt="Dark theme"></button>
+      <!-- Shown only when Queue Management is enabled. -->
+      <button class="gear" id="queueBtn" data-i18n-title="settings.tabs.queue" title="Queue Management" style="display:none"><img src="/queue.svg" class="topbar-icon" data-i18n-alt="settings.tabs.queue" alt="Queue Management"></button>
+      <!-- Static state = dark theme active, so the icon offers the switch TO light (see syncThemeButton, which corrects it on load). -->
+      <button class="gear" id="themeBtn" title="Switch to light theme" aria-pressed="false"><img src="/sun.svg" class="topbar-icon" id="themeBtnIcon" alt="Light theme"></button>
       <button class="gear" id="gear" data-i18n-title="settings.title" title="Settings"><img src="/gear.svg" class="topbar-icon" data-i18n-alt="settings.title" alt="Settings"></button>
       <span class="topbar-clock" id="topbarClock"></span>
       <div class="user-badge" id="userBadge" style="display:none">
@@ -715,7 +714,7 @@
         <div class="pstatus" id="healthSvcStatus"></div>
         <div class="unload-footer" style="margin-top:12px">
           <button type="button" class="btn ghost" id="healthSvcCancel" data-i18n="common.cancel">Cancel</button>
-          <button type="button" class="btn primary" id="healthSvcSave" disabled data-i18n="common.save">Save</button>
+          <button type="button" class="btn primary" id="healthSvcSave" disabled data-i18n="common.add">Add</button>
         </div>
       </div>
     </div>
@@ -1023,6 +1022,29 @@
     </div>
   </div>
 
+  <div class="modal" id="holdConfirmModal">
+    <div class="modalbox hc-box" style="max-width:440px">
+      <div class="hc-header">
+        <img src="/estop-icon.svg" class="hc-header-icon" id="hcIcon" alt="">
+        <div class="hc-header-text">
+          <div class="hc-title" id="hcTitle"></div>
+          <div class="hc-subtitle" id="hcSubtitle"></div>
+        </div>
+      </div>
+      <div class="hc-panel" id="hcPanel" style="display:none"></div>
+      <div class="hc-consequences" id="hcConsequences"></div>
+      <div class="hc-status" aria-live="polite" id="hcStatus" style="display:none"></div>
+      <div class="hc-actions" id="hcActions">
+        <button class="btn ghost" id="hcCancel"></button>
+        <button class="btn danger-filled hc-hold-btn" id="hcHoldBtn" type="button">
+          <span class="hc-hold-fill" id="hcHoldFill"></span>
+          <span class="hc-hold-label" id="hcHoldLabel"></span>
+        </button>
+      </div>
+      <div class="hc-helper" id="hcHelper"></div>
+    </div>
+  </div>
+
   <div class="modal" id="bulkheatmodal">
     <div class="modalbox" style="max-width:480px">
       <div class="modalhdr"><span data-i18n="global.topbar.bulk_heat_title">Heat multiple printers</span><button class="modalx" id="bulkheatx">✕</button></div>
@@ -1246,6 +1268,7 @@
         <span style="font-size:12px;color:var(--ink-faint)" data-i18n="settings.tabs.printers">Printers</span>
         <button class="btn ghost" id="sendSelectAll" style="padding:3px 9px;font-size:11px" data-i18n="fleet.toolbar.select_all">Select all</button>
         <button class="btn ghost" id="sendSelectIdle" style="padding:3px 9px;font-size:11px" data-i18n="fleet.modal.send.idle_only">Idle only</button>
+        <button class="btn ghost" id="sendSelectCompatible" style="padding:3px 9px;font-size:11px" data-i18n="fleet.modal.send.compatible_only">Compatible only</button>
       </div>
       <div class="send-list" id="sendlist"></div>
       <div class="print-opts" id="sendOpts"></div>

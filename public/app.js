@@ -77,6 +77,21 @@ async function loadConnectorTypes(){
 function connectorCaps(type){
   return (CONNECTOR_TYPES.find(c=>c.type===type)||{}).capabilities||{};
 }
+// The one connector whose Brand field the user may type into: Klipper/
+// Moonraker is a protocol many vendors speak (Voron, Ratrig, a self-built
+// CoreXY), so "Klipper" names the connector, not the machine's maker. Every
+// other connector IS a brand, so its Brand stays derived and read-only.
+// The server enforces the same rule at save time — this constant only keeps
+// the UI in step with it.
+const BRAND_EDITABLE_CONNECTOR="klipper-moonraker";
+// True only for a brand string SnapCon itself derives from a connector.
+// A generic-Klipper printer with a typed brand ("Voron") is deliberately
+// NOT one of these — see isCompatiblePrinter(), which treats an unknown
+// brand as "can't tell" rather than a mismatch.
+function isKnownConnectorBrand(brand){
+  const b=String(brand||"").trim().toLowerCase();
+  return !!b&&CONNECTOR_TYPES.some(c=>String(c.brand||"").trim().toLowerCase()===b);
+}
 
 // ---- User Access Management: session state + role helpers ----
 // Both hard-return true when USERS_ENABLED is false, so every gated call site
@@ -339,7 +354,19 @@ function camBucket(p){
 // caller (sortedFleet's STATUS_RANK, search filtering, etc.) keys off of.
 // No caller may compare statusTxt against an English literal for logic —
 // verified against every current call site during this phase's audit.
+// Client-side, per-initiator status-badge override while THIS browser tab's
+// own pollJob() is mid-"mapping" phase for a printer (e.g. a real bed-level
+// pass on Creality) — the printer's own reported state stays "standby" the
+// whole time (Klipper's print_stats only reflects a queued print job, not a
+// pre-print macro), so without this the badge would misleadingly keep
+// saying "Idle"/"Loaded" while a multi-minute physical operation is
+// actually running. Purely local UI state, same limitation the existing
+// pstatus/send-row text already has: another browser tab watching the same
+// fleet won't see it, only the tab that triggered the action.
+const STATUS_OVERRIDE = new Map(); // String(printer id) -> {statusColor, statusTxt}
 function statusColorText(p){
+  const override=STATUS_OVERRIDE.get(String(p.id));
+  if(override) return override;
   if(!p.online) return { statusColor:"var(--ink-faint)", statusTxt:t("printer_status.offline") };
   if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:t("printer_status.printing") };
   if(p.state==="paused") return { statusColor:"var(--paused)", statusTxt:t("printer_status.paused") };
@@ -965,14 +992,15 @@ function wireModal(modalId, closeFn, buttonIds){
   $(modalId).addEventListener("click", e=>{ if(e.target===$(modalId)) closeFn(); });
 }
 
-// The icon always shows the CURRENT theme (sun = light is active, moon =
-// dark is active); title/aria describe what clicking does, i.e. the switch
-// TO the other theme — never the same word for both, so neither reads as
-// stale after a click.
+// The icon shows the theme clicking would switch TO, not the one you're
+// already in — the common convention for a theme toggle (a moon while you're
+// in light mode means "click for dark"). Icon, alt and title therefore all
+// describe the same destination, so nothing on the button reads as stale
+// after a click.
 function syncThemeButton(){
   const light=document.documentElement.getAttribute("data-theme")==="light";
-  $("themeBtnIcon").src=light?"/sun.svg":"/moon.svg";
-  $("themeBtnIcon").alt=t(light?"global.topbar.theme_alt_light":"global.topbar.theme_alt_dark");
+  $("themeBtnIcon").src=light?"/moon.svg":"/sun.svg";
+  $("themeBtnIcon").alt=t(light?"global.topbar.theme_alt_dark":"global.topbar.theme_alt_light");
   $("themeBtn").title=t(light?"global.topbar.theme_title_to_dark":"global.topbar.theme_title_to_light");
   $("themeBtn").setAttribute("aria-pressed",light?"true":"false");
 }
@@ -1119,23 +1147,19 @@ function refreshFleetModalsDynamicText(){
 // special handling. This is only for a live locale switch while the page is
 // open. renderHealthPicker()/renderHealthBody() are pure re-renders off
 // already-cached FLEET/HEALTH_DATA/HEALTH_MAINT/HEALTH_SYNC_STATE, no
-// network call. Known minor exception: if the inline service form is
-// currently open, renderHealthBody() is skipped entirely (it unconditionally
-// hides that form via closeHealthServiceForm() at its own end) rather than
-// closing a form the user is actively filling out purely because they
-// switched language — the health cards behind it stay in their pre-switch
-// locale until the form closes; the form's own visible text (chips, next-due
-// preview) still re-translates below.
+// network call. This used to skip renderHealthBody() entirely whenever the
+// service form was open — the form was destroyed by that render, and losing
+// a half-typed entry to a language switch was worse than leaving the cards
+// in the old locale. That trade-off is gone: the form is now moved across
+// each render (mountHealthServiceForm) and only re-initialised on a printer
+// change, so the page can re-translate in full without touching it.
 function refreshHealthDynamicText(){
   if(!$("healthPage")||!$("healthPage").classList.contains("show")) return;
   renderHealthPicker();
   updateHealthUpdatedAgo();
-  const formOpen=$("healthServiceForm")&&$("healthServiceForm").style.display!=="none";
-  if(!formOpen) renderHealthBody();
-  else{
-    renderHealthSvcChips();
-    updateHealthNextDuePreview();
-  }
+  renderHealthBody();
+  renderHealthSvcChips();      // the form's own translated bits — it survived the render above
+  updateHealthNextDuePreview();
 }
 // Mirrors refreshHealthDynamicText() above: pure re-renders off already-
 // cached MAINT_ENTRIES/MAINT_WARRANTY/MAINT_CURRENT_PRINTER_NAME (added
@@ -1783,6 +1807,7 @@ function wireUI(){
     updateCamToolbar();
   });
   wireModal("bedmodal", closeBedModal, ["bedmodalx","bedmodalcancel"]);
+  wireHoldConfirmDialog();
   wireModal("bulkheatmodal", closeBulkHeatModal, ["bulkheatx","bulkheatCancel"]);
   $("bulkHeatBtn").addEventListener("click", openBulkHeat);
   $("bulkheatSelectAll").addEventListener("change", bulkheatToggleSelectAll);
@@ -1809,7 +1834,24 @@ function wireUI(){
   $("multiselectClear").addEventListener("click", ()=>{ SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); renderList(); });
   wireFileDrag();
   wireModal("maintReportModal", closeMaintReport, ["maintReportX","maintCancel"]);
-  $("maintBtn").addEventListener("click", openMaintReport);
+  // On the Health page the maintenance data is already on screen, for the
+  // printer already in context — so the icon takes you to that card instead
+  // of opening the fleet-wide modal (whose first act would be asking which
+  // printer you meant). Everywhere else it opens the modal as before.
+  $("maintBtn").addEventListener("click", ()=>{
+    // The form is the primary maintenance surface on this page; the
+    // read-only summary card is the fallback if it isn't mounted.
+    const card=$("healthServiceForm")||$("healthMaintCard");
+    if(card&&$("healthPage")&&$("healthPage").classList.contains("show")){
+      const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      card.scrollIntoView({behavior:reduce?"auto":"smooth",block:"center"});
+      card.classList.remove("health-card-flash");
+      void card.offsetWidth; // restart the highlight if it is already running
+      card.classList.add("health-card-flash");
+      return;
+    }
+    openMaintReport();
+  });
   $("maintPrinterSel").addEventListener("change", ()=>loadMaintDetail(parseInt($("maintPrinterSel").value,10)));
   $("maintSave").addEventListener("click", saveMaintenance);
   $("maintOfflineToggle").addEventListener("change", toggleMaintenanceMode);
@@ -2030,6 +2072,16 @@ function wireUI(){
     document.querySelectorAll(".send-chk").forEach(c=>{
       const row=FLEET.find(p=>p.id===c.dataset.id);
       c.checked=!!(row&&row.online&&row.state==="idle");
+    });
+  });
+  $("sendSelectCompatible").addEventListener("click",()=>{
+    const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
+    document.querySelectorAll(".send-chk").forEach(c=>{
+      const row=FLEET.find(p=>p.id===c.dataset.id);
+      // Keeps confirmed-compatible AND "can't tell" printers checked —
+      // only a KNOWN mismatch (isCompatiblePrinter===false, same test the
+      // red row-name highlighting uses) is excluded.
+      c.checked=!row||isCompatiblePrinter(detectedBrand,row.brand)!==false;
     });
   });
 }
@@ -2474,6 +2526,7 @@ function fleetRowForPrinterId(pid){
 // sectioned. HEALTH_SYNCING_FROM_POPSTATE suppresses pushState while we're
 // the ones reacting to a back/forward navigation, not causing one. ----
 let HEALTH_PRINTER_ID=null, HEALTH_DATA=null, HEALTH_MAINT=null, HEALTH_REQ_TOKEN=0, HEALTH_SYNCING_FROM_POPSTATE=false;
+
 const DISK_CRITICAL_PCT=0.05, DISK_CRITICAL_BYTES=2*1024*1024*1024;
 // Per-session cache of the RICH (per-printer, /api/health-derived)
 // needsAttention result, filled in only for printers whose Health page has
@@ -2571,6 +2624,7 @@ async function loadHealthData(){
   catch(e){ health={ skipped:true, reason:t("health.could_not_reach",{message:e.message}) }; }
   try{ maint=await (await fetch("/api/maintenance?printer="+pid)).json(); }
   catch(e){ maint=null; }
+
   if(token!==HEALTH_REQ_TOKEN||pid!==HEALTH_PRINTER_ID) return; // superseded by a newer switch/refresh
   HEALTH_DATA=health; HEALTH_MAINT=maint;
   HEALTH_LAST_LOADED_AT=Date.now();
@@ -2686,37 +2740,6 @@ function readingRow(label,valueText,pct,state,opts){
     bar+
   `</div>`;
 }
-// Toolheads card: compact rows, not the fleet card's big spool-icon lanes —
-// this page shows several cards on one screen, so each row is head label
-// (respecting the T-notation setting via the existing headLabel(), not a
-// hardcoded T-prefix), a small color swatch, material, color name
-// (nameForHex()), and state. Empty (loaded:false) is a hollow row, matching
-// the empty-slot convention everywhere else; a loaded head with no reported
-// hex is its own distinct "loaded, color unknown" state — not confused with
-// empty, not guessing a color.
-function renderToolheadRow(h,i,active,finished){
-  const label=esc(headLabel(i));
-  if(!h||!h.loaded){
-    return `<div class="health-toolhead-row empty"><span class="health-toolhead-swatch empty"></span><span class="health-toolhead-label">${label}</span><span class="health-toolhead-material">${esc(t("health.toolheads.empty"))}</span><span class="health-toolhead-state"></span></div>`;
-  }
-  const hex=h.hex||null;
-  const colorName=hex?nameForHex(hex):"";
-  const material=h.material&&h.material!=="—"?h.material:t("health.toolheads.unknown_material");
-  const stateText=active?(finished?t("health.toolheads.state_last_used"):t("health.toolheads.state_active")):t("health.toolheads.state_loaded");
-  return `<div class="health-toolhead-row${active?" active":""}">`+
-    `<span class="health-toolhead-swatch${hex?"":" unknown"}" style="${hex?`background:${esc(hex)}`:""}" title="${hex?esc(hex):esc(t("health.toolheads.no_color_title"))}"></span>`+
-    `<span class="health-toolhead-label">${label}</span>`+
-    `<span class="health-toolhead-material">${esc(material)}${colorName?" · "+esc(colorName):""}</span>`+
-    `<span class="health-toolhead-state">${esc(stateText)}</span>`+
-  `</div>`;
-}
-function renderToolheadsCard(p){
-  if(!p||!p.capabilities?.filamentHeads) return "";
-  const heads=p.heads||[];
-  if(!heads.length) return "";
-  const rows=heads.map((h,i)=>renderToolheadRow(h,i,h&&h.loaded&&p.activeExt===i,p.state==="complete")).join("");
-  return `<div class="health-card"><div class="health-card-hdr">${esc(t("health.toolheads.card_title"))}</div>${rows}</div>`;
-}
 // MCU stats become readings, not a raw dump: a state dot plus the 3 values
 // that actually mean something, each against a warn/crit threshold with a
 // plain-language explanation. None of these thresholds are validated
@@ -2752,26 +2775,61 @@ function renderControllerCard(d){
   const cardTitle=t("health.controller.card_title");
   if(!mcus||!mcus.available) return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div><p class="settings-help">${esc(healthDataUnavailable(cardTitle,mcus&&mcus.reason))}</p></div>`;
   if(!mcus.list.length) return "";
-  const blocks=mcus.list.map(m=>{
+  // One row per controller instead of a ~300px block each. No bars: none of
+  // these three readings has a defined maximum (retransmits are a rate,
+  // invalid bytes a cumulative count, task load a duration), so a bar filled
+  // to some fraction of the CRITICAL THRESHOLD was drawing a proportion of
+  // nothing — "33 invalid bytes" is not "60% of anything". The number itself
+  // carries the state color, and the row's dot carries the worst of the
+  // three so a healthy fleet reads without parsing any numbers.
+  const unhealthy=[];
+  const rows=mcus.list.map(m=>{
     const r=mcuReading(m);
-    const rateTxt=r.rate!=null?t("health.controller.rate_unit",{rate:r.rate.toFixed(2)}):"—";
-    const explain=r.worst!=="healthy"?(r.rateState!=="healthy"?t("health.controller.explain_retransmits"):r.invalidState!=="healthy"?t("health.controller.explain_invalid"):t("health.controller.explain_task_load")):"";
-    // health-diag-vals is a raw diagnostic dump (retransmit/invalid/bytes
-    // written/srtt/rttvar/freq/task avg/stddev are Klipper/MCU protocol
-    // vocabulary, not SnapCon prose) — deliberately left untranslated, same
-    // as any other raw firmware diagnostic per project convention.
-    return `<div class="health-mcu-block">`+
-      `<div class="health-mcu-hdr"><span class="health-mcu-dot ${r.worst}"></span><span class="health-mcu-name">${esc(mcuLabel(m.name))}</span></div>`+
-      readingRow(t("health.controller.reading_retransmits"),rateTxt,r.rate!=null?r.rate/MCU_RETRANSMIT_RATE_CRIT*100:0,r.rateState)+
-      readingRow(t("health.controller.reading_invalid_bytes"),m.bytesInvalid??"—",m.bytesInvalid!=null?m.bytesInvalid/MCU_INVALID_BYTES_CRIT*100:0,r.invalidState)+
-      readingRow(t("health.controller.reading_task_load"),m.mcuTaskAvg!=null?(m.mcuTaskAvg*1000).toFixed(3)+" ms":"—",m.mcuTaskAvg!=null?m.mcuTaskAvg/MCU_TASK_AVG_CRIT*100:0,r.taskState)+
-      (explain?`<div class="reading-note ${r.worst}">${esc(explain)}</div>`:"")+
-      `<div class="health-diag-vals">retransmit ${m.bytesRetransmit??"—"} · invalid ${m.bytesInvalid??"—"} · bytes written ${m.bytesWrite??"—"} · srtt ${m.srtt??"—"} · rttvar ${m.rttvar??"—"} · freq ${m.freq??"—"} · task avg ${m.mcuTaskAvg??"—"} · task stddev ${m.mcuTaskStddev??"—"}</div>`+
+    const name=mcuLabel(m.name);
+    if(r.worst!=="healthy"){
+      const detail=r.rateState!=="healthy"?t("health.controller.explain_retransmits")
+        :r.invalidState!=="healthy"?t("health.controller.explain_invalid")
+        :t("health.controller.explain_task_load");
+      unhealthy.push({name,detail,worst:r.worst});
+    }
+    // The raw dump that used to be a visible line per block. srtt/rttvar/
+    // freq/task stddev aren't actionable and the rest duplicates the columns,
+    // so it lives on the row's title instead of costing four lines of height.
+    // Klipper/MCU protocol vocabulary — untranslated by the same convention
+    // as every other raw firmware diagnostic on this page.
+    const raw=`retransmit ${m.bytesRetransmit??"—"} · invalid ${m.bytesInvalid??"—"} · bytes written ${m.bytesWrite??"—"} · srtt ${m.srtt??"—"} · rttvar ${m.rttvar??"—"} · freq ${m.freq??"—"} · task avg ${m.mcuTaskAvg??"—"} · task stddev ${m.mcuTaskStddev??"—"}`;
+    const num=(text,state)=>`<span class="mcu-cell mcu-num ${state}" role="cell">${esc(text)}</span>`;
+    return `<div class="mcu-row" role="row" title="${esc(raw)}">`+
+      `<span class="mcu-cell mcu-name" role="cell"><span class="health-mcu-dot ${r.worst}"></span>${esc(name)}</span>`+
+      num(r.rate!=null?r.rate.toFixed(2):"—",r.rateState)+
+      num(m.bytesInvalid??"—",r.invalidState)+
+      num(m.mcuTaskAvg!=null?(m.mcuTaskAvg*1000).toFixed(3):"—",r.taskState)+
     `</div>`;
   }).join("");
+  // One warning for the whole card, naming the worst controller and what to
+  // check — not the same explanation repeated inside every block.
+  unhealthy.sort((a,b)=>(a.worst==="critical"?0:1)-(b.worst==="critical"?0:1));
+  const lead=unhealthy[0];
+  const note=lead?`<div class="reading-note ${lead.worst}">`+
+    esc(t("health.controller.warn_line",{controller:lead.name,detail:lead.detail}))+
+    (unhealthy.length>1?" "+esc(tn("health.controller.warn_more",unhealthy.length-1,{count:unhealthy.length-1})):"")+
+  `</div>`:"";
+  // Two-line header: label, then the column's constant unit under it. Every
+  // row — this one included — emits exactly four cells through the same grid,
+  // which is what keeps each header sitting over its own numbers.
+  const th=(label,unit,extraClass)=>`<span class="mcu-cell mcu-th ${extraClass||""}" role="columnheader">${esc(label)}`+
+    (unit?`<span class="mcu-unit">${esc(unit)}</span>`:"")+`</span>`;
   return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>`+
-    `<p class="health-card-desc">${esc(t("health.controller.desc"))}</p>`+
-    blocks+
+    `<div class="mcu-table" role="table">`+
+      `<div class="mcu-row mcu-head" role="row">`+
+        th(t("health.controller.col_controller"),"")+
+        th(t("health.controller.reading_retransmits"),t("health.controller.unit_per_million"),"mcu-num")+
+        th(t("health.controller.reading_invalid_bytes"),t("health.controller.unit_bytes"),"mcu-num")+
+        th(t("health.controller.reading_task_load"),t("health.controller.unit_ms"),"mcu-num")+
+      `</div>`+
+      rows+
+    `</div>`+
+    note+
   `</div>`;
 }
 // System utilization — the host machine running Klipper, not the printer's
@@ -2789,7 +2847,11 @@ function renderSystemCard(d){
   if(!s||!s.available) return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div><p class="settings-help">${esc(healthDataUnavailable(cardTitle,s&&s.reason))}</p></div>`;
   const rows=[];
   if(s.cpuTemp!=null){
-    rows.push(readingRow(t("health.system.reading_cpu_temp"),Math.round(s.cpuTemp)+" °C",s.cpuTemp/CPU_TEMP_CRIT*100,stateFor(s.cpuTemp,CPU_TEMP_WARN,CPU_TEMP_CRIT)));
+    // No bar: CPU temperature has no defined maximum, so the old
+    // temp/CPU_TEMP_CRIT fill was drawing a fraction of a threshold, not of a
+    // real ceiling — the same reason the Controller card dropped its bars.
+    // CPU usage and memory below keep theirs: those ARE true 0-100%.
+    rows.push(readingRow(t("health.system.reading_cpu_temp"),Math.round(s.cpuTemp)+" °C",null,stateFor(s.cpuTemp,CPU_TEMP_WARN,CPU_TEMP_CRIT)));
   }
   if(s.cpuUsage!=null){
     rows.push(readingRow(t("health.system.reading_cpu_usage"),Math.round(s.cpuUsage)+"%",s.cpuUsage,stateFor(s.cpuUsage,CPU_USAGE_WARN,CPU_USAGE_CRIT)));
@@ -2802,7 +2864,6 @@ function renderSystemCard(d){
   // health-diag-vals is a raw diagnostic dump, same convention as the
   // Controller card's — left untranslated by design.
   return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>`+
-    `<p class="health-card-desc">${esc(t("health.system.desc"))}</p>`+
     rows.join("")+
     `<div class="health-diag-vals">uptime ${s.uptimeSec!=null?fmtDuration(s.uptimeSec):"—"} · memory ${s.memory?s.memory.used+" / "+s.memory.total+" KB":"—"}</div>`+
   `</div>`;
@@ -2907,20 +2968,9 @@ function renderHeatersCard(d){
   const rows=heaters.list.map(heaterReadingRow).join("");
   const note=heaterImbalanceNote(heaters.list);
   return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>`+
-    `<p class="health-card-desc">${esc(t("health.heaters.desc"))}</p>`+
     rows+
     (note?`<div class="reading-note ${note.state}">${esc(note.text)}</div>`:"")+
   `</div>`;
-}
-// Same idea for fans: when everything reads 0, that's a summary line, not a
-// wall of zero rows. Auto-expands (or expands on click) the moment any fan
-// is actually running or reporting an RPM despite not being commanded on —
-// both are "worth a look" states. A fan with no tachometer (rpm:null) never
-// counts toward "is anything running" — it's simply not measurable, and
-// belongs in the expanded list's content, not driving whether the summary
-// shows at all.
-function fanIsActive(f){
-  return (typeof f.speed==="number"&&f.speed>0.05)||(typeof f.rpm==="number"&&f.rpm>0);
 }
 // Same commanded-vs-measured mismatch semantics as server.js's
 // checkFanMismatch, but evaluated fresh on every render, single-snapshot —
@@ -2934,6 +2984,9 @@ function fanReadingRow(f){
   const measurable=f.rpm!=null;
   const commanded=f.speed!=null&&f.speed>0.1;
   const mismatched=measurable&&commanded&&f.rpm<FAN_MISMATCH_RPM_THRESHOLD;
+  // Percentage on its own — "commanded" was the only word in the row and it
+  // described the number rather than adding to it. An unmeasurable fan reads
+  // N/A instead of a phrase, since the column is otherwise all values.
   const val=`${commandedPct!=null?t("health.fans.reading_commanded",{pct:commandedPct}):"—"} · ${measurable?t("health.fans.reading_rpm",{rpm:Math.round(f.rpm)}):t("health.fans.reading_not_measurable")}`;
   const state=mismatched?"warning":measurable?"healthy":"neutral";
   return readingRow(fanLabel(f.name),val,commandedPct,state);
@@ -2952,16 +3005,11 @@ function renderFansCard(d){
   if(!fans||!fans.available) return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div><p class="settings-help">${esc(healthDataUnavailable(cardTitle,fans&&fans.reason))}</p></div>`;
   const list=fans.list.filter(f=>!FAN_REDUNDANT_MIRROR.test(f.name));
   if(!list.length) return "";
-  const desc=`<p class="health-card-desc">${esc(t("health.fans.desc"))}</p>`;
-  const anyActive=list.some(fanIsActive);
-  const rows=list.map(fanReadingRow).join("");
-  if(!anyActive){
-    return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>${desc}`+
-      `<p class="settings-help" id="healthFansSummary">${esc(tn("health.fans.summary_all_stopped",list.length))} <button type="button" class="btn ghost btn-sm" id="healthFansExpand">${esc(t("health.fans.show_all_button"))}</button></p>`+
-      `<div class="health-fans-detail" id="healthFansDetail" style="display:none">${rows}</div>`+
-    `</div>`;
-  }
-  return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>${desc}${rows}</div>`;
+  // Every fan, always. The old "N fans, all stopped [Show all]" summary
+  // collapsed the card whenever nothing was spinning — which is the normal
+  // idle state, so the card was usually collapsed exactly when someone opened
+  // the page to look at it.
+  return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>${list.map(fanReadingRow).join("")}</div>`;
 }
 // Recent Faults: exception_manager's per-entry field shape was never
 // confirmed live (every printer checked had zero entries) — rendered
@@ -2985,12 +3033,28 @@ function renderFaultsCard(d){
   if(!f.list.length) return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div><p class="settings-help">${esc(t("health.faults.none"))}</p></div>`;
   return `<div class="health-card"><div class="health-card-hdr">${esc(cardTitle)}</div>`+f.list.map(renderFaultEntry).join("")+`</div>`;
 }
-function renderServiceHistoryCard(maint){
+
+// Every service logged for this printer, newest first. Deliberately just the
+// log: printer hours live in the form above it, and last service / warranty
+// are already on screen (the metric tile and the printer heading), so
+// repeating them here would be a third copy of the same two facts.
+function renderServiceLogCard(maint){
   const entries=(maint&&maint.entries)||[];
-  const header=`<div class="health-card-hdr-row"><div class="health-card-hdr">${esc(t("health.service_history.card_title"))}</div><button type="button" class="btn ghost btn-sm" id="healthAddService">${esc(t("health.service_history.add_button"))}</button></div>`;
-  if(!entries.length) return `<div class="health-card">${header}<p class="settings-help">${esc(t("health.service_history.none"))}</p></div>`;
-  const rows=entries.slice().reverse().map(e=>`<div class="health-service-row"><span class="health-service-date">${esc(fmtMaintDate(e.date))}</span><span class="health-service-component">${esc(e.component||"—")}</span><span class="health-service-comment">${esc(e.comment||"")}</span><span class="health-service-cost">${e.cost?esc(CURRENCY)+Number(e.cost).toFixed(2):""}</span></div>`).join("");
-  return `<div class="health-card">${header}${rows}</div>`;
+  const header=`<div class="health-card-hdr">${esc(t("health.service_history.card_title"))}</div>`;
+  const body=entries.length
+    ? entries.slice().reverse().map(e=>`<div class="health-service-row"><span class="health-service-date">${esc(fmtMaintDate(e.date))}</span><span class="health-service-component">${esc(e.component||"—")}</span><span class="health-service-comment">${esc(e.comment||"")}</span><span class="health-service-cost">${e.cost?esc(CURRENCY)+Number(e.cost).toFixed(2):""}</span></div>`).join("")
+    : `<p class="settings-help">${esc(t("health.service_history.none"))}</p>`;
+  return `<div class="health-card" id="healthMaintCard">${header}${body}</div>`;
+}
+// Warranty as a suffix on the printer heading — only when there is a real
+// date to show. computeWarranty() (server.js) returns status "unknown" with a
+// null expiry whenever the printer has no purchase date, and that renders
+// nothing rather than an empty parenthesis.
+function warrantyHeadingSuffix(maint){
+  const w=maint&&maint.warranty;
+  if(!w||!w.expiry||w.status==="unknown") return "";
+  const date=fmtMaintDate(w.expiry);
+  return " ("+(w.status==="expired"?t("health.warranty_expired_on",{date}):t("health.warranty_until",{date}))+")";
 }
 
 // ---- Inline service form ("not a modal", per spec) — one static instance
@@ -3038,7 +3102,7 @@ function updateHealthNextDuePreview(){
   $("healthSvcNextHint").textContent=date?(component?t("maintenance.next_due_hint_component",{date:fmtMaintDate(date),freqLabel:t(spec.labelKey),component}):t("maintenance.next_due_hint",{date:fmtMaintDate(date),freqLabel:t(spec.labelKey)})):"";
 }
 function openHealthServiceForm(prefillComponent){
-  const wrap=$("healthServiceForm");
+  const wrap=healthServiceFormEl();
   if(!wrap||HEALTH_PRINTER_ID==null) return;
   wrap.style.display="";
   $("healthSvcDate").value=new Date().toISOString().slice(0,10);
@@ -3060,10 +3124,14 @@ function openHealthServiceForm(prefillComponent){
     HEALTH_SVC_HOURS_SEC=d.totalSeconds!=null?d.totalSeconds:null;
     $("healthSvcHours").textContent=HEALTH_SVC_HOURS_SEC!=null?fmtHours(HEALTH_SVC_HOURS_SEC):t("maintenance.hours_unavailable");
   }).catch(()=>{ $("healthSvcHours").textContent=t("maintenance.hours_unavailable"); });
-  wrap.scrollIntoView({behavior:"smooth",block:"nearest"});
+  // Only scroll when the user asked for this specific component (the
+  // Attention list's "log a fix" buttons). The form is permanently on screen
+  // now, so scrolling on every printer switch would yank the page for no
+  // reason.
+  if(prefillComponent) wrap.scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 function closeHealthServiceForm(){
-  const wrap=$("healthServiceForm");
+  const wrap=healthServiceFormEl();
   if(wrap) wrap.style.display="none";
 }
 async function toggleHealthOffline(){
@@ -3131,11 +3199,53 @@ function storageLegendRow(label,color,extra,valueText,title){
 // retention cleanup) without losing track of "still running."
 const HEALTH_SYNC_STATE={};
 const HEALTH_SYNC_TIMERS={};
+// printer|root -> the `lastSyncAt` that root was showing when a NEWER sync
+// was started, i.e. "this result is last time's, don't print it next to the
+// current run's." The status line joins all three roots, and a finished
+// root's result text lives on forever (the server keeps lastSyncAt until
+// that root runs again), so without this a camera result stays glued to the
+// front of a later logs run: "Camera: 12 downloaded · Logs: listing files…".
+//
+// Marked rather than deleted on purpose. Deleting HEALTH_SYNC_STATE entries
+// looks right for a moment and then undoes itself: every completed sync ends
+// with loadHealthData() -> resumeSyncPollingIfRunning(), which refetches all
+// three roots from the server and writes them straight back — so the stale
+// line would reappear at exactly the moment the new result arrived.
+//
+// Compared by VALUE, never against a clock: lastSyncAt is stamped with the
+// server's Date.now() and this runs in the browser, so any timestamp
+// comparison would break under clock skew — in the direction that hides the
+// new result, not the old one. A root un-suppresses itself simply by running
+// again, which gives it a different lastSyncAt.
+const HEALTH_SYNC_STALE_AT={};
+// Called when a sync starts: every root of that printer that isn't currently
+// running has its present result marked as belonging to the previous run.
+// Running roots are deliberately left alone — those lines are live, not
+// stale, and two roots can legitimately sync at once.
+function markOtherSyncResultsStale(printerId){
+  for(const r of ["logs","camera","gcodes"]){
+    const k=syncKey(printerId,r);
+    const st=HEALTH_SYNC_STATE[k];
+    if(st&&!syncRunning(st)) HEALTH_SYNC_STALE_AT[k]=st.lastSyncAt||null;
+  }
+}
+// True while a root's finished state is still the one that was on screen
+// when a newer sync started. Only ever suppresses finished text (a result or
+// an error); progress phases have no lastSyncAt of their own to match.
+function syncResultIsStale(printerId,root,st){
+  if(!st||syncRunning(st)) return false;
+  const k=syncKey(printerId,root);
+  return k in HEALTH_SYNC_STALE_AT && (st.lastSyncAt||null)===HEALTH_SYNC_STALE_AT[k];
+}
 // Same three concepts as HEALTH_STORAGE_CATS above (Logs/Camera reuse
 // settings.printer_sync's identical labels; G-code stays its own key since
 // settings.printer_sync.gcode_archive says "G-code archive," a genuinely
 // different phrase, not a duplicate).
-const SYNC_ROOT_LABEL_KEYS={logs:"settings.printer_sync.logs",camera:"settings.printer_sync.camera",gcodes:"health.storage.cat_gcode"};
+// Deliberately NOT health.storage.cat_gcode ("G-code"): that one names the
+// disk-usage category in the legend, this one names the thing being synced
+// ("Jobs") on the buttons and status lines. Same root, two different jobs —
+// test/i18n/bundled-content.test.js pins the legend label separately.
+const SYNC_ROOT_LABEL_KEYS={logs:"settings.printer_sync.logs",camera:"settings.printer_sync.camera",gcodes:"health.storage.sync_root_gcodes"};
 function syncRootLabel(root){ return t(SYNC_ROOT_LABEL_KEYS[root]||root); }
 function syncKey(printerId,root){ return printerId+"|"+root; }
 function syncRunning(st){ return st&&(st.phase==="listing"||st.phase==="downloading"||st.phase==="cleaning-up"); }
@@ -3177,6 +3287,9 @@ function syncStatusText(root,st){
 }
 async function startSync(printerId,root){
   const key=syncKey(printerId,root);
+  // Before anything else, so a failed start also clears the previous run's
+  // lines rather than showing this root's error beside them.
+  markOtherSyncResultsStale(printerId);
   try{
     const r=await postJSON("/api/sync?printer="+printerId+"&root="+root,{});
     const d=await r.json();
@@ -3245,19 +3358,25 @@ function renderStorageCard(d,printerId){
     const text=running?t("health.storage.sync_button_syncing",{label:label.toLowerCase()}):t("health.storage.sync_button_idle",{label:label.toLowerCase()});
     const pct=syncProgressPct(st);
     const fill=pct!=null?`background:linear-gradient(to right, rgba(167,139,250,0.55) ${pct}%, rgba(167,139,250,0.13) ${pct}%);`:"";
-    return `<button type="button" class="btn ghost" style="${fill}" ${disabled?"disabled":""} ${title?`title="${esc(title)}"`:""} data-sync="${root}" data-syncprinter="${printerId}">${esc(text)}</button>`;
+    // Falls back to the button's own text: at one tile wide these labels are
+    // ellipsized rather than allowed to wrap (see .health-metrics-storage in
+    // style.css), so the full wording has to stay reachable on hover. An
+    // explanatory title — unsupported/not configured/already running — still
+    // wins, since it says more than the label does.
+    return `<button type="button" class="btn ghost" style="${fill}" ${disabled?"disabled":""} title="${esc(title||text)}" data-sync="${root}" data-syncprinter="${printerId}">${esc(text)}</button>`;
   };
-  const statusText=["logs","camera","gcodes"].map(r=>syncStatusText(r,syncStates[r])).filter(Boolean).join(" · ");
+  const statusText=["logs","camera","gcodes"]
+    .map(r=>syncResultIsStale(printerId,r,syncStates[r])?"":syncStatusText(r,syncStates[r]))
+    .filter(Boolean).join(" · ");
   // health-diag-vals (total/used/free) is plain SnapCon-owned prose, not
   // protocol jargon like the Controller/System cards' diag lines — kept
   // translated, unlike those.
   return `<div class="health-card">
     <div class="health-card-hdr">${esc(cardTitle)}</div>
-    <p class="health-card-desc">${esc(t("health.storage.desc"))}</p>
     ${critical?`<div class="health-critical-banner">${esc(t("health.storage.critical_banner"))}</div>`:""}
     <div class="health-storage-bar">${barHtml}</div>
     ${legendHtml}
-    <div class="health-diag-vals health-storage-totals">${esc(t("health.storage.totals",{total:fmtBytes(du.total),used:fmtBytes(du.used),free:fmtBytes(du.free)}))}</div>
+    <div class="health-diag-vals health-storage-totals">${esc(t("health.storage.totals",{total:fmtBytes(du.total),used:fmtBytes(du.used)}))}</div>
     <div class="health-storage-actions">
       ${syncBtn("logs")}
       ${syncBtn("camera")}
@@ -3285,29 +3404,97 @@ function renderHealthBody(){
   const recentPctTxt=recent&&recent.sampleSize?Math.round(recent.completed/recent.sampleSize*100)+"%":"—";
   const recentSub=recent&&recent.sampleSize?t("health.recent_success_jobs",{completed:recent.completed,total:recent.sampleSize}):"";
   const storage=d.storage&&d.storage.available?d.storage:null;
+  const systemCardHtml=renderSystemCard(d);
+  const controllerCardHtml=renderControllerCard(d);
+  const heatersCardHtml=renderHeatersCard(d);
+  const fansCardHtml=renderFansCard(d);
   const freeTxt=storage?fmtBytes(storage.diskUsage.free):"—";
   const metricsHtml=`<div class="health-metrics">`+
     `<div class="health-metric"><span class="health-metric-label">${esc(t("health.metric_print_time"))}</span><span class="health-metric-val">${printTime}</span></div>`+
     `<div class="health-metric"><span class="health-metric-label">${esc(t("health.metric_recent_success"))}</span><span class="health-metric-val">${recentPctTxt}</span>${recentSub?`<span class="health-metric-sub">${esc(recentSub)}</span>`:""}</div>`+
     `<div class="health-metric"><span class="health-metric-label">${esc(t("health.metric_free_space"))}</span><span class="health-metric-val">${freeTxt}</span></div>`+
     `<div class="health-metric"><span class="health-metric-label">${esc(t("health.metric_last_service"))}</span><span class="health-metric-val">${esc(lastServiceText(HEALTH_MAINT))}</span></div>`+
+    // These cards sit INSIDE the metrics grid rather than in .health-grid
+    // below, which is what makes them exactly one metric tile wide (and keeps
+    // them that way as auto-fit changes the column count) without hardcoding
+    // a width.
+    // ---- Below the tiles: three COLUMN STACKS, not a card per grid cell.
+    // One grid item per column, each stacking its own cards, because grid
+    // rows are as tall as their tallest member: with a card per cell, the
+    // tall Log service form set row 2's height and Storage was left floating
+    // in a stretched cell with System pushed a row further down. A stack owns
+    // its whole column, so its cards sit a fixed 10px apart no matter how
+    // tall the neighbouring column gets — and there is only one item per
+    // column left for auto-placement to get wrong.
+    `<div class="health-metrics-col1">`+
+      `<div class="health-metrics-storage">${renderStorageCard(d,HEALTH_PRINTER_ID)}</div>`+
+      // renderSystemCard()/renderControllerCard() return "" when the printer
+      // reports nothing for them — emit no wrapper at all in that case.
+      (systemCardHtml||"")+
+      (controllerCardHtml||"")+
+    `</div>`+
+    // Column 2 stacks Heaters then Fans, both at one tile wide.
+    (heatersCardHtml||fansCardHtml?`<div class="health-metrics-col2">${heatersCardHtml||""}${fansCardHtml||""}</div>`:"")+
+    // The service-record form goes into the empty slot as a MOVED element
+    // (see mountHealthServiceForm) rather than re-emitted markup, so a
+    // half-typed entry survives the 1.5s poll re-render.
+    `<div class="health-metrics-col34">`+
+      `<div id="healthSvcSlot"></div>`+
+      renderServiceLogCard(HEALTH_MAINT)+
+    `</div>`+
   `</div>`;
-  const cards=[renderAttentionList(d),renderToolheadsCard(p),renderHeatersCard(d),renderControllerCard(d),renderSystemCard(d),renderFansCard(d),renderStorageCard(d,HEALTH_PRINTER_ID),renderFaultsCard(d),renderServiceHistoryCard(HEALTH_MAINT)].filter(Boolean).join("");
-  body.innerHTML=`<h3 class="health-printer-name">${esc(name)}</h3>`+metricsHtml+`<div class="health-grid">${cards}</div>`;
+  const cards=[renderAttentionList(d),renderFaultsCard(d)].filter(Boolean).join("");
+  detachHealthServiceForm(); // must happen before innerHTML — see that function
+  const warrantySuffix=warrantyHeadingSuffix(HEALTH_MAINT);
+  body.innerHTML=`<h3 class="health-printer-name">${esc(name)}`+
+    (warrantySuffix?`<span class="health-printer-warranty${(HEALTH_MAINT&&HEALTH_MAINT.warranty&&HEALTH_MAINT.warranty.status)==="expired"?" bad":""}">${esc(warrantySuffix)}</span>`:"")+
+    `</h3>`+metricsHtml+`<div class="health-grid">${cards}</div>`;
   body.querySelectorAll("[data-sync]").forEach(b=>{
     b.addEventListener("click",()=>startSync(parseInt(b.dataset.syncprinter,10),b.dataset.sync));
   });
   body.querySelectorAll("[data-logfix]").forEach(b=>{
     b.addEventListener("click",()=>openHealthServiceForm(b.dataset.logfix));
   });
-  const addBtn=$("healthAddService");
-  if(addBtn) addBtn.addEventListener("click",()=>openHealthServiceForm());
-  const fansExpand=$("healthFansExpand");
-  if(fansExpand) fansExpand.addEventListener("click",()=>{
-    $("healthFansDetail").style.display="";
-    $("healthFansSummary").style.display="none";
-  });
-  closeHealthServiceForm(); // switching printers/refreshing always closes any open form — never leave it pointed at stale printer state
+  mountHealthServiceForm();
+}
+// The service form is a single static element (index.html), not markup this
+// function emits — so it is MOVED into the freshly rendered slot on every
+// pass. appendChild relocates the live node: its listeners, its chip state
+// and anything already typed into it survive a poll re-render, which
+// re-emitting it as HTML would destroy every 1.5 seconds.
+//
+// Its fields are re-initialised only when the printer actually changed, for
+// the same reason: openHealthServiceForm() resets every input, and calling
+// that on each render would wipe an entry mid-typing.
+let HEALTH_SVC_FOR_PRINTER=null;
+// Held as a JS reference, not looked up each time: while the form is parked
+// between renders it is detached from the document, and getElementById()
+// cannot find a detached node.
+let HEALTH_SVC_EL=null;
+function healthServiceFormEl(){
+  if(!HEALTH_SVC_EL) HEALTH_SVC_EL=document.getElementById("healthServiceForm");
+  return HEALTH_SVC_EL;
+}
+// Called immediately BEFORE #healthBody is rewritten. Once the form has been
+// moved into a slot inside that subtree, an innerHTML assignment would
+// destroy it outright — and it is the one static instance, so it would never
+// come back. Detaching first keeps the node (and everything typed into it)
+// alive in HEALTH_SVC_EL until mountHealthServiceForm() re-attaches it.
+function detachHealthServiceForm(){
+  const wrap=healthServiceFormEl();
+  if(wrap&&wrap.parentNode) wrap.parentNode.removeChild(wrap);
+}
+function mountHealthServiceForm(){
+  const wrap=healthServiceFormEl(), slot=$("healthSvcSlot");
+  if(!wrap) return;
+  if(!slot||HEALTH_PRINTER_ID==null){ closeHealthServiceForm(); HEALTH_SVC_FOR_PRINTER=null; return; }
+  if(wrap.parentNode!==slot) slot.appendChild(wrap);
+  if(HEALTH_SVC_FOR_PRINTER!==HEALTH_PRINTER_ID){
+    HEALTH_SVC_FOR_PRINTER=HEALTH_PRINTER_ID;
+    openHealthServiceForm();
+  }else{
+    wrap.style.display="";
+  }
 }
 async function refreshQueueDashboard(){
   try{
@@ -4024,6 +4211,59 @@ function neededColors(){ return MAP ? MAP.palette.filter(s=>s.used) : []; }
 // standing in for the whole file instead of hiding the picker entirely.
 function neededColorsOrSlot(){ const need=neededColors(); return need.length?need:[{i:0,hex:null,type:'',wt:''}]; }
 
+// Maps a file's raw slicer-reported metadata to the connector brand it was
+// actually sliced for, reusing CONNECTOR_TYPES (already loaded for the
+// Settings > Printers connector picker) rather than a hardcoded brand list
+// — a new connector's brand is picked up automatically, no change needed
+// here.
+//
+// printerSettingsId (OrcaSlicer-family "Vendor@Model" system-preset id,
+// e.g. "Creality@K1") is checked FIRST and preferred when it matches,
+// since it explicitly names the vendor — printer_model can instead just
+// describe the interface/profile chosen (e.g. "Generic Klipper Printer":
+// Klipper is the protocol several different brands speak, not a brand
+// itself), which is a weaker, easily-misleading signal on its own. Confirmed
+// on a real file: printer_model said "Generic Klipper Printer" while
+// printer_settings_id said "Creality@K1" for the same Creality-sliced file.
+//
+// Returns: null when the file has neither field (nothing to detect); false
+// when it has at least one but neither matches any registered connector's
+// brand; otherwise the matched brand string, in the same casing FLEET
+// printers' own p.brand field uses (see isCompatiblePrinter).
+function detectPrinterBrand(printerModel, printerSettingsId){
+  if(!printerModel&&!printerSettingsId) return null;
+  const brands=[...new Set(CONNECTOR_TYPES.map(c=>c.brand).filter(Boolean))];
+  if(printerSettingsId){
+    const vendor=String(printerSettingsId).split("@")[0].toLowerCase();
+    const hit=brands.find(b=>vendor.includes(b.toLowerCase()));
+    if(hit) return hit;
+  }
+  if(printerModel){
+    const text=printerModel.toLowerCase();
+    const hit=brands.find(b=>text.includes(b.toLowerCase()));
+    if(hit) return hit;
+  }
+  return false;
+}
+
+// Send-to-printers compatibility: true/false only when both the file's
+// detected brand and this printer's own recorded brand (set from the
+// connector at add-printer time — see the brandEl.value assignment in the
+// printer-add form) are actually known; null ("can't tell") for a
+// not-detected/unmatched file brand or a printer with no recorded brand —
+// deliberately never flagged incompatible on missing information, only on
+// a genuine, known mismatch.
+function isCompatiblePrinter(detectedBrand, printerBrand){
+  if(!detectedBrand || !printerBrand) return null;
+  // A generic-Klipper printer can carry a user-typed brand ("Voron"), which
+  // detectPrinterBrand() can never return — it only ever matches registered
+  // connector brands. Comparing the two would report a mismatch for every
+  // detectable file, so an unrecognized brand is "can't tell" instead, the
+  // same as a missing one above.
+  if(!isKnownConnectorBrand(printerBrand)) return null;
+  return detectedBrand===printerBrand;
+}
+
 function renderJob(){
   $("jobcard").classList.add("show");
   const fsFork=MAP.fsFork||t("fleet.job.fs_fork_fallback");
@@ -4037,11 +4277,14 @@ function renderJob(){
   const metaParts=[...(MAP.meta||[])];
   if(totalCost>0) metaParts.push("$"+totalCost.toFixed(2));
   $("jmeta").textContent=metaParts.join("  ·  ");
-  // compatibility warning — MAP.printerModel is raw slicer-reported data,
-  // stays untranslated; only the surrounding SnapCon sentence is a key.
+  // detected printer brand — MAP.printerModel is raw slicer-reported data;
+  // detectPrinterBrand() maps it to one of SnapCon's own connector brands
+  // (or "Unknown"), which is what's actually displayed, untranslated
+  // Creality/SnapMaker/FlashForge proper nouns aside.
   const compat=$("jcompat");
-  if(MAP.printerModel&&!/snapmaker\s*u1/i.test(MAP.printerModel)){
-    compat.style.display=""; compat.textContent=t("fleet.job.compat_warning",{model:MAP.printerModel});
+  const detectedBrand=detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId);
+  if(detectedBrand!==null){
+    compat.style.display=""; compat.textContent=t("fleet.job.detected_printer",{brand:detectedBrand||t("fleet.job.brand_unknown")});
   } else { compat.style.display="none"; }
   // thumbnail
   const thumb=$("jthumb");
@@ -4409,7 +4652,18 @@ function cardSignature(p){
     errorCode:p.errorCode, message:p.message, plate:p.plate,
     activeExt:p.activeExt, forceDefaults:p.forceDefaults,
     heads:p.heads, capabilities:p.capabilities, tags:p.tags,
-    queuedFile:p.queuedFile, layer:p.layer, stem
+    queuedFile:p.queuedFile, layer:p.layer, stem,
+    // A printer sitting idle/"Loaded" with nothing else in this signature
+    // changing (state, queuedFile, progress all static) can still have its
+    // bed/hotend genuinely drifting — omitting them meant the card's cached
+    // DOM element never got rebuilt in that case, freezing whatever temps
+    // happened to be showing at the last real change, indefinitely.
+    bed:p.bed, hotend:p.hotend,
+    // STATUS_OVERRIDE is client-only UI state, not part of `p` at all — a
+    // change there needs to force a rebuild the same way a real server-
+    // reported change does, or the badge would only catch up once
+    // something else in this signature also happened to change.
+    statusOverride:STATUS_OVERRIDE.get(String(p.id))||null
   });
 }
 // Builds one printer's card element. `need` (neededColors()) and
@@ -5181,7 +5435,11 @@ function wireFleetCardEvents(){
       return;
     }
     const ctlBtn=e.target.closest("button[data-ctl]");
-    if(ctlBtn){ ctl(parseInt(ctlBtn.dataset.ctl,10), ctlBtn.dataset.act); return; }
+    if(ctlBtn){
+      const ctlId=parseInt(ctlBtn.dataset.ctl,10), ctlAct=ctlBtn.dataset.act;
+      if(ctlAct==="cancel") doCancelPrint(ctlId); else ctl(ctlId, ctlAct);
+      return;
+    }
     const plateBtn=e.target.closest("button[data-plate]");
     if(plateBtn){ openPlate(parseInt(plateBtn.dataset.plate,10)); return; }
     const thumbEl=e.target.closest("[data-thumb]");
@@ -5341,7 +5599,7 @@ async function pushTo(printer, start, extraUI, prefs){
       if(progressBtn){ progressBtn.style.background=''; progressBtn.disabled=false; }
       ok=true;
     } else {
-      ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI);
+      ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI, prefs, printer);
     }
   }catch(e){
     if(st){ st.className="pstatus err"; st.textContent=e.message; }
@@ -5361,50 +5619,107 @@ function setRowUI(extraUI, pct, cls, txt){
   if(extraUI.fillEl){ extraUI.fillEl.style.width=pct+"%"; extraUI.fillEl.className="send-row-fill"+(cls?" "+cls:""); }
   if(extraUI.statusEl){ extraUI.statusEl.className="send-status-txt"+(cls?" "+cls:""); extraUI.statusEl.textContent=txt; }
 }
-async function pollJob(jobId, st, start, mapped, btn, extraUI){
-  for(;;){
-    await new Promise(r=>setTimeout(r,400));
-    let d;
-    try{ d=await getJSON("/api/print-status?job="+encodeURIComponent(jobId)); }catch(e){ continue; }
-    if(d.error){
-      if(st){ st.className="pstatus err"; st.textContent=d.error; }
-      if(extraUI) setRowUI(extraUI, 100, "err", d.error);
-      if(btn){ btn.style.background=''; btn.disabled=false; }
-      return false;
+// server.js's "mapping" job phase covers everything applyHeadMapping() may
+// do for the connector in use — real per-toolhead color mapping, and/or
+// sending the connector's own pre-print prefs (auto-level/flow-calibrate/
+// timelapse). Which of those actually applies varies by connector (e.g.
+// creality-klipper has no real per-slot mapping at all — its
+// applyHeadMapping only ever sends a real G29 for autoLevel, a genuine
+// 1-3 minute physical wait) — decided here purely from what was actually
+// requested (mapped tool count / prefs), never from connector/brand, so no
+// connector needs a special case.
+function mappingPhaseText(mapped, prefs){
+  if(mapped) return t("fleet.print.status_setting_head_mapping");
+  if(prefs&&prefs.autoLevel) return t("fleet.print.status_leveling_bed");
+  if(prefs&&prefs.flowCalibrate) return t("fleet.print.status_calibrating_flow");
+  if(prefs&&prefs.timelapse) return t("fleet.print.status_preparing_timelapse");
+  return t("fleet.print.status_setting_head_mapping");
+}
+// Same decision as mappingPhaseText(), but the short, badge-appropriate
+// form (see STATUS_OVERRIDE) — one or two words, matching the existing
+// "Idle"/"Printing"/"Paused" badge style rather than a full sentence.
+function mappingPhaseBadge(mapped, prefs){
+  if(mapped) return { statusColor:"var(--busy)", statusTxt:t("printer_status.mapping_heads") };
+  if(prefs&&prefs.autoLevel) return { statusColor:"var(--busy)", statusTxt:t("printer_status.leveling") };
+  if(prefs&&prefs.flowCalibrate) return { statusColor:"var(--busy)", statusTxt:t("printer_status.calibrating") };
+  if(prefs&&prefs.timelapse) return { statusColor:"var(--busy)", statusTxt:t("printer_status.preparing") };
+  return { statusColor:"var(--busy)", statusTxt:t("printer_status.mapping_heads") };
+}
+async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId){
+  const overrideKey=printerId!=null?String(printerId):null;
+  let overrideActive=false;
+  const clearOverride=()=>{
+    if(overrideActive && overrideKey){ STATUS_OVERRIDE.delete(overrideKey); renderFleet({incremental:true}); }
+    overrideActive=false;
+  };
+  try{
+    for(;;){
+      await new Promise(r=>setTimeout(r,400));
+      let d;
+      try{ d=await getJSON("/api/print-status?job="+encodeURIComponent(jobId)); }catch(e){ continue; }
+      if(d.error){
+        if(st){ st.className="pstatus err"; st.textContent=d.error; }
+        if(extraUI) setRowUI(extraUI, 100, "err", d.error);
+        if(btn){ btn.style.background=''; btn.disabled=false; }
+        return false;
+      }
+      // The button itself fills as the upload progress bar — no bar below.
+      if(d.phase==="upload" && d.total){
+        const pct=Math.min(100,Math.round(d.sent/d.total*100));
+        setBtnFill(btn, pct);
+        if(extraUI) setRowUI(extraUI, pct, "work", t("fleet.print.status_uploading_pct",{pct}));
+      }
+      else if(d.phase==="mapping"){
+        const mapTxt=mappingPhaseText(mapped, prefs);
+        if(st){ st.className="pstatus work"; st.textContent=mapTxt; } setBtnFill(btn,100);
+        if(extraUI) setRowUI(extraUI, 100, "work", mapTxt);
+        // Klipper's own reported state stays "standby"/idle for the whole
+        // physical leveling/calibration pass (see mappingPhaseBadge's own
+        // comment) — set once per phase entry, not every 400ms tick.
+        if(!overrideActive && overrideKey){
+          STATUS_OVERRIDE.set(overrideKey, mappingPhaseBadge(mapped, prefs));
+          overrideActive=true;
+          renderFleet({incremental:true});
+        }
+      }
+      else if(d.phase==="starting"){
+        clearOverride();
+        if(st){ st.className="pstatus work"; st.textContent=t("fleet.queued.starting_print_status"); } setBtnFill(btn,100);
+        if(extraUI) setRowUI(extraUI, 100, "work", t("fleet.queued.starting_print_status"));
+      }
+      if(d.done){
+        clearOverride();
+        const doneTxt=start
+          ? t(mapped?"fleet.print.status_printing_on_mapped":"fleet.print.status_printing_on", {printer:(d.result&&d.result.printer)||""})
+          : t(mapped?"fleet.print.status_uploaded_mapped":"fleet.print.status_uploaded");
+        if(st){ st.className="pstatus ok"; st.textContent=doneTxt; }
+        if(extraUI) setRowUI(extraUI, 100, "ok", doneTxt);
+        if(btn){ btn.style.background=''; btn.disabled=false; }
+        return true;
+      }
     }
-    // The button itself fills as the upload progress bar — no bar below.
-    if(d.phase==="upload" && d.total){
-      const pct=Math.min(100,Math.round(d.sent/d.total*100));
-      setBtnFill(btn, pct);
-      if(extraUI) setRowUI(extraUI, pct, "work", t("fleet.print.status_uploading_pct",{pct}));
-    }
-    else if(d.phase==="mapping"){
-      if(st){ st.className="pstatus work"; st.textContent=t("fleet.print.status_setting_head_mapping"); } setBtnFill(btn,100);
-      if(extraUI) setRowUI(extraUI, 100, "work", t("fleet.print.status_setting_head_mapping"));
-    }
-    else if(d.phase==="starting"){
-      if(st){ st.className="pstatus work"; st.textContent=t("fleet.queued.starting_print_status"); } setBtnFill(btn,100);
-      if(extraUI) setRowUI(extraUI, 100, "work", t("fleet.queued.starting_print_status"));
-    }
-    if(d.done){
-      const doneTxt=start
-        ? t(mapped?"fleet.print.status_printing_on_mapped":"fleet.print.status_printing_on", {printer:(d.result&&d.result.printer)||""})
-        : t(mapped?"fleet.print.status_uploaded_mapped":"fleet.print.status_uploaded");
-      if(st){ st.className="pstatus ok"; st.textContent=doneTxt; }
-      if(extraUI) setRowUI(extraUI, 100, "ok", doneTxt);
-      if(btn){ btn.style.background=''; btn.disabled=false; }
-      return true;
-    }
-  }
+  } finally { clearOverride(); }
 }
 
 // ---- Eject / deselect job ----
 function clearJobSelection(){
-  SELECTED=null; MAP=null;
+  SELECTED=null; MAP=null; MAPSEL={};
   $('jobcard').classList.remove('show');
   $('jobsechead').style.display='none';
   $('needcount').textContent='';
   document.querySelectorAll('.job.active').forEach(el=>el.classList.remove('active'));
+  // mapHtml (the whole T1->color mapping row, including the swatches'
+  // "selected" highlight) is baked into each card's innerHTML only when
+  // that card is rebuilt (see buildCardHtml's canSend/mapHtml block, gated
+  // on SELECTED). Ejecting doesn't change anything in a printer's own
+  // server-reported data, so cardSignature() stays identical and
+  // reconcileFleetCards() would otherwise leave every card's cached DOM
+  // untouched — each one only catching up whenever ITS OWN next unrelated
+  // poll-driven rebuild happens to occur, which reads as the mapping row
+  // disappearing one printer at a time instead of all at once. A plain,
+  // full renderFleet() (not the incremental poll variant) forces every
+  // visible card to rebuild immediately, in one pass.
+  renderFleet();
 }
 
 // ---- Send-to-printers modal ----
@@ -5439,22 +5754,24 @@ function openSendModal(){
 function closeSendModal(){ $('sendmodal').classList.remove('show'); }
 
 function renderSendList(){
+  const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
   $('sendlist').innerHTML=urlFilterFleet(FLEET).map(p=>{
     const idle=p.online&&p.state==='idle';
     const dot=p.online?(idle?'var(--ok)':'var(--busy)'):'var(--idle)';
     const {statusTxt}=statusColorText(p);
+    const incompatible=isCompatiblePrinter(detectedBrand,p.brand)===false;
     return `<label class="send-row">
       <div class="send-row-fill" data-fill="${esc(p.id)}"></div>
       <input type="checkbox" class="send-chk checkbox-input" data-id="${esc(p.id)}" ${idle?'checked':''}>
       <span class="send-dot" style="background:${dot}"></span>
-      <span class="send-name">${esc(p.name)}</span>
+      <span class="send-name${incompatible?' incompatible':''}">${esc(p.name)}</span>
       <span class="send-status-txt" data-rst="${esc(p.id)}">${esc(statusTxt)}</span>
     </label>`;
   }).join('');
 }
 
 function setSendBtnsDisabled(dis){
-  ['doUpload','doUploadPrint','sendSelectAll','sendSelectIdle'].forEach(id=>{ const b=$(id); if(b) b.disabled=dis; });
+  ['doUpload','doUploadPrint','sendSelectAll','sendSelectIdle','sendSelectCompatible'].forEach(id=>{ const b=$(id); if(b) b.disabled=dis; });
 }
 
 function sendRowUI(id){
@@ -5467,6 +5784,12 @@ function sendRowUI(id){
 async function doSendUpload(start){
   const checked=[...document.querySelectorAll('.send-chk:checked')].map(c=>c.dataset.id);
   if(!checked.length){ $('sendFooterStatus').textContent=t("fleet.modal.send.select_one"); return; }
+  const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
+  const hasIncompatible=checked.some(id=>{
+    const row=FLEET.find(p=>p.id===id);
+    return row && isCompatiblePrinter(detectedBrand,row.brand)===false;
+  });
+  if(hasIncompatible && !confirm(t("fleet.modal.send.confirm_incompatible"))) return;
   setSendBtnsDisabled(true);
   $('sendFooterStatus').textContent='';
   // Explicit values, straight from whatever's currently checked — see
@@ -5478,16 +5801,181 @@ async function doSendUpload(start){
   setSendBtnsDisabled(false);
 }
 
-async function doEstop(printerId){
-  if(!confirm(t("fleet.confirm_estop"))) return;
-  const st=$("pst-"+printerId);
-  if(st){ st.className="pstatus work"; st.textContent=t("fleet.estop_status_sending"); }
+// ---- Confirm dialog (hold or click) ----
+// A generic component for destructive actions, in two variants:
+//   - mode:"hold" — impossible to trigger by a stray click/Enter, but never
+//     requires reading or typing, since the operator may want it
+//     immediately (E-Stop: a real emergency).
+//   - mode:"click" — friction is information, not time (Cancel print: still
+//     destructive, but not an emergency) — a plain click/Enter on the
+//     confirm button fires it immediately, no hold.
+// Every string/duration/callback/icon comes from the caller — nothing
+// action-specific belongs in this component itself.
+const HOLD_CONFIRM_MS = 3000;
+let HC_STATE = null;
+function prefersReducedMotion(){ return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches; }
+
+function openHoldConfirmDialog(opts){
+  HC_STATE = {
+    mode: opts.mode || "hold",
+    idleLabel: opts.idleLabel, countdownLabel: opts.countdownLabel,
+    helperIdle: opts.helperIdle, helperHolding: opts.helperHolding,
+    holdMs: opts.holdMs || HOLD_CONFIRM_MS, onConfirm: opts.onConfirm,
+    sendingLabel: opts.sendingLabel, doneLabel: opts.doneLabel,
+    holding:false, raf:null, start:null, sending:false, lastSecond:-1
+  };
+  $("hcIcon").src = opts.iconSrc || "/estop-icon.svg";
+  $("hcTitle").textContent = opts.title;
+  $("hcSubtitle").textContent = opts.subtitle || "";
+  $("hcSubtitle").style.display = opts.subtitle ? "" : "none";
+  const panel=$("hcPanel");
+  panel.innerHTML = opts.panelHtml || "";
+  panel.style.display = opts.panelHtml ? "" : "none";
+  $("hcConsequences").innerHTML = opts.consequencesHtml || "";
+  $("hcStatus").style.display="none"; $("hcStatus").className="hc-status"; $("hcStatus").textContent="";
+  const btn=$("hcHoldBtn");
+  btn.disabled=false;
+  $("hcHoldFill").style.width="0%";
+  $("hcHoldLabel").textContent=opts.idleLabel;
+  $("hcHelper").textContent=HC_STATE.mode==="hold" ? (opts.helperIdle||"") : "";
+  $("hcActions").className="hc-actions"+(opts.equalButtons?" equal":"");
+  const cancelBtn=$("hcCancel");
+  cancelBtn.textContent = opts.cancelLabel || t("common.cancel");
+  cancelBtn.disabled=false;
+  $("holdConfirmModal").classList.add("show");
+  cancelBtn.focus();
+}
+function closeHoldConfirmDialog(){
+  if(HC_STATE && HC_STATE.sending) return; // command already in flight — outcome must be seen, not dismissed
+  if(HC_STATE && HC_STATE.raf) cancelAnimationFrame(HC_STATE.raf);
+  HC_STATE=null;
+  $("holdConfirmModal").classList.remove("show");
+}
+function hcStartHold(){
+  if(!HC_STATE || HC_STATE.mode!=="hold" || HC_STATE.holding || HC_STATE.sending) return;
+  HC_STATE.holding=true; HC_STATE.start=performance.now(); HC_STATE.lastSecond=-1;
+  $("hcHelper").textContent=HC_STATE.helperHolding;
+  const reduced=prefersReducedMotion();
+  function tick(now){
+    if(!HC_STATE || !HC_STATE.holding) return;
+    const elapsed=now-HC_STATE.start;
+    if(!reduced) $("hcHoldFill").style.width=Math.min(100, elapsed/HC_STATE.holdMs*100)+"%";
+    const secondsLeft=Math.max(0, Math.ceil((HC_STATE.holdMs-elapsed)/1000));
+    if(secondsLeft!==HC_STATE.lastSecond){
+      HC_STATE.lastSecond=secondsLeft;
+      $("hcHoldLabel").textContent=HC_STATE.countdownLabel(secondsLeft);
+    }
+    if(elapsed>=HC_STATE.holdMs){ hcConfirm(); return; }
+    HC_STATE.raf=requestAnimationFrame(tick);
+  }
+  HC_STATE.raf=requestAnimationFrame(tick);
+}
+function hcCancelHold(){
+  if(!HC_STATE || HC_STATE.mode!=="hold" || !HC_STATE.holding) return;
+  HC_STATE.holding=false;
+  if(HC_STATE.raf) cancelAnimationFrame(HC_STATE.raf);
+  HC_STATE.raf=null;
+  $("hcHoldFill").style.width="0%";
+  $("hcHoldLabel").textContent=HC_STATE.idleLabel;
+  $("hcHelper").textContent=HC_STATE.helperIdle;
+}
+async function hcConfirm(){
+  if(!HC_STATE || HC_STATE.sending) return;
+  HC_STATE.holding=false; HC_STATE.sending=true;
+  $("hcHoldBtn").disabled=true;
+  $("hcCancel").disabled=true;
+  $("hcHoldFill").style.width="100%";
+  $("hcHoldLabel").textContent=HC_STATE.sendingLabel;
+  $("hcHelper").textContent="";
+  $("hcStatus").style.display=""; $("hcStatus").className="hc-status work"; $("hcStatus").textContent=HC_STATE.sendingLabel;
   try{
-    const r=await postJSON("/api/printctl",{printer:printerId,action:"estop"});
-    const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
-    if(st){ st.className="pstatus err"; st.textContent=t("fleet.estop_status_done"); }
-  }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
-  setTimeout(loadFleet, 1500);
+    await HC_STATE.onConfirm();
+    if(!HC_STATE) return; // dialog was torn down while awaiting — nothing left to update
+    HC_STATE.sending=false;
+    $("hcStatus").className="hc-status ok"; $("hcStatus").textContent=HC_STATE.doneLabel;
+    $("hcCancel").disabled=false;
+    setTimeout(closeHoldConfirmDialog, 1500);
+  }catch(e){
+    if(!HC_STATE) return;
+    HC_STATE.sending=false;
+    $("hcStatus").className="hc-status err"; $("hcStatus").textContent=e.message;
+    $("hcCancel").disabled=false;
+  }
+}
+function wireHoldConfirmDialog(){
+  const btn=$("hcHoldBtn");
+  btn.addEventListener("pointerdown", e=>{ if(!HC_STATE||HC_STATE.mode!=="hold") return; e.preventDefault(); hcStartHold(); });
+  btn.addEventListener("pointerup", hcCancelHold);
+  btn.addEventListener("pointerleave", hcCancelHold);
+  btn.addEventListener("pointercancel", hcCancelHold);
+  btn.addEventListener("blur", hcCancelHold);
+  let keyHolding=false;
+  btn.addEventListener("keydown", e=>{
+    if(!HC_STATE || HC_STATE.mode!=="hold") return; // click mode: the browser's native Enter/Space-triggers-click handles it
+    if((e.key===" "||e.key==="Enter") && !keyHolding){ e.preventDefault(); keyHolding=true; hcStartHold(); }
+  });
+  btn.addEventListener("keyup", e=>{
+    if(e.key===" "||e.key==="Enter"){ keyHolding=false; hcCancelHold(); }
+  });
+  // Click mode's only trigger — in hold mode this is a no-op guard, since a
+  // completed hold already calls hcConfirm() itself from tick() above, and
+  // the pointer/keyboard interaction that finished the hold still fires a
+  // trailing native "click" afterward that must NOT double-confirm.
+  btn.addEventListener("click", ()=>{ if(HC_STATE && HC_STATE.mode==="click") hcConfirm(); });
+  $("hcCancel").addEventListener("click", closeHoldConfirmDialog);
+  $("holdConfirmModal").addEventListener("click", e=>{ if(e.target===$("holdConfirmModal")) closeHoldConfirmDialog(); });
+  document.addEventListener("keydown", e=>{
+    if(e.key==="Escape" && $("holdConfirmModal").classList.contains("show")) closeHoldConfirmDialog();
+  });
+}
+
+async function doEstop(printerId){
+  const p=FLEET.find(f=>f.id===printerId);
+  const name=(p&&p.name)||"";
+  const busy=!!(p&&p.online&&(p.state==="printing"||p.state==="paused"));
+  const consequences=[t("fleet.estop.consequence_halt")];
+  if(busy) consequences.push(t("fleet.estop.consequence_lose_print"));
+  consequences.push(t("fleet.estop.consequence_restart"));
+  const consequencesHtml=
+    `<div class="hc-consequences-title">${esc(t("fleet.estop.consequences_title"))}</div>`+
+    `<ul class="hc-consequences-list">${consequences.map(c=>`<li>${esc(c)}</li>`).join("")}</ul>`+
+    `<div class="hc-alt-note">${esc(t("fleet.estop.alternative_note"))}</div>`;
+  let panelHtml="";
+  if(busy){
+    const pct=((p.progress||0)*100).toFixed(1);
+    panelHtml=
+      `<div class="hc-panel-file" title="${esc(p.filename||"")}">${esc(stripExt(p.filename||""))}</div>`+
+      `<div class="hc-panel-pct">${pct}%</div>`+
+      `<div class="prog-track red"><div class="prog-fill red" style="width:${pct}%"></div></div>`+
+      `<div class="hc-panel-times">${esc(t("fleet.estop.progress_line",{elapsed:fmtDuration(p.elapsed),remaining:fmtRemaining(p.elapsed,p.progress)}))}</div>`;
+  }
+  const st=$("pst-"+printerId);
+  openHoldConfirmDialog({
+    mode: "hold",
+    iconSrc: "/estop-icon.svg",
+    title: t("fleet.estop.title"),
+    subtitle: name,
+    panelHtml, consequencesHtml,
+    idleLabel: t("fleet.estop.hold_label",{printer:name}),
+    countdownLabel: n=>t("fleet.estop.hold_label_countdown",{n}),
+    helperIdle: t("fleet.estop.helper_idle"),
+    helperHolding: t("fleet.estop.helper_holding"),
+    holdMs: HOLD_CONFIRM_MS,
+    sendingLabel: t("fleet.estop_status_sending"),
+    doneLabel: t("fleet.estop_status_done"),
+    onConfirm: async ()=>{
+      if(st){ st.className="pstatus work"; st.textContent=t("fleet.estop_status_sending"); }
+      try{
+        const r=await postJSON("/api/printctl",{printer:printerId,action:"estop"});
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+        if(st){ st.className="pstatus err"; st.textContent=t("fleet.estop_status_done"); }
+        setTimeout(loadFleet, 1500);
+      }catch(e){
+        if(st){ st.className="pstatus err"; st.textContent=e.message; }
+        throw e;
+      }
+    }
+  });
 }
 
 function openPreheat(printerId){
@@ -5502,8 +5990,74 @@ function openPreheat(printerId){
 // "printing", not "resumed") so they're Fleet-owned transient text.
 const CTL_WORKING_KEYS={pause:"fleet.ctl_status_working_pause",resume:"fleet.ctl_status_working_resume",cancel:"fleet.ctl_status_working_cancel"};
 const CTL_DONE_KEYS={pause:"printer_status.paused",resume:"fleet.ctl_status_done_resume",cancel:"printer_status.cancelled"};
+
+// Cancel is destructive but not an emergency — click-confirm (friction is
+// information, not time), not the hold variant. The Cancel button only
+// ever renders while `busy` (p.online && state printing/paused — see
+// buildCardHtml/renderFleetListRows), so there's nothing to additionally
+// guard here; if this printer weren't currently printing, the button that
+// calls this wouldn't exist on the card at all.
+async function doCancelPrint(printerId){
+  const p=FLEET.find(f=>f.id===printerId);
+  const name=(p&&p.name)||"";
+  const pct=((p&&p.progress||0)*100).toFixed(1);
+  const filM=p&&p.filamentUsed!=null?(p.filamentUsed/1000).toFixed(1)+"m":"—";
+  const panelHtml=
+    `<div class="hc-panel-file" title="${esc((p&&p.filename)||"")}">${esc(stripExt((p&&p.filename)||""))}</div>`+
+    `<div class="hc-panel-pct">${pct}%</div>`+
+    `<div class="prog-track red"><div class="prog-fill red" style="width:${pct}%"></div></div>`+
+    `<div class="hc-stats">`+
+      `<div class="hc-stat"><span class="hc-stat-label">${esc(t("fleet.progress.elapsed_label"))}</span><span class="hc-stat-val">${esc(fmtDuration(p&&p.elapsed))}</span></div>`+
+      `<div class="hc-stat-sep"></div>`+
+      `<div class="hc-stat center"><span class="hc-stat-label">${esc(t("fleet.progress.filament_label"))}</span><span class="hc-stat-val">${esc(filM)}</span></div>`+
+      `<div class="hc-stat-sep"></div>`+
+      `<div class="hc-stat end"><span class="hc-stat-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="hc-stat-val">${esc(fmtRemaining(p&&p.elapsed,p&&p.progress))}</span></div>`+
+    `</div>`;
+  // Verified against queue/QueueEngine.js's actual onProbeFailedOrCancelled:
+  // a printer whose queue believes it's "printing" transitions straight to
+  // queue_attention_required on a detected cancel — it does NOT auto-
+  // dispatch the next item, and does NOT wait for a bed-clear either. Only
+  // printers with a Printer Pool assigned even carry p.queueSummary at all
+  // (see /api/fleet) — a standalone printer has no queue to pause.
+  const queueLine = (p&&p.queueSummary)
+    ? t("fleet.cancelPrint.consequence_queue_managed")
+    : t("fleet.cancelPrint.consequence_queue_standalone");
+  const consequencesHtml=
+    `<div class="hc-consequences-title">${esc(t("fleet.estop.consequences_title"))}</div>`+
+    `<ul class="hc-consequences-list">`+
+      `<li>${esc(t("fleet.cancelPrint.consequence_stops"))}</li>`+
+      `<li>${esc(t("fleet.cancelPrint.consequence_lost",{elapsed:fmtDuration(p&&p.elapsed),filament:filM}))}</li>`+
+      `<li>${esc(queueLine)}</li>`+
+    `</ul>`+
+    `<div class="hc-alt-note">${esc(t("fleet.cancelPrint.alternative_note"))}</div>`;
+  const st=$("pst-"+printerId);
+  openHoldConfirmDialog({
+    mode: "click",
+    iconSrc: "/stop-icon.svg",
+    title: t("fleet.cancelPrint.title"),
+    subtitle: name,
+    panelHtml, consequencesHtml,
+    equalButtons: true,
+    cancelLabel: t("fleet.cancelPrint.keep_printing"),
+    idleLabel: t("fleet.cancelPrint.confirm_button"),
+    sendingLabel: t(CTL_WORKING_KEYS.cancel),
+    doneLabel: t(CTL_DONE_KEYS.cancel),
+    onConfirm: async ()=>{
+      if(st){ st.className="pstatus work"; st.textContent=t(CTL_WORKING_KEYS.cancel); }
+      try{
+        const r=await postJSON("/api/printctl",{printer:printerId,action:"cancel"});
+        const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+        if(st){ st.className="pstatus ok"; st.textContent=t(CTL_DONE_KEYS.cancel); }
+        loadFleet();
+      }catch(e){
+        if(st){ st.className="pstatus err"; st.textContent=e.message; }
+        throw e;
+      }
+    }
+  });
+}
+
 async function ctl(printer, act){
-  if(act==="cancel" && !confirm(t("fleet.confirm_cancel_print"))) return;
   const st=$("pst-"+printer);
   if(st){ st.className="pstatus work"; st.textContent=t(CTL_WORKING_KEYS[act]); }
   try{
@@ -6910,7 +7464,12 @@ $("raCopyBtn").addEventListener("click",async ()=>{
   try{ await navigator.clipboard.writeText(url); $("raStatus").className="pstatus ok"; $("raStatus").textContent=t("common.copied"); }
   catch{ $("raStatus").className="pstatus err"; $("raStatus").textContent=t("settings.remote_access.copy_failed"); }
 });
-$("addPrinter").addEventListener("click",()=>addPrinterRow("","",{},true));
+// Same one-row-open rule as clicking a row open (see closeOtherPrinterRows):
+// the new row is the one you're here to fill in.
+$("addPrinter").addEventListener("click",()=>{
+  const added=addPrinterRow("","",{},true);
+  closeOtherPrinterRows(added.querySelector(".prow-details"));
+});
 // State lives in dataset.expanded, not the button's own text — matching
 // against the rendered label (as this used to) breaks the instant it's
 // translated, since "Expand All" never appears once the button is showing
@@ -7934,8 +8493,38 @@ function serializeRowForDiff(row){
 // load.
 function renderPrinterRowsFromConfig(){
   $("setPrinters").innerHTML="";
-  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
+  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
   baselinePrintersDirty();
+}
+// Settings > Printers shows at most one expanded row: opening one collapses
+// the rest, so a long fleet doesn't turn into a wall of open forms. Both
+// helpers only ever COLLAPSE — neither opens anything — which is what keeps
+// the Expand all button (it sets `open` on every row directly) working.
+function closeOtherPrinterRows(except){
+  document.querySelectorAll("#setPrinters .prow-details[open]").forEach(d=>{ if(d!==except) d.removeAttribute("open"); });
+}
+// Drops the row's ⋮ menu upward when opening it downward would run past the
+// bottom of the Settings panel (.setup is a max-height scroll container) or
+// the viewport, whichever is nearer. Only flips when the space above is
+// genuinely bigger than the menu — a row with no room either way keeps the
+// default downward direction and stays scroll-reachable.
+function flipPrinterMenuIfClipped(menuBtn,menu){
+  const panel=menuBtn.closest(".setup");
+  const panelRect=panel?panel.getBoundingClientRect():null;
+  const limitBottom=Math.min(window.innerHeight, panelRect?panelRect.bottom:Infinity);
+  const limitTop=Math.max(0, panelRect?panelRect.top:0);
+  const menuRect=menu.getBoundingClientRect();
+  if(menuRect.bottom<=limitBottom) return;
+  const spaceAbove=menuBtn.getBoundingClientRect().top-limitTop;
+  if(spaceAbove>=menuRect.height+8) menu.classList.add("up");
+}
+// Collapse everything and put the Expand/Collapse all button back in sync —
+// called after a successful save, where the rows' contents are now exactly
+// what's on file and there's nothing left to look at.
+function collapseAllPrinterRows(){
+  closeOtherPrinterRows(null);
+  const btn=$("collapseAll");
+  if(btn){ btn.dataset.expanded="0"; syncCollapseAllButtonLabel(); }
 }
 // Called once right after printer rows are (re)built from a fresh load or a
 // successful save — establishes the "clean" state everything else diffs
@@ -8007,13 +8596,18 @@ function addPrinterRow(name,url,opts,autoOpen){
   // moment someone re-IP'd a printer (maintenance history would silently
   // detach). Blank for a brand-new row; the server mints one on first save.
   row.dataset.printerId=opts.id||"";
-  const connType=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper";
+  // Last-resort literal only matters if /api/connectors failed entirely —
+  // it mirrors DEFAULT_TYPE in connectors/index.js.
+  const connType=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper-ws";
   const connTypeInfo=CONNECTOR_TYPES.find(c=>c.type===connType)||{};
   const modelLabel=connTypeInfo.label||connType;
-  // Brand is derived from the connector, never user-typed — the server
-  // re-derives it too (never trusts this field), this just keeps the
-  // display in sync without a round-trip.
-  const brandLabel=connTypeInfo.brand||modelLabel;
+  // Brand is derived from the connector for every connector EXCEPT generic
+  // Klipper (Moonraker), which is a protocol many different vendors speak —
+  // "Klipper" is the connector's name, not the machine's maker. Only that
+  // one connector accepts a typed brand; the server enforces the same rule
+  // (see buildPrinterRecord) rather than trusting this field.
+  const derivedBrand=connTypeInfo.brand||modelLabel;
+  const brandLabel=(connType===BRAND_EDITABLE_CONNECTOR&&(opts.brand||"").trim())||derivedBrand;
   row.innerHTML=
     `<details class="prow-details"${autoOpen?" open":""}>`+
     `<summary>`+
@@ -8027,6 +8621,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<button type="button" class="prow-menu-btn" title="${esc(t("settings.printers.menu_more_actions"))}" data-i18n-title="settings.printers.menu_more_actions">⋮</button>`+
     `<div class="prow-menu">`+
     `<button type="button" class="prow-menu-item" data-act="maint" data-i18n="settings.printers.menu_maintenance">${t("settings.printers.menu_maintenance")}</button>`+
+    `<button type="button" class="prow-menu-item" data-act="duplicate" data-i18n="settings.printers.menu_duplicate">${t("settings.printers.menu_duplicate")}</button>`+
     `<button type="button" class="prow-menu-item" data-act="up" data-i18n="settings.printers.menu_move_up">${t("settings.printers.menu_move_up")}</button>`+
     `<button type="button" class="prow-menu-item" data-act="down" data-i18n="settings.printers.menu_move_down">${t("settings.printers.menu_move_down")}</button>`+
     `<button type="button" class="prow-menu-item danger" data-act="remove" data-i18n="settings.printers.menu_remove">${t("settings.printers.menu_remove")}</button>`+
@@ -8040,7 +8635,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_location">${t("settings.printers.field_location")}</label><input class="field ploc" maxlength="30" placeholder="e.g. Office" value="${esc(opts.location||"")}"></div>`+
     `</div>`+
     `<div class="maint-row2" style="margin-top:10px">`+
-    `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_brand">${t("settings.printers.field_brand")}</label><input class="field pbrand" disabled value="${esc(brandLabel)}"></div>`+
+    `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_brand">${t("settings.printers.field_brand")}</label><input class="field pbrand" maxlength="30" value="${esc(brandLabel)}"></div>`+
     `<div class="maint-field"><label class="fl">${t("settings.printers.field_tags")} <span class="hint" data-i18n="settings.printers.field_tags_hint">${t("settings.printers.field_tags_hint")}</span></label><div class="tags-field-row"><input class="field ptags" maxlength="200" placeholder="e.g. garage, /red/" value="${esc((opts.tags||[]).join(", "))}"><span class="tags-row-swatch">${colorTagSwatchHtml((opts.tags||[]).join(", "))}</span></div></div>`+
     `</div>`+
     `</div>`+
@@ -8140,6 +8735,27 @@ function addPrinterRow(name,url,opts,autoOpen){
     if(!isCreality) filModeEl.value="single";
   };
   const brandEl=row.querySelector(".pbrand");
+  // Brand is editable for generic Klipper only (see the derivedBrand comment
+  // above). `reDerive` is passed only from the connector <select>'s own
+  // change handler — never on first render, where the value came from the
+  // saved config and must be left exactly as saved. (A Klipper printer
+  // legitimately saved as "Creality" would otherwise be rewritten back to
+  // "Klipper" on every render, since that string is also a connector brand.)
+  const syncBrandField=(reDerive)=>{
+    const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
+    const editable=connectorEl.value===BRAND_EDITABLE_CONNECTOR;
+    brandEl.disabled=!editable;
+    // Disabled controls say why they're disabled rather than leaving the
+    // user to guess (a SnapCon-wide rule).
+    if(editable) brandEl.removeAttribute("title");
+    else brandEl.title=t("settings.printers.field_brand_locked_title");
+    if(!editable){ brandEl.value=ct.brand||ct.label||connectorEl.value; return; }
+    // Editable: fill in the derived brand as a starting point, but only when
+    // the field is empty or still holds a derived value — switching
+    // Snapmaker -> Klipper must not leave "Snapmaker" behind.
+    if(reDerive&&(!brandEl.value.trim()||isKnownConnectorBrand(brandEl.value))) brandEl.value=ct.brand||ct.label||connectorEl.value;
+    else if(!brandEl.value.trim()) brandEl.value=ct.brand||ct.label||connectorEl.value;
+  };
   // The Simulator connector has no real hardware address — gatherPrinters()
   // and the server's own /api/config both drop any printer with a blank url
   // from the saved list entirely (silently, no error), so a Dummy printer
@@ -8160,10 +8776,11 @@ function addPrinterRow(name,url,opts,autoOpen){
     syncPrintPrefVisibility();
     const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
     modelBadgeEl.textContent=ct.label||connectorEl.value;
-    brandEl.value=ct.brand||ct.label||connectorEl.value;
+    syncBrandField(true);
     syncSimulatorUrlField();
   });
   syncPrintPrefVisibility();
+  syncBrandField(false);
   syncSimulatorUrlField();
   // Live-update the summary header as user types
   const nameEl=row.querySelector(".pname"), urlEl=row.querySelector(".purl");
@@ -8174,18 +8791,83 @@ function addPrinterRow(name,url,opts,autoOpen){
   const tagsEl=row.querySelector(".ptags"), tagsSwatch=row.querySelector(".tags-row-swatch");
   if(tagsEl&&tagsSwatch) tagsEl.addEventListener("input",()=>{ tagsSwatch.innerHTML=colorTagSwatchHtml(tagsEl.value); });
 
+  // One row open at a time. Hooked on the summary's click rather than the
+  // <details> toggle event on purpose: toggle also fires for the Expand all
+  // button's own setAttribute("open") calls, which would make expanding all
+  // rows collapse all but the last one. Every control inside the summary
+  // (drag handle, ⋮ button, menu items) already stops propagation, so this
+  // only ever sees a genuine "open/close this row" click.
+  const detailsEl=row.querySelector(".prow-details");
+  detailsEl.querySelector("summary").addEventListener("click",()=>{
+    if(!detailsEl.open) closeOtherPrinterRows(detailsEl);
+  });
+
   // Overflow menu — stop the click from also toggling the <details> open/closed.
   const menuBtn=row.querySelector(".prow-menu-btn"), menu=row.querySelector(".prow-menu");
   menuBtn.addEventListener("click",e=>{
     e.stopPropagation();
     document.querySelectorAll(".prow-menu.open").forEach(m=>{ if(m!==menu) m.classList.remove("open"); });
-    menu.classList.toggle("open");
+    // Always reopen downward first, then measure: the menu has no size to
+    // measure while it's display:none, and a row can be near the bottom on
+    // one open and mid-panel on the next (rows reorder, the panel scrolls).
+    menu.classList.remove("up");
+    if(menu.classList.toggle("open")) flipPrinterMenuIfClipped(menuBtn,menu);
   });
   row.querySelector('[data-act="maint"]').addEventListener("click",e=>{
     e.stopPropagation(); menu.classList.remove("open");
     const u=row.querySelector(".purl").value.trim();
     const idx=PRINTERS_CFG.findIndex(p=>p.url===u);
     if(idx>=0) openMaintenance(idx);
+  });
+  // Duplicate copies this row's CURRENT field values (including unsaved
+  // edits — what you see is what gets copied), with three deliberate
+  // exceptions:
+  //   url  — cleared. POST /api/config matches an id-less row to an existing
+  //          printer BY URL (server.js), so a copy carrying the original's
+  //          URL would be handed the original's id: two config entries, one
+  //          id, and maintenance history/group access/pool assignment all
+  //          key off it. The copy is for a different machine anyway.
+  //   serial + access code — cleared for the same reason: they identify one
+  //          physical machine (and on FlashForge they ARE that machine's
+  //          credentials), so carrying them over would just be wrong data to
+  //          overwrite rather than a useful starting point.
+  //   token — the Moonraker API token never leaves the server (publicCfg
+  //          sends hasToken, not the value), so there's nothing to copy.
+  //   printerPoolId — assigned through its own endpoint, and needs a saved
+  //          printer id the copy doesn't have yet.
+  row.querySelector('[data-act="duplicate"]').addEventListener("click",e=>{
+    e.stopPropagation(); menu.classList.remove("open");
+    const base=nameEl.value.trim()||t("settings.printers.new_printer_default");
+    // .pname is maxlength=25, so the suffix has to fit inside that budget —
+    // trim the name rather than the "(Copy)" marker, which is the part that
+    // says what this row is.
+    const NAME_MAX=25;
+    let dupName=t("settings.printers.duplicate_name",{name:base});
+    if(dupName.length>NAME_MAX){
+      const trimmed=base.slice(0,Math.max(1,base.length-(dupName.length-NAME_MAX))).trim();
+      dupName=t("settings.printers.duplicate_name",{name:trimmed});
+    }
+    if(dupName.length>NAME_MAX) dupName=dupName.slice(0,NAME_MAX);
+    const dup=addPrinterRow(dupName,"",{
+      location:row.querySelector(".ploc").value.trim(),
+      costKwh:row.querySelector(".pkwh").value.trim(),
+      purchaseDate:row.querySelector(".pdate").value,
+      autoLevel:row.querySelector('[id^="pautolevel-"]').checked,
+      flowCalibrate:row.querySelector('[id^="pflowcal-"]').checked,
+      timelapse:row.querySelector('[id^="ptimelapse-"]').checked,
+      pushNotify:row.querySelector('[id^="ppushnotify-"]').checked,
+      forceDefaults:row.querySelector('[id^="pforcedefaults-"]').checked,
+      connector:connectorEl.value,
+      brand:brandEl.value.trim(),
+      filamentMode:filModeEl.value,
+      tags:row.querySelector(".ptags").value.split(",").map(s=>s.trim()).filter(Boolean),
+      allowedGroups:[...row.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value)
+    },true);
+    // addPrinterRow appends; a copy belongs next to its original.
+    row.parentNode.insertBefore(dup,row.nextSibling);
+    closeOtherPrinterRows(dup.querySelector(".prow-details"));
+    markPrintersDirty();
+    dup.querySelector(".purl").focus();
   });
   row.querySelector('[data-act="up"]').addEventListener("click",e=>{
     e.stopPropagation(); menu.classList.remove("open");
@@ -8280,6 +8962,9 @@ function addPrinterRow(name,url,opts,autoOpen){
   });
 
   $("setPrinters").appendChild(row);
+  // Returned so callers that need to place or focus the new row (Duplicate)
+  // can, without re-querying for "the last one added".
+  return row;
 }
 
 // ---- Logs tab: read-only, paged, admin-only (the whole Settings screen
@@ -8633,6 +9318,10 @@ function gatherPrinters(){
     // break that (this switch defaults to true, unlike the others).
     forceDefaults:r.querySelector('[id^="pforcedefaults-"]').checked,
     connector:r.querySelector(".pconnector").value,
+    // Sent for every row, honored by the server only for the connector whose
+    // Brand field is editable (BRAND_EDITABLE_CONNECTOR) — for the rest it's
+    // the derived value being echoed back, which the server re-derives anyway.
+    brand:r.querySelector(".pbrand").value.trim()||undefined,
     filamentMode:r.querySelector(".pfilmode").value==="cfs"?"cfs":undefined,
     serial:r.querySelector(".pserial").value.trim()||undefined,
     verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
@@ -8840,6 +9529,7 @@ async function saveConfig(){
     applyViewMode(); // refresh the header button's icon/title if Alternate Display just changed
     loadFiles(); loadFleet(); startFleetRefresh();
     baselinePrintersDirty(); // current row values are now what's on file — re-baseline the dirty footer
+    collapseAllPrinterRows(); // nothing left to edit in them — back to the compact list
     baselineSettingsTab("general");
     baselineSettingsTab("notif");
   }catch(e){ setSaveStatus("err",e.message); }

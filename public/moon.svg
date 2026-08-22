@@ -1,10 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14" id="Moon--SnapCon" height="14" width="14">
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" id="Dark-Dislay-Mode--Streamline-Core" height="24" width="24">
   <desc>
-    Moon — dark theme active
+    Dark Dislay Mode Streamline Icon: https://streamlinehq.com
   </desc>
-  <mask id="moon-cut">
-    <rect width="14" height="14" fill="#fff"></rect>
-    <circle cx="8.7" cy="5" r="4.4" fill="#000"></circle>
-  </mask>
-  <circle id="disc" cx="7" cy="7" r="6" fill="#8fbffa" mask="url(#moon-cut)"></circle>
+  <g id="dark-dislay-mode">
+    <path id="Union" fill="#8fbffa" fill-rule="evenodd" d="M12 0a12 12 0 1 0 0 24A12 12 0 0 0 12 0Z" clip-rule="evenodd" stroke-width="1.7143"></path>
+    <path id="Subtract" fill="#2859c5" d="M16.217142857142857 7.752a4.217142857142857 4.217142857142857 0 1 0 0 8.432571428571427c0.42857142857142855 0 0.756 0.5142857142857142 0.4422857142857143 0.8057142857142856a6.850285714285714 6.850285714285714 0 1 1 0 -10.045714285714286c0.31371428571428567 0.2914285714285714 -0.013714285714285714 0.8074285714285714 -0.4422857142857143 0.8074285714285714Z" stroke-width="1.7143"></path>
+  </g>
 </svg>

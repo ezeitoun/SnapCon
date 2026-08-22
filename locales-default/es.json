@@ -3,9 +3,9 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 21,
+    "version": 34,
     "snapconVersion": "0.5.0",
-    "updated": "2026-08-17"
+    "updated": "2026-08-21"
   },
   "printer_status": {
     "offline": "Sin conexión",
@@ -16,7 +16,11 @@
     "loaded": "Cargado",
     "complete": "Completo",
     "cancelled": "Cancelado",
-    "idle": "Inactiva"
+    "idle": "Inactiva",
+    "leveling": "Nivelando",
+    "calibrating": "Calibrando",
+    "mapping_heads": "Asignando cabezales",
+    "preparing": "Preparando"
   },
   "printer": {
     "action_resume": "Reanudar",
@@ -40,10 +44,31 @@
     "action_plate_title": "Placa {done}/{total}"
   },
   "fleet": {
-    "confirm_estop": "La parada de emergencia detendrá la impresora de inmediato y requerirá reiniciar el firmware para recuperarla.\n\n¿Estás seguro?",
-    "confirm_cancel_print": "¿Cancelar esta impresión? Esto no se puede deshacer.",
     "estop_status_sending": "Enviando parada de emergencia…",
     "estop_status_done": "Parada de emergencia realizada — se requiere reiniciar el firmware",
+    "estop": {
+      "title": "Parada de emergencia",
+      "consequences_title": "Esto hará lo siguiente:",
+      "consequence_halt": "Detener todo movimiento y calentadores de inmediato, sin un apagado controlado",
+      "consequence_lose_print": "Perder esta impresión, sin posibilidad de reanudarla",
+      "consequence_restart": "Requerir reiniciar el firmware antes de poder volver a usar la impresora",
+      "alternative_note": "Para detenerla de forma normal y conservar la opción de reanudar, usa Pausar o Cancelar en su lugar.",
+      "progress_line": "{elapsed} de impresión, {remaining} para terminar",
+      "hold_label": "Mantén presionado para detener {printer}",
+      "hold_label_countdown": "Sigue presionando, {n}",
+      "helper_idle": "Mantén presionado durante tres segundos",
+      "helper_holding": "Suelta para cancelar"
+    },
+    "cancelPrint": {
+      "title": "¿Cancelar esta impresión?",
+      "consequence_stops": "La impresión se detiene y no se puede reanudar",
+      "consequence_lost": "Se pierden {elapsed} de impresión y {filament} de filamento",
+      "consequence_queue_managed": "La cola se pausa y necesita atención antes de continuar",
+      "consequence_queue_standalone": "La impresora queda inactiva, lista para un nuevo archivo",
+      "alternative_note": "Para conservar la opción de reanudar, usa Pausar en su lugar.",
+      "keep_printing": "Seguir imprimiendo",
+      "confirm_button": "Cancelar impresión"
+    },
     "ctl_status_working_pause": "Pausando…",
     "ctl_status_working_resume": "Reanudando…",
     "ctl_status_working_cancel": "Cancelando…",
@@ -56,7 +81,8 @@
       "deselect_alt": "Deseleccionar",
       "fs_fork_fallback": "mixto",
       "full_spectrum_title": "Full Spectrum ({fork})",
-      "compat_warning": "⚠ Laminado para \"{model}\", no para Snapmaker U1 — puede que no imprima correctamente",
+      "detected_printer": "Laminado para {brand}",
+      "brand_unknown": "Desconocido",
       "needed_colors_one": "{count} color",
       "needed_colors_other": "{count} colores",
       "uses_colors_prefix": "Usa <b style=\"color:var(--ink)\">{n}</b> de {total} colores de la paleta.",
@@ -152,6 +178,9 @@
       "status_queued_will_upload": "En cola — se subirá cuando esté inactiva",
       "status_queued_short": "En cola",
       "status_setting_head_mapping": "Configurando asignación de cabezales…",
+      "status_leveling_bed": "Nivelando la cama — puede tardar varios minutos…",
+      "status_calibrating_flow": "Calibrando el flujo — puede tardar varios minutos…",
+      "status_preparing_timelapse": "Preparando el time-lapse…",
       "status_printing_on": "Imprimiendo en {printer}",
       "status_printing_on_mapped": "Imprimiendo en {printer} — cabezales asignados",
       "status_uploaded": "Subido",
@@ -235,6 +264,8 @@
         "done_summary": "Listo — {ok}/{total} correctas.",
         "error_summary": "Terminado con errores — {ok}/{total} correctas.",
         "idle_only": "Solo inactivas",
+        "compatible_only": "Solo compatibles",
+        "confirm_incompatible": "Una o más impresoras seleccionadas no coinciden con la marca detectada de este archivo. ¿Continuar?",
         "upload_and_print": "Subir e imprimir"
       },
       "quickprint": {
@@ -323,6 +354,8 @@
     "metric_print_time": "Tiempo de impresión",
     "metric_recent_success": "Éxito reciente",
     "metric_free_space": "Espacio libre",
+    "warranty_until": "Garantía hasta {date}",
+    "warranty_expired_on": "Garantía vencida {date}",
     "metric_last_service": "Último servicio",
     "data_unavailable": "Datos de {section} no disponibles.",
     "data_unavailable_reason": "Datos de {section} no disponibles: {reason}.",
@@ -356,11 +389,16 @@
     },
     "controller": {
       "card_title": "Enlace del controlador",
-      "desc": "Salud de la comunicación entre la placa base y cada controlador de cabezal. Un aumento en las retransmisiones, bytes inválidos o carga de tareas suele indicar un problema de cable, conector o interferencia.",
-      "reading_retransmits": "Retransmisiones",
-      "reading_invalid_bytes": "Bytes inválidos",
-      "reading_task_load": "Carga de tareas",
-      "rate_unit": "{rate} por cada 1M de bytes",
+      "reading_retransmits": "Retrans",
+      "col_controller": "Controlador",
+      "unit_per_million": "por 1M",
+      "unit_bytes": "bytes",
+      "unit_ms": "ms",
+      "warn_line": "{controller}: {detail}",
+      "warn_more_one": "Hay otro controlador también señalado.",
+      "warn_more_other": "Hay {count} controladores más señalados.",
+      "reading_invalid_bytes": "Inválidos",
+      "reading_task_load": "Carga",
       "explain_retransmits": "Un aumento en las retransmisiones suele indicar un problema de cable, conector o interferencia.",
       "explain_invalid": "Los bytes inválidos indican una comunicación corrupta, no solo un reintento — revisa la conexión.",
       "explain_task_load": "El bucle principal del controlador está tardando más de lo esperado en procesar la comunicación.",
@@ -368,14 +406,12 @@
     },
     "system": {
       "card_title": "Utilización del sistema",
-      "desc": "Carga del equipo que ejecuta Klipper. Un uso sostenido y alto de CPU o memoria puede causar comunicación MCU interrumpida o una interfaz web lenta.",
       "reading_cpu_temp": "Temperatura de la CPU",
       "reading_cpu_usage": "Uso de la CPU",
       "reading_memory": "Memoria"
     },
     "heaters": {
       "card_title": "Calentadores",
-      "desc": "Ciclo de trabajo mientras mantiene el objetivo. Un ciclo de trabajo alto y persistente indica un calentador o termistor con fallas.",
       "state_idle": "Inactivo",
       "state_heating": "Calentando",
       "state_cooling": "Enfriando",
@@ -387,13 +423,9 @@
     },
     "fans": {
       "card_title": "Ventiladores",
-      "desc": "Flujo de aire de enfriamiento. Un ventilador encendido pero sin girar suele indicar un rodamiento atascado, una pala bloqueada o un mal conector.",
-      "reading_commanded": "{pct}% comandado",
+      "reading_commanded": "{pct}%",
       "reading_rpm": "{rpm} RPM",
-      "reading_not_measurable": "no medible",
-      "summary_all_stopped_one": "{count} ventilador, todos detenidos",
-      "summary_all_stopped_other": "{count} ventiladores, todos detenidos",
-      "show_all_button": "Mostrar todos",
+      "reading_not_measurable": "N/D",
       "name_main_cooling": "Ventilador de enfriamiento principal",
       "name_assist_cooling": "Ventilador de enfriamiento auxiliar",
       "name_recirculation": "Ventilador de recirculación",
@@ -407,15 +439,15 @@
     },
     "storage": {
       "card_title": "Almacenamiento",
-      "desc": "Uso del disco por categoría. Las subidas e impresiones pueden fallar de forma confusa una vez que el espacio libre se agote.",
       "critical_banner": "El espacio libre es críticamente bajo — las subidas pueden fallar de forma confusa una vez que el disco se llene.",
       "cat_gcode": "G-code",
+      "sync_root_gcodes": "Trabajos",
       "files_count_one": "{count} archivo",
       "files_count_other": "{count} archivos",
       "unused_suffix": " (Sin usar {n})",
       "unused_title_one": "No impreso en el último {days} día — según la configuración de retención de sincronización de G-code.",
       "unused_title_other": "No impreso en los últimos {days} días — según la configuración de retención de sincronización de G-code.",
-      "totals": "total {total} · usado {used} · libre {free}",
+      "totals": "total {total} · usado {used}",
       "sync_title_unsupported": "El conector de esta impresora no admite la sincronización de archivos.",
       "sync_title_not_configured": "Configura primero una carpeta de {label} en Ajustes.",
       "sync_title_running": "Ya hay una sincronización en curso.",
@@ -436,7 +468,7 @@
       "hours_prefix": "Horas de la impresora al momento del servicio:"
     },
     "service_history": {
-      "card_title": "Historial de servicio",
+      "card_title": "Registro de servicio",
       "add_button": "Añadir registro de servicio",
       "none": "Aún no hay servicio registrado."
     }
@@ -532,6 +564,7 @@
     "move_failed": "Error al mover: {message}"
   },
   "common": {
+    "add": "Añadir",
     "save": "Guardar",
     "cancel": "Cancelar",
     "discard": "Descartar",
@@ -932,15 +965,18 @@
       "status_no_response": "Sin respuesta",
       "menu_more_actions": "Más acciones",
       "menu_maintenance": "Mantenimiento",
+      "menu_duplicate": "Duplicar",
       "menu_move_up": "Subir",
       "menu_move_down": "Bajar",
       "menu_remove": "Quitar…",
       "remove_confirm": "¿Quitar \"{name}\"? No tendrá efecto hasta que guardes.",
       "remove_confirm_fallback_name": "esta impresora",
+      "duplicate_name": "{name} (Copia)",
       "section_identity": "Identidad",
       "field_name": "Nombre",
       "field_location": "Ubicación",
       "field_brand": "Marca",
+      "field_brand_locked_title": "La marca proviene del conector. Solo las impresoras Klipper (Moonraker) genéricas pueden definirla.",
       "field_tags": "Etiquetas",
       "field_tags_hint": "separadas por comas — p. ej. filtrar en Vista de cámara, o /red/ para teñir la tarjeta",
       "section_connection": "Conexión",

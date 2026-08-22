@@ -3,9 +3,9 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 21,
+    "version": 34,
     "snapconVersion": "0.5.0",
-    "updated": "2026-08-17"
+    "updated": "2026-08-21"
   },
   "printer_status": {
     "offline": "Offline",
@@ -16,7 +16,11 @@
     "loaded": "Loaded",
     "complete": "Complete",
     "cancelled": "Cancelled",
-    "idle": "Idle"
+    "idle": "Idle",
+    "leveling": "Leveling",
+    "calibrating": "Calibrating",
+    "mapping_heads": "Mapping heads",
+    "preparing": "Preparing"
   },
   "printer": {
     "action_resume": "Resume",
@@ -40,10 +44,31 @@
     "action_plate_title": "Plate {done}/{total}"
   },
   "fleet": {
-    "confirm_estop": "Emergency stop will immediately halt the printer and require a firmware restart to recover.\n\nAre you sure?",
-    "confirm_cancel_print": "Cancel this print? This can't be undone.",
     "estop_status_sending": "Sending emergency stop…",
     "estop_status_done": "Emergency stopped — firmware restart required",
+    "estop": {
+      "title": "Emergency stop",
+      "consequences_title": "This will:",
+      "consequence_halt": "Halt all motion and heaters immediately, without a controlled shutdown",
+      "consequence_lose_print": "Lose this print, with no way to resume",
+      "consequence_restart": "Require a firmware restart before the printer can be used again",
+      "alternative_note": "To stop normally and keep the option to resume, use Pause or Cancel instead.",
+      "progress_line": "{elapsed} of printing, {remaining} from finishing",
+      "hold_label": "Hold to stop {printer}",
+      "hold_label_countdown": "Keep holding, {n}",
+      "helper_idle": "Press and hold for three seconds",
+      "helper_holding": "Release to cancel"
+    },
+    "cancelPrint": {
+      "title": "Cancel this print?",
+      "consequence_stops": "The print stops and cannot be resumed",
+      "consequence_lost": "{elapsed} of printing and {filament} of filament are lost",
+      "consequence_queue_managed": "The queue pauses and needs attention before it continues",
+      "consequence_queue_standalone": "The printer becomes idle, ready for a new file",
+      "alternative_note": "To keep the option to resume, use Pause instead.",
+      "keep_printing": "Keep printing",
+      "confirm_button": "Cancel print"
+    },
     "ctl_status_working_pause": "Pausing…",
     "ctl_status_working_resume": "Resuming…",
     "ctl_status_working_cancel": "Cancelling…",
@@ -56,7 +81,8 @@
       "deselect_alt": "Deselect",
       "fs_fork_fallback": "mixed",
       "full_spectrum_title": "Full Spectrum ({fork})",
-      "compat_warning": "⚠ Sliced for \"{model}\", not Snapmaker U1 — may not print correctly",
+      "detected_printer": "Sliced for {brand}",
+      "brand_unknown": "Unknown",
       "needed_colors_one": "{count} color",
       "needed_colors_other": "{count} colors",
       "uses_colors_prefix": "Uses <b style=\"color:var(--ink)\">{n}</b> of {total} palette colors.",
@@ -152,6 +178,9 @@
       "status_queued_will_upload": "Queued — will upload once idle",
       "status_queued_short": "Queued",
       "status_setting_head_mapping": "Setting head mapping…",
+      "status_leveling_bed": "Leveling bed — this can take a few minutes…",
+      "status_calibrating_flow": "Calibrating flow — this can take a few minutes…",
+      "status_preparing_timelapse": "Preparing time-lapse…",
       "status_printing_on": "Printing on {printer}",
       "status_printing_on_mapped": "Printing on {printer} — heads mapped",
       "status_uploaded": "Uploaded",
@@ -235,6 +264,8 @@
         "done_summary": "Done — {ok}/{total} succeeded.",
         "error_summary": "Finished with errors — {ok}/{total} succeeded.",
         "idle_only": "Idle only",
+        "compatible_only": "Compatible only",
+        "confirm_incompatible": "One or more selected printers don't match this file's detected brand. Continue?",
         "upload_and_print": "Upload & Print"
       },
       "quickprint": {
@@ -323,6 +354,8 @@
     "metric_print_time": "Print time",
     "metric_recent_success": "Recent success",
     "metric_free_space": "Free space",
+    "warranty_until": "Warranty until {date}",
+    "warranty_expired_on": "Warranty expired {date}",
     "metric_last_service": "Last service",
     "data_unavailable": "{section} data unavailable.",
     "data_unavailable_reason": "{section} data unavailable: {reason}.",
@@ -356,11 +389,16 @@
     },
     "controller": {
       "card_title": "Controller link",
-      "desc": "Communication health between the mainboard and each toolhead controller. Rising retransmits, invalid bytes, or task load usually mean a cable, connector, or interference problem.",
-      "reading_retransmits": "Retransmits",
-      "reading_invalid_bytes": "Invalid bytes",
-      "reading_task_load": "Task load",
-      "rate_unit": "{rate} per 1M bytes",
+      "reading_retransmits": "Retrans",
+      "col_controller": "Controller",
+      "unit_per_million": "per 1M",
+      "unit_bytes": "bytes",
+      "unit_ms": "ms",
+      "warn_line": "{controller}: {detail}",
+      "warn_more_one": "One other controller is also flagged.",
+      "warn_more_other": "{count} other controllers are also flagged.",
+      "reading_invalid_bytes": "Invalid",
+      "reading_task_load": "Load",
       "explain_retransmits": "Rising retransmits usually indicate a cable, connector, or interference problem.",
       "explain_invalid": "Invalid bytes indicate corrupted communication, not just a retry — check the connection.",
       "explain_task_load": "The controller's main loop is taking longer than expected to process communication.",
@@ -368,14 +406,12 @@
     },
     "system": {
       "card_title": "System utilization",
-      "desc": "Host load on the machine running Klipper. Sustained high CPU or memory usage can cause dropped MCU communication or a sluggish web UI.",
       "reading_cpu_temp": "CPU temperature",
       "reading_cpu_usage": "CPU usage",
       "reading_memory": "Memory"
     },
     "heaters": {
       "card_title": "Heaters",
-      "desc": "Duty cycle while holding target. Persistent high duty means a failing heater or thermistor.",
       "state_idle": "Idle",
       "state_heating": "Heating",
       "state_cooling": "Cooling",
@@ -387,13 +423,9 @@
     },
     "fans": {
       "card_title": "Fans",
-      "desc": "Cooling airflow. A fan commanded on but not spinning usually means a stuck bearing, blocked blade, or bad connector.",
-      "reading_commanded": "{pct}% commanded",
+      "reading_commanded": "{pct}%",
       "reading_rpm": "{rpm} RPM",
-      "reading_not_measurable": "not measurable",
-      "summary_all_stopped_one": "{count} fan, all stopped",
-      "summary_all_stopped_other": "{count} fans, all stopped",
-      "show_all_button": "Show all",
+      "reading_not_measurable": "N/A",
       "name_main_cooling": "Main Cooling Fan",
       "name_assist_cooling": "Assist Cooling Fan",
       "name_recirculation": "Recirculation Fan",
@@ -407,15 +439,15 @@
     },
     "storage": {
       "card_title": "Storage",
-      "desc": "Disk usage by category. Uploads and prints can fail confusingly once free space runs low.",
       "critical_banner": "Free space is critically low — uploads can fail confusingly once the disk fills.",
       "cat_gcode": "G-code",
+      "sync_root_gcodes": "Jobs",
       "files_count_one": "{count} file",
       "files_count_other": "{count} files",
       "unused_suffix": " (Unused {n})",
       "unused_title_one": "Not printed in the last {days} day — per the G-code sync retention setting.",
       "unused_title_other": "Not printed in the last {days} days — per the G-code sync retention setting.",
-      "totals": "total {total} · used {used} · free {free}",
+      "totals": "total {total} · used {used}",
       "sync_title_unsupported": "This printer's connector doesn't support file sync.",
       "sync_title_not_configured": "Configure a {label} folder in Settings first.",
       "sync_title_running": "A sync is already running.",
@@ -436,7 +468,7 @@
       "hours_prefix": "Printer hours at time of service:"
     },
     "service_history": {
-      "card_title": "Service history",
+      "card_title": "Service log",
       "add_button": "Add service record",
       "none": "No service recorded yet."
     }
@@ -532,6 +564,7 @@
     "move_failed": "Move failed: {message}"
   },
   "common": {
+    "add": "Add",
     "save": "Save",
     "cancel": "Cancel",
     "discard": "Discard",
@@ -932,15 +965,18 @@
       "status_no_response": "No response",
       "menu_more_actions": "More actions",
       "menu_maintenance": "Maintenance",
+      "menu_duplicate": "Duplicate",
       "menu_move_up": "Move up",
       "menu_move_down": "Move down",
       "menu_remove": "Remove…",
       "remove_confirm": "Remove \"{name}\"? This won't take effect until you save.",
       "remove_confirm_fallback_name": "this printer",
+      "duplicate_name": "{name} (Copy)",
       "section_identity": "Identity",
       "field_name": "Name",
       "field_location": "Location",
       "field_brand": "Brand",
+      "field_brand_locked_title": "Brand comes from the connector. Only generic Klipper (Moonraker) printers can set it.",
       "field_tags": "Tags",
       "field_tags_hint": "comma-separated — e.g. filter Camera View, or /red/ to tint the card",
       "section_connection": "Connection",

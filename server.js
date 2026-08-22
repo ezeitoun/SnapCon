@@ -2071,6 +2071,18 @@ app.get("/api/remote-access/probe", (req, res) => {
   res.json({ ok: true });
 });
 
+// The one connector whose Brand a client may set (see buildPrinterRecord).
+const BRAND_EDITABLE_CONNECTOR = "klipper-moonraker";
+const BRAND_MAX_LENGTH = 30;
+// Brand is printer-supplied text that ends up in fleet rows, the list view,
+// and modal titles — the frontend escapes it at every sink, this trims it to
+// a sane length and drops control characters at the boundary as well.
+function sanitizeBrand(value) {
+  if (typeof value !== "string") return "";
+  const CONTROL_CHARS = /[\u0000-\u001F\u007F]/g;
+  return value.replace(CONTROL_CHARS, "").trim().slice(0, BRAND_MAX_LENGTH);
+}
+
 // Creality-only camera auto-detect (see that connector's detectCamera):
 // runs once per printer, at save time — either on a brand-new printer or
 // whenever its URL changes (could be a different physical unit) — not on
@@ -2097,10 +2109,14 @@ async function buildPrinterRecord(p, existing) {
     o.forceDefaults = false;
   }
   o.connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
-  // Brand is derived from the connector, not user-editable (the client's
-  // Brand field is a disabled display, but this is the actual source of
-  // truth — never trusts whatever string a stale/scripted client sends).
-  o.brand = getConnector(o.connector).brand || getConnector(o.connector).label || o.connector;
+  // Brand is derived from the connector for every connector except generic
+  // Klipper (Moonraker) — that one is a protocol many vendors speak, so
+  // "Klipper" names the connector, not the machine's maker, and the user may
+  // type the real one (Voron, Ratrig, a self-build). This stays the source
+  // of truth either way: the derived value is never taken from the client,
+  // and the typed one is only accepted for that single connector, sanitized.
+  const derivedBrand = getConnector(o.connector).brand || getConnector(o.connector).label || o.connector;
+  o.brand = (o.connector === BRAND_EDITABLE_CONNECTOR ? sanitizeBrand(p.brand) : "") || derivedBrand;
   // Only meaningful for creality-klipper (see that connector's
   // getCapabilities) — harmless if present on any other connector,
   // just never read.
