@@ -917,6 +917,16 @@ const offlineCache = new Map();   // printer url -> { result, until }
 // two consecutive polls before it's accepted, so a single noisy reading
 // can't reach the client — a genuine temperature change still shows up,
 // just one poll interval (a couple seconds) later.
+//
+// That "requires a repeat" rule breaks down for a genuine, sustained ramp
+// (heating/cooling toward a target): the reading is a different integer on
+// almost every poll, so it never repeats twice in a row, and `shown` stays
+// frozen at whatever it was before the ramp started — confirmed live on a
+// real K1C (hotend actually at 128.5°C heading to 130, still showing 115°C).
+// JITTER_BAND bounds what counts as "rounding noise" (the ±1° case this was
+// built for) — anything bigger is a real change and shows immediately,
+// without waiting for a repeat.
+const JITTER_BAND = 1;
 const tempStableCache = new Map(); // "printerUrl:bed"|"printerUrl:hotend" -> { shown, pendingVal, pendingCount }
 function stabilizeTemp(key, incoming) {
   if (!incoming) return incoming;
@@ -924,6 +934,8 @@ function stabilizeTemp(key, incoming) {
   if (!st) { st = { shown: incoming.temp, pendingVal: incoming.temp, pendingCount: 0 }; tempStableCache.set(key, st); }
   else if (incoming.temp === st.shown) {
     st.pendingVal = incoming.temp; st.pendingCount = 0;
+  } else if (Math.abs(incoming.temp - st.shown) > JITTER_BAND) {
+    st.shown = incoming.temp; st.pendingVal = incoming.temp; st.pendingCount = 0;
   } else {
     if (incoming.temp === st.pendingVal) st.pendingCount++;
     else { st.pendingVal = incoming.temp; st.pendingCount = 1; }
