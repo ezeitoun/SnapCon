@@ -8232,7 +8232,15 @@ function addPrinterRow(name,url,opts,autoOpen){
     if(!u){ st.className="pstatus err"; st.textContent=t("settings.printers.test_connection_no_url"); return; }
     st.className="pstatus work"; st.textContent=t("settings.printers.test_connection_testing");
     try{
-      const r=await getJSON("/api/test-connection?url="+encodeURIComponent(u)+"&connector="+encodeURIComponent(connectorEl.value));
+      // Sends the row's CURRENT field values, not the saved ones — the point
+      // of Test is to check a printer before committing it. serial/
+      // verificationCode are what FlashForge authenticates with; omitting
+      // them made every FlashForge test fail with "SN is different".
+      const r=await (await postJSON("/api/test-connection",{
+        url:u, connector:connectorEl.value, name:nameEl.value.trim(),
+        serial:row.querySelector(".pserial").value.trim(),
+        verificationCode:row.querySelector(".pvcode").value.trim()
+      })).json();
       if(r.error) throw new Error(r.error);
       const parts=[t("settings.printers.test_connection_label_state",{value:r.state||"unknown"})];
       if(r.bed&&typeof r.bed.temp==="number") parts.push(t("settings.printers.test_connection_label_bed",{value:r.bed.temp}));

@@ -3816,11 +3816,27 @@ app.get("/api/probe-printer", requireAdmin, async (req, res) => {
 // connector abstraction so it works for every brand, and doesn't require
 // the printer to already be saved in PRINTERS (url/connector come straight
 // from the form, so this also works while adding a new printer).
-app.get("/api/test-connection", requireAdmin, async (req, res) => {
-  const url = (req.query.url || "").trim().replace(/\/+$/, "");
+// POST rather than GET: FlashForge authenticates every request with a
+// checkCode, and a secret has no business in a query string (server logs,
+// browser history, Referer). Credentials come from the submitted form rather
+// than the saved config because Test has to work on a printer row that hasn't
+// been saved yet — that's most of what the button is for.
+app.post("/api/test-connection", requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const url = String(b.url || "").trim().replace(/\/+$/, "");
   if (!url) return res.status(400).json({ error: "url required" });
-  const conn = getConnector(req.query.connector);
-  const p = { url };
+  const conn = getConnector(b.connector);
+  // Mirrors the subset of sanitizePrinter()'s shape that the probe path
+  // actually reads, so a passing test means those same credentials will still
+  // work once the row is saved. Without serial/verificationCode here, every
+  // FlashForge test failed with the printer's own "SN is different" no matter
+  // what the user had typed. `name` is included because ffPost interpolates it
+  // into its unreachable-printer message.
+  const p = { url, name: String(b.name || "").trim() || url };
+  if (b.serial) p.serial = String(b.serial);
+  // Same 8-char cap sanitizePrinter() applies, so a code that would be
+  // truncated on save can't quietly pass the test at full length.
+  if (b.verificationCode) p.verificationCode = String(b.verificationCode).slice(0, 8);
   try {
     const st = await conn.probe(p);
     if (!st.online) return res.status(502).json({ error: st.error || "Could not reach printer" });
