@@ -169,6 +169,13 @@ function makeParser({ scanBody = false } = {}) {
       physicalHeads: 4,
       ...detectFS(cfg),
       printerModel: cfg["printer_model"] || null,
+      // OrcaSlicer-family "Vendor@Model" system-preset id (e.g.
+      // "Creality@K1") — a more specific, vendor-tagged signal than
+      // printer_model, which can just name the interface/profile chosen
+      // (e.g. "Generic Klipper Printer" — Klipper is the protocol several
+      // brands speak, not a brand itself) rather than the actual
+      // manufacturer. See detectPrinterBrand() in public/app.js.
+      printerSettingsId: cfg["printer_settings_id"] || null,
       meta, anyTC: any, noColors: !colours.length,
       keys, allKeys: Object.keys(cfg)
     };

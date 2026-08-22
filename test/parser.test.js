@@ -63,6 +63,28 @@ test("a weight list with 70,000 entries no longer throws (Math.max(...used) Rang
   assert.equal(result.paletteCount, 70000);
 });
 
+// Regression: a real Creality-Print-sliced file reported printer_model as
+// "Generic Klipper Printer" (the interface/profile chosen, not a brand —
+// Klipper is a protocol several different brands speak) while
+// printer_settings_id said "Creality@K1" for the very same file — public/
+// app.js's detectPrinterBrand() needs this field surfaced to tell them
+// apart, so parseGcodeMap must expose it, not just printer_model.
+test("printerSettingsId is surfaced alongside printerModel, even when the two disagree", () => {
+  const text = [
+    "; printer_model = Generic Klipper Printer",
+    "; printer_settings_id = Creality@K1",
+    "G28"
+  ].join("\n");
+  const result = parseGcodeMap(text, { scanBody: false });
+  assert.equal(result.printerModel, "Generic Klipper Printer");
+  assert.equal(result.printerSettingsId, "Creality@K1");
+});
+
+test("printerSettingsId is null when the file has no such comment", () => {
+  const result = parseGcodeMap("G28\nG1 X10\n", { scanBody: false });
+  assert.equal(result.printerSettingsId, null);
+});
+
 test("normHex is unaffected by the parser changes", () => {
   assert.equal(normHex("ff0000"), "#FF0000");
   assert.equal(normHex("not-a-color"), null);
