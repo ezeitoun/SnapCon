@@ -96,7 +96,19 @@ async function probe(p) {
       message: ps.message || "",
       errorCode: "",
       filename: ps.filename || "",
-      progress: typeof (st.virtual_sdcard || {}).progress === "number" ? st.virtual_sdcard.progress : (typeof ds.progress === "number" ? ds.progress : 0),
+      // display_status.progress tracks real gcode EXECUTION; virtual_sdcard.
+      // progress tracks how far Klipper's SD-card reader has read AHEAD into
+      // its own buffer, which can run well past a long blocking macro (e.g.
+      // this printer's own START_PRINT, confirmed live to run several
+      // minutes of leveling before the first real extrusion command) even
+      // though nothing has actually printed yet — confirmed live: SnapCon
+      // showed 3.6%/"layer 7" from virtual_sdcard while Fluidd (reading
+      // display_status) correctly showed 0%, mid-leveling, nothing executed.
+      // display_status is preferred first now; virtual_sdcard is still the
+      // fallback for a printer.cfg with no [display_status] section at all
+      // (a real gap on some headless/Moonraker-only setups), where
+      // ds.progress would never be a number to begin with.
+      progress: typeof ds.progress === "number" ? ds.progress : (typeof (st.virtual_sdcard || {}).progress === "number" ? st.virtual_sdcard.progress : 0),
       elapsed: typeof ps.print_duration === "number" ? ps.print_duration : null,
       filamentUsed: typeof ps.filament_used === "number" ? ps.filament_used : null,
       bed: (typeof hb.temperature === "number") ? { temp: Math.round(hb.temperature), target: Math.round(hb.target || 0) } : null,
@@ -111,15 +123,27 @@ async function probe(p) {
     // Klipper's own print_stats.info (current_layer/total_layer) stays null
     // on real Creality Print output — confirmed live: the sliced gcode never
     // calls SET_PRINT_STATS_INFO. The total layer count IS available as
-    // plain text near the top of the file in both real dialects confirmed
-    // live (Cura-derived: ";LAYER_COUNT:<n>"; OrcaSlicer-derived: "total
-    // layer number: <n>"), so the current layer is estimated from
-    // progress × total — approximate (per-layer print time varies), but far
-    // better than showing nothing. See getTotalLayers below.
+    // plain text near the top or tail of the file across the confirmed
+    // dialects (Cura: ";LAYER_COUNT:<n>"; OrcaSlicer: "total layer number:
+    // <n>"; Creality Print: "total layers count = <n>") — see
+    // getTotalLayers below. For the CURRENT layer, this printer's
+    // virtual_sdcard also exposes a real, smoothly-incrementing `layer`
+    // field — a Creality-specific extension, not stock Klipper — confirmed
+    // live to advance by exactly 1 per layer while display_status.progress
+    // (the source for result.progress above) only updates in coarse
+    // whole-percent steps, which made a progress×total estimate jump by 2+
+    // layers at a time. Prefer the real counter; fall back to the
+    // progress×total estimate only when virtual_sdcard.layer isn't a valid
+    // positive number (e.g. a printer.cfg build that doesn't expose it).
     if (!result.layer && result.progress > 0 && (ps.state === "printing" || ps.state === "paused") && ps.filename) {
       try {
         const total = await getTotalLayers(p, ps.filename);
-        if (total) result.layer = { current: Math.min(total, Math.max(1, Math.round(result.progress * total))), total };
+        if (total) {
+          const vsLayer = (st.virtual_sdcard || {}).layer;
+          result.layer = (typeof vsLayer === "number" && vsLayer > 0)
+            ? { current: Math.min(total, vsLayer), total }
+            : { current: Math.min(total, Math.max(1, Math.round(result.progress * total))), total };
+        }
       } catch { /* layer estimate is a bonus, never fail the probe over it */ }
     }
     // CFS is a separate proprietary socket from everything queried above —
@@ -143,11 +167,32 @@ async function probe(p) {
 }
 exports.probe = probe;
 
+// Cura (;LAYER_COUNT:<n>, conventionally near the top) and OrcaSlicer
+// ("total layer number: <n>") were the two known dialects here. Confirmed
+// live on a real Creality-Print-sliced file (the same slicer this
+// printer's own config identifies itself with — see printer_settings_id in
+// parser.js) that it uses a THIRD, different phrasing: "; total layers
+// count = <n>" — and confirmed that line lives in the slicer's config-
+// summary block near the END of the file, not the start.
+function findLayerCount(text) {
+  const cura = /;LAYER_COUNT:(\d+)/.exec(text);
+  if (cura) return parseInt(cura[1], 10);
+  const orca = /total layer number:\s*(\d+)/i.exec(text);
+  if (orca) return parseInt(orca[1], 10);
+  const creality = /total layers count\s*=\s*(\d+)/i.exec(text);
+  if (creality) return parseInt(creality[1], 10);
+  return null;
+}
+
 // Total layer count for the currently-printing file, read once per job and
-// cached (a small bounded header read, not a full-file scan, and never
-// re-fetched for the same printer+filename since it can't change mid-print).
-// Keyed by printer URL, not id, so it's naturally invalidated if the
-// printer's own address changes.
+// cached (two small bounded reads — head and tail — not a full-file scan,
+// and never re-fetched for the same printer+filename since it can't change
+// mid-print). Both ends are checked since different slicer dialects place
+// their layer-count comment in different places (Cura conventionally near
+// the top; OrcaSlicer/Creality Print's own config-summary block confirmed
+// live at the bottom of a 3MB+ file, well past a head-only read). Keyed by
+// printer URL, not id, so it's naturally invalidated if the printer's own
+// address changes.
 const LAYER_COUNT_CACHE = new Map(); // "url|filename" -> total layers, or null if confirmed absent
 async function getTotalLayers(p, filename) {
   const key = http.baseUrl(p) + "|" + filename;
@@ -155,15 +200,18 @@ async function getTotalLayers(p, filename) {
   let total = null;
   try {
     const encodedPath = filename.split("/").map(encodeURIComponent).join("/");
-    const r = await http.fetchTimeout(http.baseUrl(p) + "/server/files/gcodes/" + encodedPath, 8000,
-      { headers: { Range: "bytes=0-65536" } });
-    if (r.ok || r.status === 206) {
-      const text = await r.text();
-      const cura = /;LAYER_COUNT:(\d+)/.exec(text);
-      const orca = /total layer number:\s*(\d+)/i.exec(text);
-      const n = cura ? parseInt(cura[1], 10) : (orca ? parseInt(orca[1], 10) : null);
-      if (n > 0) total = n;
-    }
+    const url = http.baseUrl(p) + "/server/files/gcodes/" + encodedPath;
+    const [head, tail] = await Promise.all([
+      http.fetchTimeout(url, 8000, { headers: { Range: "bytes=0-65536" } }),
+      // A suffix range ("last N bytes") — confirmed live to work against
+      // Moonraker's own file server (returns 206 Partial Content, correctly
+      // clamped when the whole file is smaller than the requested range).
+      http.fetchTimeout(url, 8000, { headers: { Range: "bytes=-65536" } })
+    ]);
+    let n = null;
+    if (head.ok || head.status === 206) n = findLayerCount(await head.text());
+    if (n === null && (tail.ok || tail.status === 206)) n = findLayerCount(await tail.text());
+    if (n > 0) total = n;
   } catch { /* leave uncached (null but not stored) so a transient failure is retried next probe, not stuck forever */ return null; }
   LAYER_COUNT_CACHE.set(key, total);
   return total;
@@ -234,13 +282,46 @@ function decodeCfsHeads(boxsInfo) {
 // ---- Print control (stock Klipper macro names — Creality's on-printer
 // PAUSE/RESUME/CANCEL_PRINT wrapping is transparent to Moonraker callers) ----
 exports.uploadFile = http.uploadFile;
-exports.startPrintFile = http.startPrintFile;
-exports.pause = http.pause;
-exports.resume = http.resume;
-exports.cancel = http.cancel;
-exports.eject = http.eject;
-exports.estop = http.estop;
-exports.bedTemp = http.bedTemp;
+// Local overrides below, not http-utils.js's shared 8s "fast command"
+// default: confirmed live, repeatedly, that this printer's own Moonraker/
+// SBC can genuinely take longer than 8s to respond to a basic print-control
+// command while otherwise working correctly — first found with
+// SDCARD_PRINT_FILE right after a G29 leveling pass (confirmed via a live
+// probe immediately after: state:"printing", virtual_sdcard.is_active:true
+// — the print was genuinely running, SnapCon had just given up waiting and
+// reported a false failure), then again with a plain CANCEL_PRINT (printer
+// cancelled immediately for real; SnapCon still reported "did not respond
+// within 8000ms"). A longer, explicit bound avoids reporting a false
+// failure for a command that's actually working, for every ordinary
+// print-control action.
+//
+// estop is the deliberate exception — NOT given a longer timeout, still
+// exports.estop = http.estop unchanged below. E-Stop is the one action
+// where a longer wait is the wrong tradeoff: in a real emergency the
+// operator needs to know FAST if the command isn't landing, not have
+// SnapCon quietly wait longer hoping it eventually works — an unresponsive
+// printer during an E-Stop may need the operator to act physically (pull
+// power) instead of waiting on it.
+const CONTROL_TIMEOUT_MS = 60 * 1000;
+
+// assertSafeGcodeArg's check is duplicated here rather than reaching into
+// http-utils.js for it (it's exported test-only there) — the same trivial,
+// well-understood guard http-utils.js's own startPrintFile already applies
+// before interpolating a filename into a literal gcode script line.
+function assertSafeGcodeArg(value) {
+  if (/["\r\n]/.test(String(value))) throw new Error("Invalid characters in gcode argument");
+  return value;
+}
+async function startPrintFile(p, filename) {
+  await http.sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${assertSafeGcodeArg(filename)}"`, CONTROL_TIMEOUT_MS);
+}
+exports.startPrintFile = startPrintFile;
+exports.pause = p => http.sendGcode(p, "PAUSE", CONTROL_TIMEOUT_MS);
+exports.resume = p => http.sendGcode(p, "RESUME", CONTROL_TIMEOUT_MS);
+exports.cancel = p => http.sendGcode(p, "CANCEL_PRINT", CONTROL_TIMEOUT_MS);
+exports.eject = p => http.sendGcode(p, "SDCARD_RESET_FILE", CONTROL_TIMEOUT_MS);
+exports.estop = http.estop; // deliberately unchanged — see comment above
+exports.bedTemp = (p, t) => http.sendGcode(p, "M140 S" + Math.round(t), CONTROL_TIMEOUT_MS);
 
 // Named "applyHeadMapping" only because that's the pre-print-preferences
 // hook server.js calls for every connector before starting a print (see its
@@ -249,15 +330,106 @@ exports.bedTemp = http.bedTemp;
 // (the K2 CFS gap noted above); the only real preference is auto-level.
 // `/printer/gcode/script` blocks until the macro fully finishes (standard
 // Moonraker behavior, not a fire-and-forget queue), so this genuinely waits
-// out the full ~1-3 minute leveling pass before the caller proceeds to
-// upload/start the print — matching the intent of the checkbox: a leveled
-// bed BEFORE this print, not a leveling pass racing it.
+// out the full leveling pass before the caller proceeds to upload/start the
+// print — matching the intent of the checkbox: a leveled bed BEFORE this
+// print, not a leveling pass racing it.
 async function applyHeadMapping(p, tools, map, prefs = {}) {
   const autoLevel = prefs.autoLevel !== undefined ? !!prefs.autoLevel : !!p.autoLevel;
-  // Generous explicit bound (not the default 8s fast-command timeout) — see
-  // this function's own comment above: the documented ~1-3 minute leveling
-  // pass is a genuine synchronous wait, not a hang to guard against.
-  if (autoLevel) await http.sendGcode(p, "G29", 5 * 60 * 1000);
+  // Generous explicit bound (not the default 8s fast-command timeout). A
+  // real K1C's own klippy.log showed a live PRTOUCH full-bed G29 pass still
+  // probing past the originally-documented "~1-3 minutes" — an abort here
+  // does NOT stop the physical macro (Klipper has no idea the HTTP client
+  // gave up), so a too-short bound doesn't just show a slow-but-harmless
+  // error: it silently orphans the print, since the caller (server.js)
+  // never reaches startPrintFile once this rejects, even though the printer
+  // goes on to finish leveling successfully a few minutes later on its own.
+  // 12 minutes gives real headroom above what's been observed live.
+  if (autoLevel) await sendG29WithRecovery(p);
+}
+
+// A real K1C's own connection to Moonraker has been observed, live and
+// repeatedly (including 2-3 times on the SAME print, back to back), to drop
+// mid-G29 with a bare connection-level failure ("Could not reach <name>:
+// fetch failed" — http-utils.js's moonrakerPost, NOT a timeout and NOT a
+// real HTTP error response from Moonraker) — plausibly the printer's own
+// SBC struggling to keep servicing Moonraker's HTTP port while it's busy
+// with unusually heavy retransmit traffic to the leveling MCU sub-board
+// during active probing (confirmed via klippy.log — a hardware/firmware
+// reliability characteristic of the printer, not something this connector
+// can fix outright).
+//
+// The mesh itself keeps probing and saves successfully on the printer
+// regardless of whether SnapCon's HTTP connection survived to see it —
+// confirmed live: "Mesh Bed Leveling Complete" still appears in klippy.log
+// even on a run where the HTTP call to send G29 had already failed client-
+// side. So blindly RESENDING G29 after a drop is actively counterproductive
+// when drops recur during the same pass, as observed: each resend restarts
+// the whole multi-minute probe from zero, and if the connection is flaky
+// for the pass's whole duration, every resend can hit the same drop again,
+// burning many multiples of the real leveling time for nothing (confirmed:
+// 3 resends, 3 drops, print failed after ~15 minutes of no forward
+// progress).
+//
+// Instead: snapshot the currently-saved mesh before sending G29. If the
+// send drops with this specific connection-level error, don't resend it —
+// poll the printer with cheap reachability checks until it responds again,
+// then confirm the saved mesh actually changed (real evidence a fresh pass
+// completed, not just a guess based on elapsed time) before proceeding.
+// Never applies to a real rejection from Moonraker/Klipper (a non-2xx
+// response) or a timeout (the 12-minute bound is already generous) —
+// those indicate a genuine problem retrying/waiting wouldn't fix.
+const MESH_RECOVERY_POLL_INTERVAL_MS = 10 * 1000;
+const MESH_RECOVERY_TIMEOUT_MS = 12 * 60 * 1000;
+
+// null means "no usable fingerprint right now" — either unreachable, or a
+// pass is actively in progress. Confirmed live, mid-G29 on a real K1C:
+// bed_mesh.probed_matrix is cleared to an empty shape ([[]]) the INSTANT a
+// new pass starts, and only repopulated once the whole pass finishes —
+// profile_name is blanked the same way, while profiles.default.points (the
+// last-SAVED config, untouched until save_config at the very end) keeps
+// showing the previous pass's data throughout. An earlier version of this
+// compared raw probed_matrix values directly, which meant "the old mesh
+// just got cleared to start a new pass" (probed_matrix: [[]], genuinely
+// different from the populated "before" snapshot) was wrongly read as
+// "leveling already finished" — treating an empty/unpopulated matrix as "no
+// fingerprint" (same as unreachable) instead of a real value fixes that: it
+// can never be mistaken for a legitimately different, freshly-completed
+// mesh, so the caller keeps waiting until a real one appears.
+async function readMeshFingerprint(p) {
+  try {
+    const { ok, json } = await http.fetchJSONTimeout(http.baseUrl(p) + "/printer/objects/query?bed_mesh", 5000);
+    if (!ok) return null;
+    const mesh = json.result && json.result.status && json.result.status.bed_mesh;
+    const matrix = mesh && mesh.probed_matrix;
+    if (!matrix || !matrix.length || !matrix.some(row => row && row.length)) return null;
+    return JSON.stringify(matrix);
+  } catch {
+    return null;
+  }
+}
+
+async function waitForFreshMesh(p, before) {
+  const deadline = Date.now() + MESH_RECOVERY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, MESH_RECOVERY_POLL_INTERVAL_MS));
+    const now = await readMeshFingerprint(p);
+    if (now !== null && now !== before) {
+      console.log(`[creality] ${p.name}: reconnected — a new bed mesh was saved, treating G29 as complete`);
+      return;
+    }
+  }
+  throw new Error(`${p.name}: lost connection during G29 and never confirmed the leveling pass finished (bed mesh unchanged after ${Math.round(MESH_RECOVERY_TIMEOUT_MS / 60000)} minutes)`);
+}
+
+async function sendG29WithRecovery(p) {
+  const before = await readMeshFingerprint(p);
+  try {
+    await http.sendGcode(p, "G29", 12 * 60 * 1000);
+  } catch (e) {
+    if (!/^Could not reach /.test(e.message)) throw e;
+    console.log(`[creality] ${p.name}: lost connection during G29 (${e.message}) — the physical pass keeps running on the printer independent of this HTTP connection, so waiting for it to reconnect and confirm a new mesh was saved instead of resending G29`);
+    await waitForFreshMesh(p, before);
+  }
 }
 exports.applyHeadMapping = applyHeadMapping;
 // No unloadFilament — that's the K2 CFS gap noted above.
@@ -412,7 +584,7 @@ exports.getCameraSnapshot = getCameraSnapshot;
 // macro variables and factory_printer.cfg's header comment, both far more
 // expensive to fetch for every candidate IP in a subnet scan, so they're
 // left as a manual follow-up rather than baked into discovery).
-exports._internal = { decodeCfsHeads, fetchCfsStatus, decodeEmbeddedThumbnail, getTotalLayers, LAYER_COUNT_CACHE };
+exports._internal = { decodeCfsHeads, fetchCfsStatus, decodeEmbeddedThumbnail, getTotalLayers, LAYER_COUNT_CACHE, MESH_RECOVERY_POLL_INTERVAL_MS, MESH_RECOVERY_TIMEOUT_MS };
 
 async function discoverAt(base) {
   const { ok, json } = await http.fetchJSONTimeout(`${base}/printer/info`, 900);
