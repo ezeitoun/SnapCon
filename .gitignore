@@ -24,3 +24,5 @@ CODE_AUDIT.md
 queue-management-design.md
 queue-management-implementation-plan.md
 FUTURE_WORK.md
+docs/TODO.md
+connector-test-results/
