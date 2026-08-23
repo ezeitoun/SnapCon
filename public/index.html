@@ -104,7 +104,6 @@
       </div>
       <button class="gear" id="compactBtn" data-i18n-title="global.topbar.view_title_compact" title="Switch to compact view"><img src="/view-compact.svg" class="topbar-icon" data-i18n-alt="global.topbar.compact_alt" alt="Compact"></button>
       <button class="gear" id="bulkHeatBtn" data-i18n-title="global.topbar.bulk_heat_title" title="Heat multiple printers"><img src="/preheat-icon.svg" class="topbar-icon" data-i18n-alt="global.topbar.heat_alt" alt="Heat"></button>
-      <button class="gear" id="maintBtn" data-i18n-title="global.topbar.maintenance_title" title="Maintenance"><img src="/maintenance.svg" class="topbar-icon" data-i18n-alt="global.topbar.maintenance_title" alt="Maintenance"></button>
       <button class="gear" id="healthBtn" data-i18n-title="global.topbar.health_title" title="Printer health" data-i18n-aria-label="global.topbar.health_title" aria-label="Printer health"><img src="/health.svg" class="topbar-icon" data-i18n-alt="global.topbar.health_title" alt="Printer health"><span class="health-badge" id="healthBadge" style="display:none"></span></button>
       <!-- Shown only when Queue Management is enabled. -->
       <button class="gear" id="queueBtn" data-i18n-title="settings.tabs.queue" title="Queue Management" style="display:none"><img src="/queue.svg" class="topbar-icon" data-i18n-alt="settings.tabs.queue" alt="Queue Management"></button>
@@ -684,8 +683,7 @@
     <div class="health-page" id="healthPage">
       <div class="health-page-hdr">
         <div class="health-picker" id="healthPicker"></div>
-        <span class="health-updated-at" id="healthUpdatedAt"></span>
-        <button class="btn ghost" id="healthRefreshBtn" data-i18n-title="health.refresh_title" title="Re-fetch this printer's health data" data-i18n="common.refresh">Refresh</button>
+
       </div>
       <div id="healthBody"></div>
       <!-- Inline service form (not a modal, per spec) — one static instance,
@@ -708,7 +706,7 @@
           <div class="maint-field"><label class="fl" data-i18n="maintenance.field_cost">Cost</label><input type="number" class="field" id="healthSvcCost" step="0.01" value="0.00"></div>
           <div class="maint-field"><label class="fl"><span data-i18n="maintenance.field_part">Part or supplier</span> (<span data-i18n="maintenance.field_optional_hint">optional</span>)</label><input class="field" id="healthSvcPart"></div>
         </div>
-        <div class="maint-field" style="margin-top:10px"><label class="fl" data-i18n="maintenance.field_notes">Notes</label><textarea class="field" id="healthSvcComment"></textarea></div>
+        <div class="maint-field" style="margin-top:10px"><label class="fl" data-i18n="maintenance.field_notes">Notes</label><textarea class="field" id="healthSvcComment" rows="6"></textarea></div>
         <label class="maint-offline-check" style="margin-top:10px"><input type="checkbox" id="healthSvcOffline"> <span data-i18n="maintenance.take_offline_label">Take printer offline</span></label>
         <div class="settings-help" style="margin-top:6px"><span data-i18n="health.service.hours_prefix">Printer hours at time of service:</span> <span id="healthSvcHours">—</span></div>
         <div class="pstatus" id="healthSvcStatus"></div>

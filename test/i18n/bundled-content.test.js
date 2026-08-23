@@ -664,8 +664,11 @@ test("final Fleet hardcoded-string scan fixes exist — AFC lane labels, Edit Ta
 });
 
 test("the health.* namespace exists — page chrome, the Needs Attention code-keyed reason map, every card, and the sync workflow, with raw diagnostics deliberately left out (Health+Maintenance regression anchor)", () => {
+  // No "updated_*_ago" or "refresh_title": the page auto-refreshes on the
+  // configured interval while a print is running, so it no longer carries a
+  // manual Refresh button or a "last updated" readout.
   ["chip_title_attention", "no_printer_selected", "loading", "unsupported", "could_not_reach",
-    "updated_seconds_ago", "updated_minutes_ago", "refresh_title", "printer_fallback",
+    "printer_fallback",
     "recent_success_jobs", "metric_print_time", "metric_recent_success", "metric_free_space",
     "metric_last_service", "data_unavailable", "data_unavailable_reason"]
     .forEach(k => assert.ok(`health.${k}` in enFlat, `health.${k} must exist`));

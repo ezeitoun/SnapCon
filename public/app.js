@@ -878,7 +878,6 @@ function applyRoleUI(){
   // on top of the settings panel.
   const settingsOpen = $("setup").classList.contains("show");
   $("gear").style.display = admin ? "" : "none";
-  if($("maintBtn")) $("maintBtn").disabled = !act;
   // The Queue dashboard is a normal part of the working UI, not an
   // exclusive full-page takeover like Settings — every other topbar
   // control (folder, sort, compact view, bulk heat, maintenance, Settings
@@ -891,7 +890,7 @@ function applyRoleUI(){
   if($("queueBtn")) $("queueBtn").style.display = (QUEUE_MANAGEMENT_ENABLED && !settingsOpen) ? "" : "none";
   // Health is read-only diagnostics — available to every role, same as the
   // fleet card itself; only Settings (an exclusive full-page takeover)
-  // hides it, same as maintBtn/bulkHeatBtn/filesBtn above.
+  // hides it, same as bulkHeatBtn/filesBtn above.
   if($("healthBtn")) $("healthBtn").style.display = settingsOpen ? "none" : "";
   if(USERS_ENABLED && CURRENT_USER){
     // First name if set, else fall back to the login name.
@@ -1156,7 +1155,7 @@ function refreshFleetModalsDynamicText(){
 function refreshHealthDynamicText(){
   if(!$("healthPage")||!$("healthPage").classList.contains("show")) return;
   renderHealthPicker();
-  updateHealthUpdatedAgo();
+
   renderHealthBody();
   renderHealthSvcChips();      // the form's own translated bits — it survived the render above
   updateHealthNextDuePreview();
@@ -1756,7 +1755,6 @@ function wireUI(){
   $("langImportCancel").addEventListener("click", ()=>{ $("langImportForm").style.display="none"; $("langImportFile").value=""; $("langImportPreview").textContent=""; LANG_IMPORT_PARSED=null; });
   $("langImportFile").addEventListener("change", handleLangImportFile);
   $("langImportCommit").addEventListener("click", commitLangImport);
-  $("healthRefreshBtn").addEventListener("click", ()=>{ if(HEALTH_PRINTER_ID!=null) loadHealthData(); });
   $("healthSvcCancel").addEventListener("click", closeHealthServiceForm);
   $("healthSvcSave").addEventListener("click", saveHealthService);
   $("healthSvcOffline").addEventListener("change", toggleHealthOffline);
@@ -1834,24 +1832,6 @@ function wireUI(){
   $("multiselectClear").addEventListener("click", ()=>{ SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); renderList(); });
   wireFileDrag();
   wireModal("maintReportModal", closeMaintReport, ["maintReportX","maintCancel"]);
-  // On the Health page the maintenance data is already on screen, for the
-  // printer already in context — so the icon takes you to that card instead
-  // of opening the fleet-wide modal (whose first act would be asking which
-  // printer you meant). Everywhere else it opens the modal as before.
-  $("maintBtn").addEventListener("click", ()=>{
-    // The form is the primary maintenance surface on this page; the
-    // read-only summary card is the fallback if it isn't mounted.
-    const card=$("healthServiceForm")||$("healthMaintCard");
-    if(card&&$("healthPage")&&$("healthPage").classList.contains("show")){
-      const reduce=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      card.scrollIntoView({behavior:reduce?"auto":"smooth",block:"center"});
-      card.classList.remove("health-card-flash");
-      void card.offsetWidth; // restart the highlight if it is already running
-      card.classList.add("health-card-flash");
-      return;
-    }
-    openMaintReport();
-  });
   $("maintPrinterSel").addEventListener("change", ()=>loadMaintDetail(parseInt($("maintPrinterSel").value,10)));
   $("maintSave").addEventListener("click", saveMaintenance);
   $("maintOfflineToggle").addEventListener("change", toggleMaintenanceMode);
@@ -2535,7 +2515,7 @@ const DISK_CRITICAL_PCT=0.05, DISK_CRITICAL_BYTES=2*1024*1024*1024;
 // only) WITHOUT ever fetching /api/health for a printer nobody opened. A
 // printer never opened this session still falls back to the cheap flag.
 const HEALTH_ATTENTION_CACHE={};
-let HEALTH_LAST_LOADED_AT=null, HEALTH_UPDATED_TICK_TIMER=null;
+
 
 function openHealthPage(printerId){
   closeQueueDashboard();
@@ -2548,17 +2528,43 @@ function openHealthPage(printerId){
     id=attn?attn.id:(FLEET[0]?FLEET[0].id:null);
   }
   selectHealthPrinter(id);
-  // Purely a local "Ns ago" text tick — no network call, so this doesn't
-  // reintroduce the auto-polling this page deliberately avoids.
-  if(!HEALTH_UPDATED_TICK_TIMER) HEALTH_UPDATED_TICK_TIMER=setInterval(updateHealthUpdatedAgo,5000);
+  startHealthAutoRefresh();
+}
+// Auto-refresh on the fleet's own configured interval (Settings > General),
+// but ONLY while the printer is actually printing or paused — that is when
+// these readings move. An idle printer's health does not change on its own,
+// and /api/health is a real probe plus a maintenance read per tick, so
+// polling one for every open Health page would be pure load.
+//
+// Deliberately re-reads the printer's state from FLEET on each tick rather
+// than latching it at open time: a print starting or finishing while the
+// page is open turns polling on and off by itself.
+let HEALTH_AUTO_TIMER=null;
+function healthAutoRefreshStates(state){ return state==="printing"||state==="paused"; }
+function startHealthAutoRefresh(){
+  stopHealthAutoRefresh();
+  const ms=Math.max(1,parseInt($("setRefresh")&&$("setRefresh").value,10)||2)*1000;
+  HEALTH_AUTO_TIMER=setInterval(()=>{
+    if(document.hidden||HEALTH_PRINTER_ID==null) return;
+    // Same rule the fleet poll uses: never refresh out from under someone
+    // who is filling in a field. A service entry takes a while to type and
+    // the readings behind it can wait — the next tick picks them up.
+    if(healthServiceFormHasFocus()) return;
+    const p=FLEET.find(f=>f.id===HEALTH_PRINTER_ID);
+    if(!p||!healthAutoRefreshStates(p.state)) return;
+    loadHealthData({quiet:true});
+  },ms);
+}
+function stopHealthAutoRefresh(){
+  if(HEALTH_AUTO_TIMER){ clearInterval(HEALTH_AUTO_TIMER); HEALTH_AUTO_TIMER=null; }
 }
 function closeHealthPage(){
   if(!$("healthPage").classList.contains("show")) return;
   $("healthPage").classList.remove("show");
   document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="");
   $("healthBtn").title=t("global.topbar.health_title");
-  HEALTH_PRINTER_ID=null; HEALTH_DATA=null; HEALTH_MAINT=null; HEALTH_LAST_LOADED_AT=null;
-  if(HEALTH_UPDATED_TICK_TIMER){ clearInterval(HEALTH_UPDATED_TICK_TIMER); HEALTH_UPDATED_TICK_TIMER=null; }
+  HEALTH_PRINTER_ID=null; HEALTH_DATA=null; HEALTH_MAINT=null;
+  stopHealthAutoRefresh();
   if(!HEALTH_SYNCING_FROM_POPSTATE && location.pathname.toLowerCase().startsWith("/health")) history.pushState(null,"","/");
   applyRoleUI();
 }
@@ -2614,12 +2620,16 @@ function renderHealthPicker(){
   });
 }
 
-async function loadHealthData(){
+// `quiet` skips the "blank everything and re-render" step, so an automatic
+// refresh updates values in place instead of flashing the whole page through
+// its loading state every interval. Only the first load of a printer (and a
+// printer switch) clears first, where there genuinely is nothing to show yet.
+async function loadHealthData(opts){
+  const quiet=!!(opts&&opts.quiet);
   const pid=HEALTH_PRINTER_ID;
   if(pid==null){ HEALTH_DATA=null; HEALTH_MAINT=null; renderHealthBody(); return; }
   const token=++HEALTH_REQ_TOKEN;
-  HEALTH_DATA=null; HEALTH_MAINT=null;
-  renderHealthBody();
+  if(!quiet){ HEALTH_DATA=null; HEALTH_MAINT=null; renderHealthBody(); }
   let health, maint;
   try{ health=await (await fetch("/api/health?printer="+pid)).json(); }
   catch(e){ health={ skipped:true, reason:t("health.could_not_reach",{message:e.message}) }; }
@@ -2628,10 +2638,8 @@ async function loadHealthData(){
 
   if(token!==HEALTH_REQ_TOKEN||pid!==HEALTH_PRINTER_ID) return; // superseded by a newer switch/refresh
   HEALTH_DATA=health; HEALTH_MAINT=maint;
-  HEALTH_LAST_LOADED_AT=Date.now();
   if(!health.skipped) HEALTH_ATTENTION_CACHE[pid]=!!health.needsAttention;
   renderHealthBody();
-  updateHealthUpdatedAgo();
   renderHealthPicker(); // re-render so the enriched attention marker (if it changed) shows immediately, not just on the next printer switch
   if(!health.skipped) resumeSyncPollingIfRunning(pid);
 }
@@ -2657,21 +2665,6 @@ async function resumeSyncPollingIfRunning(printerId){
     }
   }
   if(anyRunning&&HEALTH_PRINTER_ID===printerId) renderHealthBody();
-}
-// Purely local text — recomputes "Ns/Nm ago" from the already-stored
-// HEALTH_LAST_LOADED_AT, no network call. Also restates that this page
-// never auto-refreshes, since "Updated Ns ago" alone could misread as "and
-// climbing on its own".
-function updateHealthUpdatedAgo(){
-  const el=$("healthUpdatedAt");
-  if(!el) return;
-  if(HEALTH_LAST_LOADED_AT==null){ el.textContent=""; return; }
-  const secs=Math.max(0,Math.round((Date.now()-HEALTH_LAST_LOADED_AT)/1000));
-  // Two complete templates rather than composing "Updated {ago}" around a
-  // separately-translated "{n}s ago" fragment — Spanish's natural word
-  // order ("hace Ns") doesn't nest cleanly inside an English-shaped
-  // "Updated X" wrapper the way postfix "ago" does.
-  el.textContent=secs<60?t("health.updated_seconds_ago",{n:secs}):t("health.updated_minutes_ago",{n:Math.round(secs/60)});
 }
 
 function fmtBytes(n){
@@ -3058,8 +3051,19 @@ function renderFaultsCard(d){
 function renderServiceLogCard(maint){
   const entries=(maint&&maint.entries)||[];
   const header=`<div class="health-card-hdr">${esc(t("health.service_history.card_title"))}</div>`;
+  // Notes is a textarea in the form, so it gets its own line under the
+  // date/component/cost row rather than a squeezed, ellipsized column —
+  // "replaced the 0.4 nozzle and cleaned the sock" is the part worth reading
+  // later, and it is the one field with no length to speak of.
   const body=entries.length
-    ? entries.slice().reverse().map(e=>`<div class="health-service-row"><span class="health-service-date">${esc(fmtMaintDate(e.date))}</span><span class="health-service-component">${esc(e.component||"—")}</span><span class="health-service-comment">${esc(e.comment||"")}</span><span class="health-service-cost">${e.cost?esc(CURRENCY)+Number(e.cost).toFixed(2):""}</span></div>`).join("")
+    ? entries.slice().reverse().map(e=>`<div class="health-service-entry">`+
+        `<div class="health-service-row">`+
+          `<span class="health-service-date">${esc(fmtMaintDate(e.date))}</span>`+
+          `<span class="health-service-component">${esc(e.component||"—")}</span>`+
+          `<span class="health-service-cost">${e.cost?esc(CURRENCY)+Number(e.cost).toFixed(2):""}</span>`+
+        `</div>`+
+        (e.comment?`<div class="health-service-notes">${esc(e.comment)}</div>`:"")+
+      `</div>`).join("")
     : `<p class="settings-help">${esc(t("health.service_history.none"))}</p>`;
   return `<div class="health-card" id="healthMaintCard">${header}${body}</div>`;
 }
@@ -3088,10 +3092,30 @@ function currentHealthSvcComponent(){
 function syncHealthSvcSaveEnabled(){
   $("healthSvcSave").disabled=!currentHealthSvcComponent();
 }
+// Roughly two rows of chips, ordered by how often this printer has actually
+// been serviced for each component — the full list ran to five rows and put
+// the parts you replace weekly below the ones you never touch. Anything not
+// shown is still reachable through the "or type a new component" field,
+// which accepts an existing name just as well as a new one.
+const HEALTH_SVC_CHIP_LIMIT=10;
+function healthSvcVisibleComponents(){
+  const comps=(HEALTH_MAINT&&HEALTH_MAINT.components)||[];
+  const used=new Map();
+  for(const e of (HEALTH_MAINT&&HEALTH_MAINT.entries)||[]) if(e.component) used.set(e.component,(used.get(e.component)||0)+1);
+  // Server order breaks ties, so a printer with no history yet keeps the
+  // original, deliberate ordering rather than something arbitrary.
+  const shown=comps.slice()
+    .sort((a,b)=>((used.get(b)||0)-(used.get(a)||0))||(comps.indexOf(a)-comps.indexOf(b)))
+    .slice(0,HEALTH_SVC_CHIP_LIMIT);
+  // A selection made elsewhere (the Attention list's "log a fix" button)
+  // must stay visible even when that component isn't in the top set.
+  if(HEALTH_SVC_COMPONENT&&comps.includes(HEALTH_SVC_COMPONENT)&&!shown.includes(HEALTH_SVC_COMPONENT)) shown[shown.length-1]=HEALTH_SVC_COMPONENT;
+  return shown;
+}
 function renderHealthSvcChips(){
   const wrap=$("healthSvcChips");
   if(!wrap) return;
-  const comps=(HEALTH_MAINT&&HEALTH_MAINT.components)||[];
+  const comps=healthSvcVisibleComponents();
   wrap.innerHTML=comps.map(c=>`<button type="button" class="maint-chip${c===HEALTH_SVC_COMPONENT?" active":""}" data-comp="${esc(c)}">${esc(c)}</button>`).join("");
   wrap.querySelectorAll("[data-comp]").forEach(b=>{
     b.addEventListener("click",()=>{
@@ -3457,15 +3481,21 @@ function renderHealthBody(){
     // half-typed entry survives the 1.5s poll re-render.
     `<div class="health-metrics-col34">`+
       `<div id="healthSvcSlot"></div>`+
-      renderServiceLogCard(HEALTH_MAINT)+
     `</div>`+
+    // Full width, under all three column stacks — the log is a wide table of
+    // rows, not a column-shaped card. Needs attention and Recent faults then
+    // split the row beneath it, half the log's width each.
+    `<div class="health-metrics-full">${renderServiceLogCard(HEALTH_MAINT)}</div>`+
+    `<div class="health-metrics-half-l">${renderAttentionList(d)}</div>`+
+    `<div class="health-metrics-half-r">${renderFaultsCard(d)}</div>`+
   `</div>`;
-  const cards=[renderAttentionList(d),renderFaultsCard(d)].filter(Boolean).join("");
   detachHealthServiceForm(); // must happen before innerHTML — see that function
   const warrantySuffix=warrantyHeadingSuffix(HEALTH_MAINT);
   body.innerHTML=`<h3 class="health-printer-name">${esc(name)}`+
     (warrantySuffix?`<span class="health-printer-warranty${(HEALTH_MAINT&&HEALTH_MAINT.warranty&&HEALTH_MAINT.warranty.status)==="expired"?" bad":""}">${esc(warrantySuffix)}</span>`:"")+
-    `</h3>`+metricsHtml+`<div class="health-grid">${cards}</div>`;
+    // Every card lives in the metrics grid now, so there is no second grid
+    // below it to render.
+    `</h3>`+metricsHtml;
   body.querySelectorAll("[data-sync]").forEach(b=>{
     b.addEventListener("click",()=>startSync(parseInt(b.dataset.syncprinter,10),b.dataset.sync));
   });
@@ -3499,7 +3529,32 @@ function healthServiceFormEl(){
 // alive in HEALTH_SVC_EL until mountHealthServiceForm() re-attaches it.
 function detachHealthServiceForm(){
   const wrap=healthServiceFormEl();
-  if(wrap&&wrap.parentNode) wrap.parentNode.removeChild(wrap);
+  if(!wrap||!wrap.parentNode) return;
+  // Removing a focused element from the document blurs it, so whatever the
+  // caret was in has to be remembered here and put back by
+  // mountHealthServiceForm() — otherwise any render that happens mid-typing
+  // (a sync poll, a locale switch) drops the user out of the field.
+  const a=document.activeElement;
+  HEALTH_SVC_FOCUS=(a&&a.id&&wrap.contains(a))?{id:a.id,start:a.selectionStart,end:a.selectionEnd}:null;
+  wrap.parentNode.removeChild(wrap);
+}
+// True while the caret is somewhere inside the service form.
+function healthServiceFormHasFocus(){
+  const wrap=healthServiceFormEl(), a=document.activeElement;
+  return !!(wrap&&a&&wrap.contains(a));
+}
+let HEALTH_SVC_FOCUS=null;
+function restoreHealthServiceFocus(){
+  if(!HEALTH_SVC_FOCUS) return;
+  const {id,start,end}=HEALTH_SVC_FOCUS;
+  HEALTH_SVC_FOCUS=null;
+  const el=document.getElementById(id);
+  if(!el) return;
+  el.focus({preventScroll:true});
+  // Caret position, so typing resumes mid-word rather than at the end.
+  // Not every input type supports selection ranges (number, date) — those
+  // throw, and losing the caret offset there is harmless.
+  if(start!=null){ try{ el.setSelectionRange(start,end); }catch{ /* unsupported input type */ } }
 }
 function mountHealthServiceForm(){
   const wrap=healthServiceFormEl(), slot=$("healthSvcSlot");
@@ -3508,9 +3563,11 @@ function mountHealthServiceForm(){
   if(wrap.parentNode!==slot) slot.appendChild(wrap);
   if(HEALTH_SVC_FOR_PRINTER!==HEALTH_PRINTER_ID){
     HEALTH_SVC_FOR_PRINTER=HEALTH_PRINTER_ID;
+    HEALTH_SVC_FOCUS=null; // a different printer's form — nothing to return to
     openHealthServiceForm();
   }else{
     wrap.style.display="";
+    restoreHealthServiceFocus();
   }
 }
 async function refreshQueueDashboard(){
@@ -7072,11 +7129,12 @@ async function doBedSet(printerId,temp){
 }
 
 // ---- Maintenance modal ----
-// One modal, two entry points: the topbar wrench (openMaintReport — any
-// printer, picked from the select) and the Settings > Printers row's
-// Maintenance button (openMaintenance — opens with that printer preselected).
-// Both funnel into openMaintModal(), which loads the picker; switching the
-// select (or the initial preselect) calls loadMaintDetail() for that printer.
+// Reached from one place: the Settings > Printers row's Maintenance button
+// (openMaintenance — opens with that printer preselected). The topbar had a
+// second entry point (a wrench opening it with no printer chosen); it was
+// removed once the Health page grew its own inline maintenance surface.
+// openMaintModal() still loads the picker, so switching the select calls
+// loadMaintDetail() for that printer.
 let MAINT_TOTAL_SEC=null, PRINTERS_CFG=[], MAINT_PRINTERS=[], MAINT_IDX=null;
 let MAINT_ENTRIES=[];
 // Cached purely to support a live-locale-switch refresh (renderMaintWarranty
@@ -7152,7 +7210,7 @@ async function openMaintModal(preselectIdx){
   loadMaintDetail(idx);
 }
 function openMaintenance(idx){ openMaintModal(idx); }
-function openMaintReport(){ openMaintModal(null); }
+
 function closeMaintReport(){ $("maintReportModal").classList.remove("show"); }
 
 async function loadMaintDetail(idx){
@@ -7441,7 +7499,6 @@ $("gear").addEventListener("click",()=>{
   $("compactBtn").style.display = open ? "none" : "";
   $("filesBtn").style.display = open ? "none" : "";
   if($("bulkHeatBtn")) $("bulkHeatBtn").style.display = open ? "none" : "";
-  if($("maintBtn")) $("maintBtn").style.display = open ? "none" : "";
   if($("healthBtn")) $("healthBtn").style.display = open ? "none" : "";
   if($("queueBtn")) $("queueBtn").style.display = "none"; // re-shown by applyRoleUI() below once Settings' own state is settled
   if(open){
@@ -8306,7 +8363,7 @@ async function loadConfigUI(){
     // hide the warning banner above (it lives on tab-general, and showSetTab
     // below hides every other .set-panel) and invite saving an empty printer
     // list over the still-recoverable original.
-    if(!c.configured && !CONFIG_LOAD_FAILED && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title=t("common.back"); document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("sortBtn").style.display="none"; $("compactBtn").style.display="none"; if($("filesBtn")) $("filesBtn").style.display="none"; if($("maintBtn")) $("maintBtn").style.display="none"; $("setupmsg").textContent=t("settings.onboarding_welcome"); if(!$("setPrinters").children.length) addPrinterRow("",""); }
+    if(!c.configured && !CONFIG_LOAD_FAILED && isAdmin()){ $("setup").classList.add("show"); showSetTab("printers"); $("gear").querySelector("img").src="/back.svg"; $("gear").title=t("common.back"); document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none"); $("fleetSearch").style.display="none"; $("sortBtn").style.display="none"; $("compactBtn").style.display="none"; if($("filesBtn")) $("filesBtn").style.display="none"; $("setupmsg").textContent=t("settings.onboarding_welcome"); if(!$("setPrinters").children.length) addPrinterRow("",""); }
   }catch(e){}
 }
 // ---- Shared masked-secret control (printer API token, Telegram bot token) ----
@@ -9545,6 +9602,9 @@ async function saveConfig(){
     else applyRoleUI();
     applyViewMode(); // refresh the header button's icon/title if Alternate Display just changed
     loadFiles(); loadFleet(); startFleetRefresh();
+    // The Health page reads the same interval, so a changed value has to
+    // re-arm that timer too — it caches the interval when it starts.
+    if(HEALTH_PRINTER_ID!=null) startHealthAutoRefresh();
     baselinePrintersDirty(); // current row values are now what's on file — re-baseline the dirty footer
     collapseAllPrinterRows(); // nothing left to edit in them — back to the compact list
     baselineSettingsTab("general");

@@ -753,34 +753,57 @@
      — lighter and smaller, red once it has actually lapsed. */
   .health-printer-warranty{font-size:12.5px; font-weight:500; color:var(--ink-dim);}
   .health-printer-warranty.bad{color:var(--rr-critical);}
-  .health-metrics{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;}
+  /* Explicit column counts, NOT auto-fit. auto-fit only yielded four columns
+     because it collapses tracks holding no items, and the full-width cards
+     below (grid-column:1/-1) occupy every track there is — which kept ~9
+     tracks alive at desktop width and squeezed the tiles and the cards under
+     them into the left half of the page. */
+  .health-metrics{display:grid; grid-template-columns:minmax(0,1fr); gap:10px; margin-bottom:14px;}
+  @media (min-width:620px){ .health-metrics{grid-template-columns:repeat(2,minmax(0,1fr));} }
+  @media (min-width:1000px){ .health-metrics{grid-template-columns:repeat(4,minmax(0,1fr));} }
   .health-metric{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; display:flex; flex-direction:column; gap:3px;}
   .health-metric-label{font-size:11px; font-weight:700; letter-spacing:.02em; color:var(--ink-dim);}
   .health-metric-val{font-size:22px; font-weight:800; color:var(--ink); font-family:var(--mono);}
   .health-metric-sub{font-size:12px; color:var(--ink-faint);}
   /* The cards below the tiles live inside the metrics grid so they inherit a
-     metric tile's exact track width, whatever column count auto-fit lands on
-     (and go full width once the grid collapses to a single column).
+     metric tile's exact track width at every breakpoint.
      One grid item per column, each a vertical stack of cards. Stacking
      inside the item (not one card per grid cell) is what keeps a column's
      cards 10px apart regardless of how tall the neighbouring column grows —
      a grid row is as tall as its tallest member, so a card-per-cell layout
      leaves short cards stranded in stretched cells. gap matches the grid's
      own 10px so the columns read as one rhythm. */
-  .health-metrics-col1,.health-metrics-col2,.health-metrics-col34{display:flex; flex-direction:column; gap:10px; min-width:0; align-self:start;}
-  .health-metrics-col1{grid-column:1;}
-  .health-metrics-col2{grid-column:2;}
+  .health-metrics-col1,.health-metrics-col2,.health-metrics-col34{display:flex; flex-direction:column; gap:10px; min-width:0;}
+  /* Columns stretch to the row's height (set by the tallest of them) and the
+     LAST card in each absorbs the slack, so every column ends on the same
+     line as the Service log below instead of trailing off with a ragged gap.
+     Only the last card grows — the ones above it keep their natural height,
+     so nothing above moves as the tallest column changes. */
+  .health-metrics-col1 > :last-child,.health-metrics-col2 > :last-child,.health-metrics-col34 > :last-child{flex:1 1 auto;}
+  /* The two children that are wrappers rather than cards pass the growth
+     through to the card inside them. Kept off .health-card itself: making a
+     card a flex container would change how its own contents lay out. */
+  #healthSvcSlot,.health-metrics-storage{display:flex; flex-direction:column;}
+  #healthSvcSlot > .health-card,.health-metrics-storage > .health-card{flex:1 1 auto;}
+  /* Every wrapper starts full width and gets pinned to its column only once
+     that column exists — a grid-column that overshoots the track count
+     creates implicit tracks and distorts the whole row. */
+  .health-metrics-col1,.health-metrics-col2,.health-metrics-col34{grid-column:1 / -1;}
+  @media (min-width:620px){
+    .health-metrics-col1{grid-column:1;}
+    .health-metrics-col2{grid-column:2;}
+  }
   .health-metrics-col1 .health-card,.health-metrics-col2 .health-card,.health-metrics-col34 .health-card{margin-bottom:0;}
-  /* Maintenance takes the right half of the metrics row — under Free space +
-     Last service, the two tiles it relates to. Full width by default so it
-     stays sane while the metrics grid is down to one or two columns; the
-     3/span 2 placement only applies once four columns definitely exist,
-     since pinning to column 3 with fewer would create an implicit extra
-     track and distort the row. Four tracks need ~630px, and the file
-     sidebar (.shell's 312px column, which the Health page does not close)
-     can be taking that much off the viewport — hence 1000px, not 880px. */
-  .health-metrics-col34{grid-column:1 / -1;}
-  @media (min-width:1000px){ .health-metrics-col34{grid-column:3 / span 2;} }
+  /* Full-width and half-width rows below the three column stacks. The
+     half-width split, like the column-3 placement, waits for the four-column
+     breakpoint; below it each takes the whole row. */
+  .health-metrics-full,.health-metrics-half-l,.health-metrics-half-r{grid-column:1 / -1; min-width:0;}
+  .health-metrics-full > .health-card,.health-metrics-half-l > .health-card,.health-metrics-half-r > .health-card{margin-bottom:0;}
+  @media (min-width:1000px){
+    .health-metrics-col34{grid-column:3 / span 2;}
+    .health-metrics-half-l{grid-column:1 / span 2;}
+    .health-metrics-half-r{grid-column:3 / span 2;}
+  }
 
   /* Brief highlight when the topbar maintenance icon jumps you to the card,
      so it is obvious what just scrolled into view. Respects reduced motion
@@ -798,10 +821,7 @@
      case. */
   .health-metrics-storage .health-storage-actions{flex-wrap:nowrap; gap:6px;}
   .health-metrics-storage .health-storage-actions .btn{flex:1 1 0; min-width:0; padding:7px 4px; font-size:10.5px; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-  .health-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; align-items:start;}
   .health-card{background:var(--rr-card-bg); border:1px solid var(--rr-card-border); border-radius:11px; padding:13px; margin-bottom:14px;}
-  .health-grid > .health-card{margin-bottom:0;}
-  #healthServiceForm{max-width:1240px; margin:0 auto;}
   .health-card-hdr{font-size:15px; font-weight:500; color:var(--rr-title); margin-bottom:4px;}
   .health-card-desc{font-size:12.5px; color:var(--rr-desc); line-height:1.45; margin:0 0 12px;}
   .health-updated-at{font-size:11.5px; color:var(--ink-faint); white-space:nowrap;}
@@ -918,12 +938,18 @@
   .health-fault-row:last-child{border-bottom:none;}
   .health-fault-badge{flex:none; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--bad); background:color-mix(in srgb,var(--bad) 12%,transparent); border:1px solid color-mix(in srgb,var(--bad) 35%,transparent); border-radius:4px; padding:2px 6px;}
   .health-fault-text{color:var(--ink-dim); flex:1; min-width:0; word-break:break-word;}
-  .health-service-row{display:flex; align-items:center; gap:10px; padding:6px 0; font-size:12.5px; border-bottom:1px solid var(--line-soft);}
-  .health-service-row:last-child{border-bottom:none;}
+  /* One entry = a date/component/cost line plus, when there is one, the note
+     underneath it. The border moves to the entry so a note stays visually
+     attached to its own service record. */
+  .health-service-entry{padding:7px 0; border-bottom:1px solid var(--line-soft);}
+  .health-service-entry:last-child{border-bottom:none;}
+  .health-service-row{display:flex; align-items:baseline; gap:10px; font-size:12.5px;}
   .health-service-date{flex:0 0 90px; color:var(--ink-dim); font-family:var(--mono); font-size:11.5px;}
-  .health-service-component{flex:0 0 110px; font-weight:600;}
-  .health-service-comment{flex:1; min-width:0; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .health-service-component{flex:1; min-width:0; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .health-service-cost{flex:none; font-family:var(--mono); color:var(--ink-faint); font-size:11.5px;}
+  /* Free text, so it wraps instead of being ellipsized — indented to the
+     date column's width so it reads as belonging to the line above. */
+  .health-service-notes{margin:3px 0 0 100px; font-size:12px; color:var(--ink-dim); line-height:1.45; white-space:pre-wrap; word-break:break-word;}
   .health-svc-chips{display:flex; flex-wrap:wrap; gap:6px;}
   .maint-chip{display:inline-flex; align-items:center; padding:5px 12px; border-radius:999px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink-dim); font-size:12px; cursor:pointer;}
   .maint-chip:hover{border-color:var(--ink-faint);}

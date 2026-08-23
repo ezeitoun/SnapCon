@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 34,
+    "version": 36,
     "snapconVersion": "0.5.0",
     "updated": "2026-08-21"
   },
@@ -346,9 +346,6 @@
     "loading": "Loading {name}'s health data…",
     "unsupported": "Health data not available for this connector.",
     "could_not_reach": "Could not reach SnapCon: {message}",
-    "updated_seconds_ago": "Updated {n}s ago · no auto-refresh",
-    "updated_minutes_ago": "Updated {n}m ago · no auto-refresh",
-    "refresh_title": "Re-fetch this printer's health data",
     "printer_fallback": "Printer",
     "recent_success_jobs": "{completed} / {total} jobs",
     "metric_print_time": "Print time",
