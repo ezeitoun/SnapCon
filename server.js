@@ -1247,7 +1247,19 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // exists once a printer's own Health page has actually been opened and
     // fetched; see /api/health.
     const attentionReasons = computeMaintenanceAttention(p);
-    if (queueAttention) attentionReasons.push({ severity: "critical", title: "Needs attention", detail: "Queue dispatch is waiting on a human (bed clear, resolve, etc.)" });
+    if (queueAttention) {
+      // The queue store already knows WHY it stopped (file-missing,
+      // file-changed, …) and often has the offending filename — passing the
+      // generic "waiting on a human" line instead left the Health page
+      // unable to say anything useful about a printer its own badge counted.
+      const qs = queueStore.getPrinterState(p.id);
+      const why = qs.attentionDetail && qs.attentionDetail.message;
+      attentionReasons.push({
+        severity: "critical", title: "Queue needs attention",
+        detail: why || "Queue dispatch is waiting on a human (bed clear, resolve, etc.)",
+        code: "queue-attention", reason: qs.attentionReason || null, message: why || null
+      });
+    }
     if (attentionReasons.length) { row.needsAttention = true; row.attentionReasons = attentionReasons; }
     return row;
   }));

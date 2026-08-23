@@ -371,6 +371,8 @@
       "throttled_detail": "El controlador de la impresora está reportando una condición de limitación (de energía o térmica) en este momento.",
       "low_disk_space_title": "Poco espacio en disco",
       "low_disk_space_detail": "Las subidas pueden fallar de forma confusa una vez que el disco se llene — libera espacio pronto.",
+      "queue_title": "La cola necesita atención",
+      "queue_detail": "El despacho de la cola está esperando a una persona — abre Gestión de cola para resolverlo.",
       "recent_fault_title": "Fallo reciente",
       "recent_fault_detail": "La impresora ha reportado al menos un error reciente — consulta el registro de fallos.",
       "maintenance_overdue_title": "Mantenimiento vencido",

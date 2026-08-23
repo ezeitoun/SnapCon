@@ -2598,10 +2598,11 @@ function renderHealthPicker(){
   wrap.innerHTML=FLEET.map(p=>{
     const {statusColor}=statusColorText(p);
     const active=p.id===HEALTH_PRINTER_ID;
-    // Rich cached result (if this printer's Health page has been opened
-    // this session) wins over the cheap fleet-wide flag — see
-    // HEALTH_ATTENTION_CACHE's own comment for why this never adds a fetch.
-    const needsAttention=HEALTH_ATTENTION_CACHE[p.id]!==undefined?HEALTH_ATTENTION_CACHE[p.id]:!!p.needsAttention;
+    // Either source can flag it, never one overriding the other: the cached
+    // health result covers the printer's own diagnostics, the fleet flag
+    // covers queue dispatch. Letting the cache win (as this used to) made a
+    // queue-blocked printer's marker vanish the moment you opened its page.
+    const needsAttention=!!HEALTH_ATTENTION_CACHE[p.id]||!!p.needsAttention;
     const title=needsAttention?t("health.chip_title_attention",{name:p.name}):p.name;
     return `<button type="button" class="health-chip${active?" active":""}" data-healthchip="${p.id}" style="--status-color:${statusColor}" title="${esc(title)}">`+
       `<span class="health-chip-dot"></span><span class="health-chip-name">${esc(p.name)}</span>`+
@@ -2699,15 +2700,31 @@ const HEALTH_ATTENTION_KEYS={
   "low-disk-space":{title:"health.attention.low_disk_space_title",detail:"health.attention.low_disk_space_detail"},
   "recent-fault":{title:"health.attention.recent_fault_title",detail:"health.attention.recent_fault_detail"},
   "maintenance-overdue":{title:"health.attention.maintenance_overdue_title",detail:"health.attention.maintenance_overdue_detail"},
-  "maintenance-due-soon":{title:"health.attention.maintenance_due_soon_title",detail:"health.attention.maintenance_due_soon_detail"}
+  "maintenance-due-soon":{title:"health.attention.maintenance_due_soon_title",detail:"health.attention.maintenance_due_soon_detail"},
+  "queue-attention":{title:"health.attention.queue_title",detail:"health.attention.queue_detail"}
 };
 function healthAttentionText(r){
   const keys=HEALTH_ATTENTION_KEYS[r.code];
   if(!keys) return { title:r.title, detail:r.detail };
+  // The queue's own message names the actual blocker (a missing file, by
+  // name) — far more use than the generic line, so it wins when present.
+  if(r.code==="queue-attention"&&r.message) return { title:t(keys.title), detail:r.message };
   return { title:t(keys.title), detail:t(keys.detail,{name:r.name,rpm:r.rpm,component:r.component,date:r.date}) };
 }
+// /api/health only knows the printer's own diagnostics (throttle, disk,
+// faults, fans, maintenance). The fleet row carries the OTHER half — queue
+// dispatch state — and that is what the topbar badge counts. Merging them
+// here is what stops the badge saying "2" while both of those printers'
+// Health pages claim nothing needs attention.
+function attentionReasonsFor(d){
+  const health=(d&&d.attentionReasons)||[];
+  const row=FLEET.find(p=>p.id===HEALTH_PRINTER_ID);
+  const fleet=(row&&row.attentionReasons)||[];
+  const seen=new Set(health.map(r=>r.code||r.title));
+  return health.concat(fleet.filter(r=>!seen.has(r.code||r.title)));
+}
 function renderAttentionList(d){
-  const reasons=(d.attentionReasons||[]).slice().sort((a,b)=>(a.severity==="critical"?0:1)-(b.severity==="critical"?0:1));
+  const reasons=attentionReasonsFor(d).slice().sort((a,b)=>(a.severity==="critical"?0:1)-(b.severity==="critical"?0:1));
   if(!reasons.length) return `<div class="health-card"><div class="health-card-hdr">${esc(t("health.attention.card_title"))}</div><p class="settings-help">${esc(t("health.attention.nothing"))}</p></div>`;
   return `<div class="health-card"><div class="health-card-hdr">${esc(t("health.attention.card_title"))}</div><div class="health-attn-list">`+
     reasons.map(r=>{

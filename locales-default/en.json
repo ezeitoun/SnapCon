@@ -371,6 +371,8 @@
       "throttled_detail": "The printer's controller is reporting a throttle condition (power or thermal) right now.",
       "low_disk_space_title": "Low disk space",
       "low_disk_space_detail": "Uploads can fail confusingly once the disk fills — free up space soon.",
+      "queue_title": "Queue needs attention",
+      "queue_detail": "Queue dispatch is waiting on a human — open Queue Management to resolve it.",
       "recent_fault_title": "Recent fault",
       "recent_fault_detail": "The printer has reported at least one recent error — see the fault log.",
       "maintenance_overdue_title": "Maintenance overdue",
