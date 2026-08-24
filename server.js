@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.5.0
+// server.js — SnapCon  ·  v0.6.0
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 const express = require("express");
 const fs = require("fs");

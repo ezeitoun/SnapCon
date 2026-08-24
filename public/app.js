@@ -9,7 +9,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||t("fleet.error_panel.unknown_error_title")), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
