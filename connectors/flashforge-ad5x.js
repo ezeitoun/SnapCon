@@ -14,7 +14,7 @@ const { normHex } = require("../parser");
 exports.label = "FlashForge AD5X";
 exports.brand = "FlashForge";
 exports.capabilities = {
-  camera: true, filamentHeads: true, excludeObject: false, autoLevel: false,
+  camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,
   webUi: false, setColor: true,
   // See snapmaker-u1-klipper.js's capabilities comment: true here because

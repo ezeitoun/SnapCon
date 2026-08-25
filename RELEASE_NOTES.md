@@ -151,3 +151,19 @@ Maintenance, Settings, Queue Management, and the login screen itself — fully t
 - Snapmaker's own printer error-code catalog (titles, descriptions, help links) is deliberately left
   exactly as Snapmaker wrote it — those are reference material, not SnapCon's own UI text.
 
+### Live Camera for WebRTC-Only Printers
+Some printers — confirmed on a Creality SPARKX i7 — only offer their camera as a live WebRTC stream,
+with no still-image URL for SnapCon to fetch. Those cameras now work in Camera View: the picture is
+streamed straight from the printer to your browser, and the Snapshot button grabs the current frame.
+- **Detected automatically** when you save the printer, and only when no ordinary snapshot camera is
+  found — printers with a normal camera keep working exactly as before, unchanged.
+- **Local network only in this version.** A WebRTC camera can't be reached when SnapCon is opened
+  remotely over Remote Access, so the tile says "Camera available on local network only" rather than
+  retrying in the background.
+- **Not included in notification images.** A snapshot for ntfy/Telegram is taken by the server, and
+  a WebRTC camera can only be read by a browser, so notifications for those printers still arrive —
+  just without a picture attached. Every other camera is unaffected.
+- Streams are only opened for camera tiles you can actually see, and are closed as soon as they
+  scroll away, you leave Camera View, or the tab goes into the background — so a large farm doesn't
+  hold dozens of video connections open.
+

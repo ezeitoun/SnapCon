@@ -16,7 +16,7 @@ const http = require("./http-utils");
 exports.label = "SnapMaker U1 (Old)";
 exports.brand = "SnapMaker";
 exports.capabilities = {
-  camera: true, filamentHeads: true, excludeObject: true, autoLevel: true,
+  camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: true, autoLevel: true,
   unloadFilament: true, firmwareInfo: true, inventory: true, discovery: true, health: true, fileSync: true,
   // SET_PRINT_FILAMENT_CONFIG (see setFilamentColor below) really does write
   // filament_color_rgba back to the printer — the same command the

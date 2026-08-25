@@ -14,7 +14,7 @@ const ff = require("./flashforge-utils");
 exports.label = "FlashForge (Adventurer 5M / 5M Pro)";
 exports.brand = "FlashForge";
 exports.capabilities = {
-  camera: true, filamentHeads: false, excludeObject: false, autoLevel: false,
+  camera: true, cameraSnapshot: true, filamentHeads: false, excludeObject: false, autoLevel: false,
   unloadFilament: false, firmwareInfo: false, inventory: false, discovery: false,
   // The 8898 JSON API has no browsable dashboard at all (confirmed live —
   // its root path 404s), unlike Klipper/Moonraker printers which commonly

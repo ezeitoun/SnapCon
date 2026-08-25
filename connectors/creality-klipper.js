@@ -54,11 +54,21 @@ exports.capabilities = {
 // Creality install has a webcam attached. Every printer this connector
 // hasn't detected either of those for keeps the static capabilities above
 // unchanged.
+// Two independent camera transports, reported as additive flags rather than
+// a nested object: `camera` keeps its existing meaning ("there is a camera to
+// show") for the four places the frontend already gates on it, and the two
+// new flags say HOW it can be reached. A connector that declares neither
+// reads as false on both, so nothing else changes.
+//   cameraSnapshot — server-side getCameraSnapshot(): /api/snapshot, the
+//                    camera-view grid's JPEG polling, notification images.
+//   cameraWebrtc   — browser-side only (see detectCameraWebrtc): live view
+//                    and a canvas-captured manual snapshot, no server path.
 function getCapabilities(p) {
   if (!p) return exports.capabilities;
   const extra = {};
   if (p.filamentMode === "cfs") extra.filamentHeads = true;
-  if (p.cameraUrl) extra.camera = true;
+  if (p.cameraUrl) { extra.camera = true; extra.cameraSnapshot = true; }
+  else if (p.cameraWebrtc) { extra.camera = true; extra.cameraWebrtc = true; }
   return Object.keys(extra).length ? { ...exports.capabilities, ...extra } : exports.capabilities;
 }
 exports.getCapabilities = getCapabilities;
@@ -557,6 +567,48 @@ async function detectCamera(p) {
   return null; // a webcam was registered but no candidate actually resolved to an image
 }
 exports.detectCamera = detectCamera;
+
+// Some Creality machines (confirmed on an F022 / SPARKX i7) ship a camera
+// that is reachable ONLY over WebRTC: Moonraker's own webcam component is
+// stripped (/server/webcams/list is empty, the webcams DB namespace does not
+// exist), and a separate service on port 8000 answers a WebRTC offer. There
+// is no still-image endpoint at any path on it, so this can never feed
+// getCameraSnapshot() — it is a browser-side transport only.
+//
+// Probed exactly like detectCamera above: a reachable service that answers
+// is a confirmed yes, an unreachable one throws so the caller retries on a
+// later save instead of caching a false negative. The device answers HTTP
+// 200 with a literal "{}" for anything it doesn't understand, so a status
+// code alone proves nothing — the decoded payload has to be a real answer.
+const WEBRTC_PORT = 8000;
+const WEBRTC_SIGNAL_PATH = "/call/webrtc_local";
+function webrtcSignalUrl(p) {
+  try { return `http://${new URL(http.baseUrl(p)).hostname}:${WEBRTC_PORT}${WEBRTC_SIGNAL_PATH}`; }
+  catch { return null; }
+}
+// A minimal, syntactically valid recv-side offer: enough for the device to
+// produce an answer, without pulling in a media stack server-side.
+const WEBRTC_PROBE_SDP = [
+  "v=0", "o=- 0 0 IN IP4 127.0.0.1", "s=-", "t=0 0", "a=group:BUNDLE 0",
+  "m=video 9 UDP/TLS/RTP/SAVPF 96", "c=IN IP4 0.0.0.0", "a=rtcp:9 IN IP4 0.0.0.0",
+  "a=ice-ufrag:snapcon", "a=ice-pwd:snapconsnapconsnapcon",
+  "a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF",
+  "a=setup:actpass", "a=mid:0", "a=recvonly", "a=rtcp-mux", "a=rtpmap:96 H264/90000", ""
+].join("\r\n");
+async function detectCameraWebrtc(p) {
+  const url = webrtcSignalUrl(p);
+  if (!url) return null;
+  const body = Buffer.from(JSON.stringify({ type: "offer", sdp: WEBRTC_PROBE_SDP })).toString("base64");
+  const r = await http.fetchTimeout(url, 3000, { method: "POST", headers: { "Content-Type": "plain/text" }, body });
+  if (!r.ok) throw new Error("WebRTC signaling unreachable"); // retried on a later save
+  const text = (await r.text()).trim();
+  let answer;
+  try { answer = JSON.parse(Buffer.from(text, "base64").toString("utf8")); }
+  catch { return null; } // "{}" or anything undecodable: confirmed not a WebRTC camera
+  return (answer && answer.type === "answer" && typeof answer.sdp === "string") ? url : null;
+}
+exports.detectCameraWebrtc = detectCameraWebrtc;
+exports.webrtcSignalUrl = webrtcSignalUrl;
 
 async function getCameraSnapshot(p) {
   if (!p.cameraUrl) throw new Error("No camera detected for this printer");

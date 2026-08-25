@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 37,
+    "version": 38,
     "snapconVersion": "0.6.0",
     "updated": "2026-08-21"
   },
@@ -113,6 +113,7 @@
     },
     "camera": {
       "disabled_label": "Camera Disabled",
+      "lan_only": "Camera available on local network only",
       "no_feed": "No Feed",
       "retry_title": "Click to try again"
     },
@@ -256,6 +257,8 @@
         "title": "{printer} — Camera",
         "loading": "Loading…",
         "server_error": "Server error {status}",
+        "webrtc_not_ready": "Live view is still connecting — try again in a moment.",
+        "webrtc_capture_failed": "Could not capture a frame from the live view.",
         "captured_at": "Captured {time}"
       },
       "send": {

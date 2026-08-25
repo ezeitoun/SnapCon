@@ -394,6 +394,115 @@ function statusColorText(p){
 // network request) once camRefreshMs has actually elapsed — every render in
 // between just re-inserts the same element into that render's fresh slot.
 const CAM_SHOT_CACHE = new Map(); // printer id -> { el, nextDueAt, dead, refreshing }
+
+// ---- WebRTC cameras (a SECOND camera transport, parallel to the snapshot
+// path above — it shares none of its cache, polling or server routes) ----
+//
+// Some printers expose a camera only over WebRTC (confirmed on a Creality
+// F022/SPARKX i7): no still-image endpoint exists at any path, so the frames
+// can only be obtained by a browser holding a live peer connection. That
+// makes this a view-and-capture transport: live tiles and a canvas-captured
+// manual snapshot, but nothing the SERVER can fetch, which is why
+// notification images stay unavailable for these printers.
+//
+// One session per printer id, owned entirely by this map. Every path that
+// can retire a tile (viewport, view switch, card rebuild, offline, delete,
+// hidden tab) funnels into closeCamRtc(), so a peer connection can never
+// outlive the element that showed it.
+const CAM_RTC = new Map(); // printer id -> { pc, video, state, url, failed }
+// A page served over HTTPS cannot sign a WebRTC session to a plain-http://
+// printer: the signaling POST is mixed content, and Chrome's Private Network
+// Access rules block a public origin reaching a private address. That is the
+// Remote Access case, and no amount of retrying fixes it — the tile says so
+// once and stops.
+function camRtcContextSupported(){
+  if(!window.RTCPeerConnection) return false;
+  return location.protocol!=="https:";
+}
+function camRtcCleanupEntry(entry){
+  if(!entry) return;
+  if(entry.pc){ try{ entry.pc.close(); }catch{} }
+  if(entry.video){ try{ entry.video.srcObject=null; }catch{} }
+}
+function closeCamRtc(id){
+  const entry=CAM_RTC.get(id);
+  if(!entry) return;
+  camRtcCleanupEntry(entry);
+  CAM_RTC.delete(id);
+}
+function closeAllCamRtc(){
+  for(const entry of CAM_RTC.values()) camRtcCleanupEntry(entry);
+  CAM_RTC.clear();
+}
+// Non-trickle ICE, matching what the device's own page does: it answers only
+// once candidate gathering has finished, so the offer is posted after the
+// null candidate rather than incrementally.
+function camRtcGatheringComplete(pc){
+  if(pc.iceGatheringState==="complete") return Promise.resolve();
+  return new Promise(resolve=>{
+    const done=()=>{ if(pc.iceGatheringState==="complete"){ pc.removeEventListener("icegatheringstatechange",done); resolve(); } };
+    pc.addEventListener("icegatheringstatechange",done);
+    // The device answers a fully-gathered offer; a host that never reaches
+    // "complete" (no network path at all) must not hang the tile forever.
+    setTimeout(()=>{ pc.removeEventListener("icegatheringstatechange",done); resolve(); }, 4000);
+  });
+}
+// base64(JSON{type:"offer",sdp}) in, base64(JSON{type:"answer",sdp}) out.
+// The device replies HTTP 200 with a literal "{}" for anything it doesn't
+// understand, so a 200 alone proves nothing — the decoded payload must be a
+// real answer before it is handed to setRemoteDescription().
+async function camRtcSignal(url, offer){
+  const r=await fetch(url,{method:"POST",headers:{"Content-Type":"plain/text"},body:btoa(JSON.stringify({type:"offer",sdp:offer.sdp}))});
+  if(!r.ok) throw new Error("signaling HTTP "+r.status);
+  const text=(await r.text()).trim();
+  let answer;
+  try{ answer=JSON.parse(atob(text)); }catch{ throw new Error("signaling returned a non-answer"); }
+  if(!answer||answer.type!=="answer"||typeof answer.sdp!=="string") throw new Error("signaling returned a non-answer");
+  return answer;
+}
+// Idempotent by construction: an id already connecting or connected is never
+// re-negotiated, which is what stops a render storm (the fleet re-renders on
+// every poll) from stacking peer connections for the same tile. A session
+// that has already failed is not retried either — the printer is either
+// unreachable or the context can't support it, and a retry loop against a
+// camera that cannot work is worse than a static message.
+async function openCamRtc(id, url, video){
+  const existing=CAM_RTC.get(id);
+  if(existing&&existing.state!=="closed"){ existing.video=video; if(existing.stream) video.srcObject=existing.stream; return existing; }
+  const entry={ pc:null, video, state:"connecting", url, stream:null };
+  CAM_RTC.set(id,entry);
+  try{
+    const pc=new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+    entry.pc=pc;
+    // Recv-only: the device advertises a=sendonly and there is nothing to
+    // send it. (Its own page uses sendrecv; recvonly is the correct half.)
+    pc.addTransceiver("video",{direction:"recvonly"});
+    pc.ontrack=e=>{
+      const cur=CAM_RTC.get(id);
+      if(!cur||cur.pc!==pc){ try{ pc.close(); }catch{} return; } // superseded while negotiating
+      cur.stream=e.streams[0];
+      cur.state="connected";
+      if(cur.video) cur.video.srcObject=e.streams[0];
+    };
+    pc.oniceconnectionstatechange=()=>{
+      if(["failed","disconnected","closed"].includes(pc.iceConnectionState)){
+        const cur=CAM_RTC.get(id);
+        if(cur&&cur.pc===pc){ cur.state="closed"; camRtcCleanupEntry(cur); CAM_RTC.delete(id); }
+      }
+    };
+    const offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await camRtcGatheringComplete(pc);
+    const answer=await camRtcSignal(url,pc.localDescription);
+    if(CAM_RTC.get(id)!==entry){ try{ pc.close(); }catch{} return null; } // closed mid-negotiation
+    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    return entry;
+  }catch(e){
+    camRtcCleanupEntry(entry);
+    CAM_RTC.delete(id);
+    throw e;
+  }
+}
 function camShotPlaceholderEl(text, onRetry){
   const div=document.createElement("div");
   div.className="cam-shot-placeholder"+(onRetry?" cam-shot-retryable":"");
@@ -517,6 +626,57 @@ function mountCamShot(slot, id, refreshMs, stagger){
   img.src="/api/snapshot?printer="+id+"&t="+now;
   slot.replaceWith(img);
 }
+// The WebRTC counterpart of mountCamShot: same slot contract (replace the
+// placeholder element), different transport. Deliberately NOT routed through
+// CAM_SHOT_CACHE — a <video> has no "next frame due" and must never be fed
+// to the snapshot refresh loop.
+//
+// The session is not opened here. The observer below opens it when the tile
+// is actually on screen and closes it when it scrolls away, which is what
+// keeps a 100-printer farm from holding 100 media sessions.
+function mountCamRtc(slot, id, url){
+  const video=document.createElement("video");
+  video.className="cam-shot cam-rtc";
+  video.autoplay=true; video.playsInline=true; video.muted=true;
+  video.dataset.camrtc=String(id);
+  const entry=CAM_RTC.get(id);
+  if(entry){ entry.video=video; if(entry.stream) video.srcObject=entry.stream; }
+  slot.replaceWith(video);
+  if(!camRtcContextSupported()){
+    // No retry: over HTTPS this can never succeed (mixed content + Private
+    // Network Access), so it states the limitation once.
+    video.replaceWith(camShotPlaceholderEl(t("fleet.camera.lan_only")));
+    return;
+  }
+  observeCamRtc(video,id,url);
+}
+// One observer for every WebRTC tile. Visible -> connect (idempotent),
+// hidden -> close, so sessions track what is actually on screen.
+let CAM_RTC_OBSERVER=null;
+function camRtcObserver(){
+  if(CAM_RTC_OBSERVER) return CAM_RTC_OBSERVER;
+  CAM_RTC_OBSERVER=new IntersectionObserver(entries=>{
+    for(const e of entries){
+      const el=e.target, id=parseInt(el.dataset.camrtc,10), url=el.dataset.camrtcurl;
+      if(e.isIntersecting){
+        if(el.dataset.camrtcfailed==="1") continue; // already reported — no retry loop
+        openCamRtc(id,url,el).catch(()=>{
+          el.dataset.camrtcfailed="1";
+          const ph=camShotPlaceholderEl(t("fleet.camera.no_feed"));
+          el.replaceWith(ph);
+          CAM_RTC_OBSERVER.unobserve(el);
+        });
+      }else{
+        closeCamRtc(id);
+      }
+    }
+  },{root:null,rootMargin:"200px",threshold:0.01});
+  return CAM_RTC_OBSERVER;
+}
+function observeCamRtc(video,id,url){
+  video.dataset.camrtcurl=url;
+  camRtcObserver().observe(video);
+}
 
 // ---- Fleet sort ----
 let SORT_MODE = localStorage.getItem('snapcon-sort') || 'none';
@@ -628,6 +788,9 @@ function updateTopbarViewLabel(){
   el.textContent=key?"("+t(key)+")":"";
 }
 function applyViewMode(){
+  // Camera View is the only view that holds live sessions; leaving it
+  // (or entering any other) releases every one of them.
+  if(VIEW_MODE!=='camera') closeAllCamRtc();
   document.body.classList.toggle('compact', VIEW_MODE==='compact');
   document.body.classList.toggle('camview', VIEW_MODE==='camera');
   document.body.classList.toggle('listview', VIEW_MODE==='list');
@@ -982,7 +1145,13 @@ async function init(){
   if(splash){ splash.classList.add("hide"); setTimeout(()=>splash.remove(), 600); }
   setInterval(()=>{ if(!document.hidden) loadFiles(); }, 15000);
   startFleetRefresh();
-  document.addEventListener("visibilitychange", ()=>{ if(!document.hidden){ loadFiles(); loadFleet(); } });
+  document.addEventListener("visibilitychange", ()=>{
+    // A hidden tab has no visible camera tile, so nothing should be holding a
+    // media session open. Coming back re-renders the fleet, which re-mounts
+    // the tiles and lets the observer reconnect the ones actually on screen.
+    if(document.hidden){ closeAllCamRtc(); return; }
+    loadFiles(); loadFleet();
+  });
 }
 
 // Modal boilerplate: any listed button, or a click on the backdrop, closes it.
@@ -4951,17 +5120,26 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
       // (still visible, no longer reachable via CARD_CACHE) every time this
       // printer's card is rebuilt, i.e. on every poll its displayed data
       // changes — which for an actively-printing card is every single poll.
-      if(cached) cached.el.remove();
+      if(cached){ cached.el.remove(); closeCamRtc(p.id); }
       CARD_CACHE.set(p.id, { sig, el });
     }
     if(rebuilt && VIEW_MODE==='camera' && p.online && p.capabilities?.camera){
       const slot=el.querySelector('.cam-shot-slot[data-camslot="'+p.id+'"]');
-      if(slot) mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
+      // Two transports, one slot: a printer whose camera is WebRTC-only
+      // (no server-side snapshot) gets a live <video>, everything else
+      // keeps the existing JPEG path untouched.
+      if(slot){
+        if(p.capabilities?.cameraWebrtc && !p.capabilities?.cameraSnapshot && p.cameraWebrtcUrl) mountCamRtc(slot, p.id, p.cameraWebrtcUrl);
+        else mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
+      }
     }
     wrap.appendChild(el);
   });
   for(const [id, entry] of [...CARD_CACHE]){
-    if(!seen.has(id)){ entry.el.remove(); CARD_CACHE.delete(id); }
+    // closeCamRtc() is a no-op for a printer that never had a session, so
+    // this covers deletion, going offline and dropping out of a filter
+    // without needing to know which of those happened.
+    if(!seen.has(id)){ closeCamRtc(id); entry.el.remove(); CARD_CACHE.delete(id); }
   }
 }
 // `incremental` is only ever true from loadFleet()'s own render call — every
@@ -5005,7 +5183,7 @@ function renderFleet({incremental}={}){
     });
   }
   if(VIEW_MODE==='list'){
-    wrap.innerHTML=""; CARD_CACHE.clear();
+    wrap.innerHTML=""; CARD_CACHE.clear(); closeAllCamRtc();
     renderFleetListRows(camFleet, wrap, camRefreshMs);
   } else {
   // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
@@ -5015,7 +5193,7 @@ function renderFleet({incremental}={}){
   // from them entirely).
   const camFiltered=gridToolbarActive()&&(CAM_TAB!=='all'||!!CAM_TAG_FILTER);
   const dragEnabled=SORT_MODE==='none'&&!q&&!camFiltered&&isAdmin();
-  if(!incremental){ wrap.innerHTML=""; CARD_CACHE.clear(); }
+  if(!incremental){ wrap.innerHTML=""; CARD_CACHE.clear(); closeAllCamRtc(); }
   reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, !!incremental);
   }
   $("fleetcount").textContent=t("fleet.status.count_online",{online,total:FLEET.length});
@@ -6326,11 +6504,42 @@ function openSnapshot(printerId){
   loadSnapshot();
 }
 function closeSnapshot(){ $("snapmodal").classList.remove("show"); SNAP_PRINTER=null; }
+// Captures the frame currently showing in a live WebRTC tile. A MediaStream
+// has no origin, so unlike a cross-origin <img> it does not taint the canvas
+// and toBlob() returns real JPEG bytes. Nothing is uploaded — this stays in
+// the browser (no server-side frame cache in this version).
+async function captureCamRtcFrame(video){
+  if(!video||!video.videoWidth||!video.videoHeight) throw new Error(t("fleet.modal.snapshot.webrtc_not_ready"));
+  const canvas=document.createElement("canvas");
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+  canvas.getContext("2d").drawImage(video,0,0,canvas.width,canvas.height);
+  return new Promise((resolve,reject)=>{
+    canvas.toBlob(b=>b?resolve(b):reject(new Error(t("fleet.modal.snapshot.webrtc_capture_failed"))),"image/jpeg",0.9);
+  });
+}
 async function loadSnapshot(){
   if(SNAP_PRINTER===null) return;
   const wrap=$("snapwrap");
   wrap.innerHTML='<span style="color:var(--ink-dim)">'+esc(t("fleet.modal.snapshot.loading"))+'</span>';
   $("snapts").textContent='';
+  // A WebRTC-only camera has no /api/snapshot to call — the frame can only
+  // come from a live session in this browser, so the modal grabs one from
+  // the tile that is already streaming in Camera View.
+  const rtcPrinter=FLEET.find(f=>f.id===SNAP_PRINTER);
+  if(rtcPrinter&&rtcPrinter.capabilities?.cameraWebrtc&&!rtcPrinter.capabilities?.cameraSnapshot){
+    const entry=CAM_RTC.get(SNAP_PRINTER);
+    try{
+      if(!camRtcContextSupported()) throw new Error(t("fleet.camera.lan_only"));
+      const blob=await captureCamRtcFrame(entry&&entry.video);
+      const img=new Image();
+      img.style.cssText='max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto';
+      img.onload=()=>{ wrap.innerHTML=''; wrap.appendChild(img); $("snapts").textContent=t("fleet.modal.snapshot.captured_at",{time:new Date().toLocaleTimeString()}); };
+      img.src=URL.createObjectURL(blob);
+    }catch(e){
+      wrap.innerHTML='<span style="color:var(--ink-dim)">'+esc(e.message)+'</span>';
+    }
+    return;
+  }
   try{
     // fresh=1: this is an explicit user action (opening the modal, clicking
     // Refresh) — always bypass the server's short-lived snapshot cache

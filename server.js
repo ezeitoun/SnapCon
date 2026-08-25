@@ -960,6 +960,15 @@ function stampCompletedAt(p, result) {
   return result;
 }
 
+// The WebRTC signaling URL only reaches the client through the fleet row —
+// it is derived from the printer's own host by the connector, never stored
+// in config.json and never hardcoded. Absent for every printer that has no
+// WebRTC camera, so the client's own capability check stays the gate.
+function webrtcCameraFields(p, conn) {
+  if (!p.cameraWebrtc || typeof conn.webrtcSignalUrl !== "function") return {};
+  const url = conn.webrtcSignalUrl(p);
+  return url ? { cameraWebrtcUrl: url } : {};
+}
 async function probeCached(p) {
   const hit = offlineCache.get(p.url);
   let result;
@@ -1210,7 +1219,7 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // leaked to a user who can't see it.
     if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
     const conn = getConnector(p.connector);
-    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) });
+    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) });
   }
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
     if (!printerVisibleTo(req.user, p)) return null;
@@ -1220,7 +1229,7 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // (pfilemodal) can default to this printer's existing preferences for
     // every role, not just Admin (who already sees them via /api/config's
     // printers[]).
-    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) };
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) };
     const qf = queuedFile.get(i);
     const pl = pendingLoad.get(i);
     // queuedFile (uploading/ready/error) reflects the retry sweep actually
@@ -2182,11 +2191,22 @@ async function buildPrinterRecord(p, existing) {
     if (!urlChanged && existing.cameraChecked) {
       o.cameraChecked = true;
       if (existing.cameraUrl) o.cameraUrl = existing.cameraUrl;
+      if (existing.cameraWebrtc) o.cameraWebrtc = true;
     } else {
+      const conn = getConnector(o.connector);
       try {
-        const camUrl = await getConnector(o.connector).detectCamera(o);
+        const camUrl = await conn.detectCamera(o);
         o.cameraChecked = true;
         if (camUrl) o.cameraUrl = camUrl;
+        // Only when there's no snapshot camera: a printer that can serve
+        // JPEGs keeps the server-side path, which also feeds notification
+        // images. WebRTC is the fallback transport, never a replacement.
+        // Its own failure is caught separately so an unreachable WebRTC
+        // service can't discard a snapshot URL that was just confirmed.
+        if (!camUrl && conn.detectCameraWebrtc) {
+          try { if (await conn.detectCameraWebrtc(o)) o.cameraWebrtc = true; }
+          catch { /* unreachable right now — retried on a later save */ }
+        }
       } catch { /* unreachable right now — leave cameraChecked unset, retried next save */ }
     }
   }
