@@ -36,6 +36,13 @@ exports.capabilities = {
   // the latter (Creality's CFS: real status, no confirmed print-start
   // slot-selection mechanism to apply a mapping through).
   headMapping: true,
+  // Firmware flashing over the LAN, implemented in the separate
+  // connectors/snapmaker-u1-firmware.js (see that file's header for why it
+  // is not part of this module's own exports). U1-ONLY: the protocol talks
+  // to unisrv over the printer's internal MQTT bus and is verified on this
+  // hardware alone. Other brands are not missing a feature here — they
+  // expose no equivalent network flashing API for SnapCon to drive.
+  firmwareDeploy: true,
   // Per-print options sent via SET_PRINT_PREFERENCES (see applyHeadMapping) —
   // real, registered U1 firmware parameters (print_task_config.py), not a
   // guess: BED_LEVEL/FLOW_CALIBRATE/TIME_LAPSE_CAMERA are each an optional

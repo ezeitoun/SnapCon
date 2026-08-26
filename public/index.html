@@ -148,6 +148,14 @@
               </div>
               <div class="settings-help" id="folderCheckStatus"></div>
             </div>
+            <div class="settings-field" style="margin-top:14px">
+              <label class="settings-label" for="setFirmwareFolder" data-i18n="settings.files.firmware_folder">Firmware folder</label>
+              <div style="display:flex;gap:8px">
+                <input class="field" id="setFirmwareFolder" data-i18n-placeholder="settings.files.firmware_folder_placeholder" placeholder="e.g. C:/Users/you/firmware" style="flex:1" />
+                <button class="btn ghost" id="browseFirmwareBtn" data-i18n="common.browse" style="flex:none;white-space:nowrap">Browse…</button>
+              </div>
+              <div class="settings-help" id="firmwareFolderCheckStatus"></div>
+            </div>
           </div>
         </div>
 
@@ -456,7 +464,8 @@
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <button class="btn ghost" id="fwGet" data-i18n="settings.firmware.get_button">Get Firmware</button>
             <button class="btn ghost" id="fwSelect" data-i18n="settings.firmware.select_button">Select Firmware</button>
-            <button class="btn primary" id="fwDeploy" data-i18n="settings.firmware.deploy_button">Deploy Firmware</button>
+            <select class="field" id="fwPrinter" style="max-width:200px;flex:none" data-i18n-aria-label="settings.firmware.target_label" aria-label="Printer to update"></select>
+            <button class="btn danger" id="fwDeploy" data-i18n="settings.firmware.deploy_button">Deploy Firmware</button>
             <span class="hint" data-i18n="settings.firmware.idle_only_hint">reads idle printers only</span>
             <span class="pstatus" aria-live="polite" id="fwStatus"></span>
           </div>
@@ -1202,6 +1211,20 @@
         <span style="font-size:11px;color:var(--ink-faint);flex:1" data-i18n="settings.browse.network_hint">For network paths type the address and press Open</span>
         <button class="btn ghost" id="browsecancel" data-i18n="common.cancel">Cancel</button>
         <button class="btn primary" id="browseok" data-i18n="settings.browse.select_button">Select</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings > Firmware's "Select Firmware". Jailed to the configured
+       firmware folder by /api/firmware-files, which speaks only in relative
+       paths — this modal never sends an absolute one. -->
+  <div class="modal" id="fwpickmodal">
+    <div class="modalbox" style="max-width:560px">
+      <div class="modalhdr"><span data-i18n="settings.firmware.pick_title">Select firmware</span><button class="modalx" id="fwpickx">✕</button></div>
+      <div class="settings-help" id="fwpickpath" style="font-family:var(--mono);margin-bottom:8px"></div>
+      <div id="fwpicklist" style="background:var(--panel-2);border:1px solid var(--line);border-radius:8px;max-height:340px;overflow:auto;min-height:60px"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;align-items:center;justify-content:flex-end">
+        <button class="btn ghost" id="fwpickcancel" data-i18n="common.cancel">Cancel</button>
       </div>
     </div>
   </div>

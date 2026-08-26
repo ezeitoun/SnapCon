@@ -213,4 +213,24 @@ considerably lighter on a large farm.
 - **Temperature bars ease between readings** as the values change.
 - **Large fleets ask far less of the browser.** With 100 actively printing test printers, the work
   each refresh costs dropped by roughly 8x.
+### Update Snapmaker U1 Firmware Over the Network
+Settings → Firmware can now flash a Snapmaker U1 from a firmware file on your own machine — no USB
+stick, no Snapmaker cloud account. Point SnapCon at a **Firmware folder** in Settings → General,
+pick a file, choose the printer, and hold the button to confirm.
+- **One printer at a time**, chosen explicitly. The confirmation names the printer and the file
+  rather than asking whether you are sure, and tells you up front that the machine goes offline for
+  several minutes and must not lose power.
+- **It tells you which stage it is in** — uploading, checking the file, then writing — because those
+  stages take very different amounts of time and only one of them is safe to walk away from.
+- **The file is checked before anything is flashed.** SnapCon reads the uploaded copy back off the
+  printer and compares it to the original; if they differ, nothing is written.
+- **The printer going quiet at the end is normal.** It drops offline to write the image and returns
+  a few minutes later on the new version — SnapCon says so rather than reporting an error.
+- **Admin only**, and the file must come from your configured firmware folder. A U1 accepts firmware
+  from anything on the same network with no password at all, so SnapCon deliberately does not offer
+  a way to point this at an arbitrary file or a web address.
+- Snapmaker U1 only. Other printers do not expose a comparable network update interface, so they
+  are not offered as targets.
+- Downloading firmware from Snapmaker still needs their cloud, so SnapCon does not do it — you
+  supply the file.
 

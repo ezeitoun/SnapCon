@@ -2008,6 +2008,7 @@ function wireUI(){
   $("maintFrequency").addEventListener("change", updateNextScheduledPreview);
   $("maintComponentFilter").addEventListener("input", onMaintComponentChange);
   wireModal("browsemodal", closeBrowse, ["browsex","browsecancel"]);
+  wireModal("fwpickmodal", closeFirmwarePicker, ["fwpickx","fwpickcancel"]);
   wireModal("elecmodal", closeElecModal, ["elecmodalx","elecmodalcancel"]);
   wireModal("sendmodal", closeSendModal, ["sendmodalx","sendmodalcancel"]);
   wireModal("pfilemodal", closePrinterFiles, ["pfilex","pfilecancel"]);
@@ -2018,6 +2019,7 @@ function wireUI(){
   $("browseBtn").addEventListener("click", ()=>openBrowse("setFolder"));
   $("browseLogsBtn").addEventListener("click", ()=>openBrowse("setLogsFolder"));
   $("browseCameraBtn").addEventListener("click", ()=>openBrowse("setCameraFolder"));
+  $("browseFirmwareBtn").addEventListener("click", ()=>openBrowse("setFirmwareFolder"));
   $("browseGcodeSyncBtn").addEventListener("click", ()=>openBrowse("setGcodeSyncFolder"));
   // 0 and blank mean different things here (blank = never delete, 0 would
   // mean delete immediately) but the save path already treats "0 days" as
@@ -2043,6 +2045,7 @@ function wireUI(){
     closeBrowse();
   });
   $("setFolder").addEventListener("input", scheduleFolderCheck);
+  $("setFirmwareFolder").addEventListener("input", scheduleFirmwareFolderCheck);
   $("setRefresh").addEventListener("input", updateRefreshHelper);
   $("setCurrency").addEventListener("change", updateCurrencyLabels);
   $("setAllowMapping").addEventListener("change", syncAutoMatchNesting);
@@ -2206,8 +2209,8 @@ function wireUI(){
   });
 
   $("fwGet").addEventListener("click", loadFirmware);
-  $("fwSelect").addEventListener("click", ()=>{ const st=$("fwStatus"); st.className="pstatus"; st.textContent=t("settings.firmware.select_not_implemented"); });
-  $("fwDeploy").addEventListener("click", ()=>{ const st=$("fwStatus"); st.className="pstatus"; st.textContent=t("settings.firmware.deploy_not_implemented"); });
+  $("fwSelect").addEventListener("click", openFirmwarePicker);
+  $("fwDeploy").addEventListener("click", confirmFirmwareDeploy);
 
 
   $("jobEject").addEventListener("click", clearJobSelection);
@@ -8145,6 +8148,188 @@ async function doOtpTest(){
 // params. A skip reason with no recognized reasonCode (shouldn't happen,
 // but the server contract isn't a compile-time guarantee) falls back to the
 // raw string rather than showing nothing.
+// ---- Select Firmware ----
+// The selection is deliberately transient: it lives here, not in
+// config.json. Deploy does not exist yet, and until it does there is
+// nothing to persist a choice FOR — when it arrives it gets the relative
+// path and revalidates it server-side anyway.
+let SELECTED_FIRMWARE=null;   // { name, path } — path is relative to the firmware folder
+function fmtFileSize(bytes){
+  if(!(bytes>=0)) return "";
+  if(bytes<1024) return bytes+" B";
+  if(bytes<1024*1024) return (bytes/1024).toFixed(1)+" KB";
+  return (bytes/(1024*1024)).toFixed(1)+" MB";
+}
+function openFirmwarePicker(){
+  $("fwpickmodal").classList.add("show");
+  navigateFirmwarePicker("");
+}
+function closeFirmwarePicker(){ $("fwpickmodal").classList.remove("show"); }
+// `rel` is always a path relative to the configured firmware folder — the
+// route accepts nothing else, so there is no absolute path for this client
+// to leak or for the server to have to second-guess.
+async function navigateFirmwarePicker(rel){
+  const list=$("fwpicklist"), pathEl=$("fwpickpath");
+  list.innerHTML=`<div class="browse-empty">${esc(t("settings.browse.loading"))}</div>`;
+  let d;
+  try{
+    d=await getJSON("/api/firmware-files"+(rel?"?path="+encodeURIComponent(rel):""));
+  }catch{
+    list.innerHTML=`<div class="browse-empty">${esc(t("settings.firmware.pick_failed"))}</div>`;
+    return;
+  }
+  if(d&&d.error){
+    // The one error worth explaining rather than reporting: nothing is
+    // configured yet, and the fix is on another tab.
+    const msg=d.error==="no_folder"?t("settings.firmware.pick_no_folder"):t("settings.firmware.pick_failed");
+    list.innerHTML=`<div class="browse-empty">${esc(msg)}</div>`;
+    pathEl.textContent="";
+    return;
+  }
+  pathEl.textContent=d.path?"/"+d.path:"/";
+  list.innerHTML="";
+  // parent is null only at the root; "" is a real value meaning "the root".
+  if(d.parent!==null&&d.parent!==undefined){
+    const up=document.createElement("button");
+    up.className="browse-item browse-up"; up.textContent="↑  ..";
+    up.onclick=()=>navigateFirmwarePicker(d.parent);
+    list.appendChild(up);
+  }
+  (d.dirs||[]).forEach(dir=>{
+    const b=document.createElement("button");
+    b.className="browse-item"; b.textContent="📁  "+dir.name;
+    b.onclick=()=>navigateFirmwarePicker(dir.path);
+    list.appendChild(b);
+  });
+  (d.files||[]).forEach(file=>{
+    const b=document.createElement("button");
+    b.className="browse-item";
+    const meta=[fmtFileSize(file.size), file.mtime?new Date(file.mtime).toLocaleDateString():""].filter(Boolean).join(" · ");
+    b.innerHTML=`<span>${esc(file.name)}</span><span style="color:var(--ink-faint);font-size:11px;margin-left:auto">${esc(meta)}</span>`;
+    b.style.display="flex"; b.style.alignItems="center"; b.style.gap="8px";
+    b.onclick=()=>selectFirmware(file);
+    list.appendChild(b);
+  });
+  if(!(d.dirs||[]).length&&!(d.files||[]).length){
+    list.innerHTML=`<div class="browse-empty">${esc(t("settings.firmware.pick_empty"))}</div>`;
+  }
+}
+function selectFirmware(file){
+  SELECTED_FIRMWARE={ name:file.name, path:file.path };
+  closeFirmwarePicker();
+  const st=$("fwStatus");
+  st.className="pstatus ok";
+  st.textContent=t("settings.firmware.selected",{name:file.path});
+}
+// ---- Deploy firmware ----
+// One printer at a time, and only printers whose connector advertises
+// firmwareDeploy — today that is the Snapmaker U1, whose network flashing
+// protocol is the only one verified against real hardware. Other brands
+// expose no equivalent API to drive, so they are absent rather than
+// disabled-with-an-excuse.
+function syncFirmwareDeployTargets(){
+  const sel=$("fwPrinter");
+  if(!sel) return;
+  const prev=sel.value;
+  const targets=FLEET.filter(p=>p.capabilities&&p.capabilities.firmwareDeploy);
+  sel.innerHTML = targets.length
+    ? targets.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")
+    : `<option value="">${esc(t("settings.firmware.no_targets"))}</option>`;
+  sel.disabled=!targets.length;
+  if(prev&&targets.some(p=>String(p.id)===prev)) sel.value=prev;
+}
+
+// Phase -> what the user is told. The sequence runs for minutes and the
+// phases are not interchangeable: "uploading" and "writing the image" carry
+// completely different advice about whether it is safe to walk away.
+const FW_DEPLOY_PHASE_KEYS={
+  starting:"settings.firmware.phase_starting",
+  device:"settings.firmware.phase_device",
+  upload:"settings.firmware.phase_upload",
+  uploaded:"settings.firmware.phase_uploaded",
+  verify:"settings.firmware.phase_verify",
+  verified:"settings.firmware.phase_verified",
+  flash:"settings.firmware.phase_flash",
+  progress:"settings.firmware.phase_flash"
+};
+function confirmFirmwareDeploy(){
+  const st=$("fwStatus"), sel=$("fwPrinter");
+  if(!SELECTED_FIRMWARE){
+    st.className="pstatus err"; st.textContent=t("settings.firmware.deploy_no_file");
+    return;
+  }
+  const printerId=sel&&sel.value!==""?parseInt(sel.value,10):null;
+  const target=printerId!=null?FLEET.find(p=>p.id===printerId):null;
+  if(!target){
+    st.className="pstatus err"; st.textContent=t("settings.firmware.deploy_no_printer");
+    return;
+  }
+  // Hold-to-confirm, the same control E-Stop and Cancel use — this is more
+  // destructive than either, so it does not get a lesser gate. The dialog
+  // names the printer and the file rather than asking "are you sure".
+  const current=(target.firmware&&target.firmware.firmware)||null;
+  openHoldConfirmDialog({
+    mode:"hold",
+    iconSrc:"/estop-icon.svg",
+    title:t("settings.firmware.confirm_title",{printer:target.name}),
+    subtitle:SELECTED_FIRMWARE.path,
+    panelHtml:`<div class="hc-panel-file" title="${esc(SELECTED_FIRMWARE.path)}">${esc(SELECTED_FIRMWARE.name)}</div>`+
+      (current?`<div class="hc-panel-times">${esc(t("settings.firmware.confirm_current",{version:current}))}</div>`:""),
+    consequencesHtml:`<ul class="hc-consequences-list">`+
+      `<li>${esc(t("settings.firmware.confirm_consequence_offline"))}</li>`+
+      `<li>${esc(t("settings.firmware.confirm_consequence_power"))}</li>`+
+      `<li>${esc(t("settings.firmware.confirm_consequence_one"))}</li>`+
+      `</ul>`,
+    idleLabel:t("settings.firmware.confirm_hold",{printer:target.name}),
+    countdownLabel:n=>t("settings.firmware.confirm_hold_countdown",{n}),
+    helperIdle:t("settings.firmware.confirm_helper_idle"),
+    helperHolding:t("settings.firmware.confirm_helper_holding"),
+    sendingLabel:t("settings.firmware.confirm_sending"),
+    doneLabel:t("settings.firmware.confirm_started"),
+    onConfirm:async()=>{ await startFirmwareDeploy(target, SELECTED_FIRMWARE); }
+  });
+}
+let FW_DEPLOY_POLL=null;
+async function startFirmwareDeploy(target, firmware){
+  const st=$("fwStatus");
+  st.className="pstatus work"; st.textContent=t("settings.firmware.phase_starting");
+  const r=await postJSON("/api/firmware-deploy",{printer:target.id, path:firmware.path});
+  const d=await r.json();
+  if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+  pollFirmwareDeploy(d.job, target);
+}
+// Polled rather than streamed, matching /api/print-status. Slow on purpose:
+// the interesting transitions are minutes apart, and this must not add load
+// to a printer that is busy receiving a quarter-gigabyte image.
+function pollFirmwareDeploy(jobId, target){
+  clearInterval(FW_DEPLOY_POLL);
+  const st=$("fwStatus");
+  FW_DEPLOY_POLL=setInterval(async()=>{
+    let d;
+    try{ d=await getJSON("/api/firmware-deploy-status?job="+encodeURIComponent(jobId)); }
+    catch{ return; }   // a transient poll failure is not a deploy failure
+    if(d.error&&!d.done){ return; }
+    if(!d.done){
+      const key=FW_DEPLOY_PHASE_KEYS[d.phase]||"settings.firmware.phase_starting";
+      st.className="pstatus work"; st.textContent=t(key,{printer:target.name});
+      return;
+    }
+    clearInterval(FW_DEPLOY_POLL); FW_DEPLOY_POLL=null;
+    if(d.error){ st.className="pstatus err"; st.textContent=d.error; return; }
+    // The printer dropping the connection at the flash stage is the EXPECTED
+    // path — services go down to write the image. Reporting it as a failure
+    // is what would tempt someone into power-cycling mid-write.
+    // Branch on the outcome the server named, not on a missing version —
+    // "no version yet" is an expected ending, not an absent value to guess at.
+    if(d.result==="updated"&&d.to){
+      st.className="pstatus ok";
+      st.textContent=t("settings.firmware.done_updated",{printer:target.name,from:d.from||"—",to:d.to});
+    } else {
+      st.className="pstatus ok";
+      st.textContent=t("settings.firmware.done_flashing",{printer:target.name});
+    }
+  },4000);
+}
 function firmwareSkipReasonText(r){
   if(!r.online){
     if(r.reasonCode==="offline") return r.detail?t("settings.firmware.status_offline_detail",{detail:r.detail}):t("printer_status.offline");
@@ -8260,6 +8445,7 @@ function showSetTab(name){
   if(name==="remote"){ loadRemoteAccessStatus(); if(!RA_POLL_TIMER) RA_POLL_TIMER=setInterval(loadRemoteAccessStatus, 4000); }
   else if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; }
   if(name==="logs") loadAuditLogUI(true);
+  if(name==="firmware") syncFirmwareDeployTargets();
 }
 
 // ---- Remote Access (Cloudflare Tunnel, managed) — Development Preview ----
@@ -8454,7 +8640,27 @@ async function viewRemoteAccessLog(){
 }
 
 // ---- General tab helpers ----
-let FOLDER_CHECK_TIMER=null;
+let FOLDER_CHECK_TIMER=null, FIRMWARE_FOLDER_CHECK_TIMER=null;
+// Same debounce and endpoint as the G-code folder below, minus the file
+// count: /api/check-folder counts SLICED files, which says nothing about a
+// firmware folder. Reachable or not is the whole question here — and asking
+// it in Settings is what stops the Firmware tab being where a bad path is
+// first discovered.
+function scheduleFirmwareFolderCheck(){
+  clearTimeout(FIRMWARE_FOLDER_CHECK_TIMER);
+  const el=$("firmwareFolderCheckStatus");
+  if(!el) return;
+  const p=$("setFirmwareFolder").value.trim();
+  if(!p){ el.className="settings-help"; el.textContent=""; return; }
+  el.className="settings-help"; el.textContent=t("settings.general.folder_checking");
+  FIRMWARE_FOLDER_CHECK_TIMER=setTimeout(async()=>{
+    try{
+      const r=await getJSON("/api/check-folder?path="+encodeURIComponent(p));
+      if(!r.ok){ el.className="settings-help err"; el.textContent=r.error||t("settings.general.folder_path_not_found"); return; }
+      el.className="settings-help ok"; el.textContent=t("settings.files.firmware_folder_found");
+    }catch{ el.className="settings-help err"; el.textContent=t("settings.general.folder_check_failed"); }
+  },500);
+}
 // Debounced — fires 500ms after the user stops typing, not on every
 // keystroke, since it's a real filesystem + file-count check server-side.
 function scheduleFolderCheck(){
@@ -8515,11 +8721,13 @@ function generalTabValues(){
     allowMapping:$("setAllowMapping").checked, suggestMatching:$("setSuggestMatching").checked,
     logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(),
     logsRetentionDays:$("setLogsRetentionDays").value, cameraRetentionDays:$("setCameraRetentionDays").value,
-    gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), gcodeSyncRetentionDays:$("setGcodeSyncRetentionDays").value
+    gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), gcodeSyncRetentionDays:$("setGcodeSyncRetentionDays").value,
+    firmwareFolder:$("setFirmwareFolder").value.trim()
   };
 }
 function setGeneralTabValues(v){
   $("setFolder").value=v.folder; scheduleFolderCheck();
+  $("setFirmwareFolder").value=v.firmwareFolder||""; scheduleFirmwareFolderCheck();
   $("setRefresh").value=v.refresh; updateRefreshHelper();
   $("setCurrency").value=v.currency; updateCurrencyLabels();
   $("setFilamentCost").value=v.filamentCost;
@@ -8603,6 +8811,7 @@ async function loadConfigUI(){
     renderConfigLoadWarning(c);
     SYSTEM_DEFAULT_LOCALE=c.locale||"en";
     $("setFolder").value=c.gcodeFolder||"";
+    $("setFirmwareFolder").value=c.firmwareFolder||"";
     scheduleFolderCheck();
     $("setLogsFolder").value=c.logsFolder||"";
     $("setCameraFolder").value=c.cameraFolder||"";
@@ -9984,7 +10193,7 @@ async function saveConfig(){
   const logsRetentionDays=parseInt($("setLogsRetentionDays").value,10);
   const cameraRetentionDays=parseInt($("setCameraRetentionDays").value,10);
   const gcodeSyncRetentionDays=parseInt($("setGcodeSyncRetentionDays").value,10);
-  const body={ gcodeFolder:$("setFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:useTNotation||undefined, defaultView:$("setDefaultView").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING, locale:$("setLocale")?$("setLocale").value:undefined,
+  const body={ gcodeFolder:$("setFolder").value.trim(), firmwareFolder:$("setFirmwareFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, alternateDisplay:ALT_DISPLAY, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:useTNotation||undefined, defaultView:$("setDefaultView").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING, locale:$("setLocale")?$("setLocale").value:undefined,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     otp:{

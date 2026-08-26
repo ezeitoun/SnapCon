@@ -17,6 +17,11 @@ const auth = require("./auth");
 const { getConnector, listConnectorTypes, getCapabilities, getAddress, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
 const { isValidHost, normalizePort, parseAddressUrl, composeAddressUrl } = require("./connectors/address");
 const connHttp = require("./connectors/http-utils");
+// Firmware flashing lives outside the connector interface on purpose (see
+// that module's header) — it is required directly, by the one route that
+// drives it, and only ever for printers whose connector advertises
+// firmwareDeploy.
+const u1Firmware = require("./connectors/snapmaker-u1-firmware");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 const { createAuditLog } = require("./audit/AuditLog");
 const { createSyncEngine } = require("./sync/SyncEngine");
@@ -497,6 +502,250 @@ app.get("/api/check-folder", requireAdmin, (req, res) => {
   } catch {
     res.json({ ok: false, error: "Path not found" });
   }
+});
+
+// ---- Firmware folder listing (Settings > Firmware's "Select Firmware") ----
+// Deliberately NOT built on /api/browse: that one is a browse-anywhere
+// DIRECTORY picker, and teaching it to list files would expose filenames
+// across the whole disk for no benefit here. This route speaks only in paths
+// RELATIVE to the configured firmware folder — the browser never sends an
+// absolute path — so the contract is jailed by construction rather than by
+// an after-the-fact check on something arbitrary.
+//
+// Containment is pathSafety.js's resolveWithinFolder(), the same lexical jail
+// safePath() uses for the gcode folder. That jail is LEXICAL ONLY — by its own
+// documentation it does not resolve symlinks — so symlinks are handled here
+// instead of pretending it covers them: symlink entries are never listed, and
+// the directory being opened is checked with lstat, so a hand-crafted ?path=
+// naming a symlinked directory is rejected rather than followed out of the
+// jail. No claim is made beyond that.
+//
+// No extension filter: which files a given connector accepts is a question for
+// Deploy, which has the connector in hand and must revalidate whatever it is
+// given anyway. Listing everything avoids inventing a firmware file format.
+app.get("/api/firmware-files", requireAdmin, (req, res) => {
+  const configured = String(CFG.firmwareFolder || "").trim();
+  // A CODE, not prose, unlike every other error here: this is the one case
+  // the picker explains rather than echoes ("set a firmware folder in Settings
+  // → General"), and that sentence has to come from the locale files. The
+  // deploy route answers the same condition in prose because nothing there is
+  // reachable from the UI without a folder already configured.
+  if (!configured) return res.status(400).json({ error: "no_folder" });
+  const root = path.resolve(BASE_DIR, configured);
+  const sub = String(req.query.path || "");
+  const dir = sub ? resolveWithinFolder(sub, root) : root;
+  if (!dir) return res.status(400).json({ error: "Invalid path" });
+  // "/"-joined so the value round-trips back through this same route
+  // unchanged regardless of the OS separator, exactly like CURRENT_SUB does
+  // for the gcode file manager.
+  const rel = p => path.relative(root, p).split(path.sep).join("/");
+  let entries;
+  try {
+    if (!fs.lstatSync(dir).isDirectory()) return res.status(400).json({ error: "Not a folder" });
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch { return res.status(404).json({ error: "Path not found" }); }
+  const dirs = [], files = [];
+  for (const e of entries) {
+    // isDirectory()/isFile() are both false for a symlink here, so symlinks
+    // fall out of the listing entirely — see the jail note above.
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) dirs.push({ name: e.name, path: rel(full) });
+    else if (e.isFile()) {
+      try {
+        const st = fs.statSync(full);
+        files.push({ name: e.name, path: rel(full), size: st.size, mtime: st.mtimeMs });
+      } catch { /* vanished between readdir and stat — just omit it */ }
+    }
+  }
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  dirs.sort(byName); files.sort(byName);
+  // parent is null at the root and "" for a first-level subfolder (the root's
+  // own relative path) — the client tests for null, not falsiness.
+  res.json({ path: rel(dir), parent: dir === root ? null : rel(path.dirname(dir)), dirs, files });
+});
+
+// ---- Firmware deploy (Settings > Firmware) ----
+//
+// The single most consequential thing this product can do to a printer, so:
+// requireAdmin (not requireRegular, which is enough for e-stop), the file must
+// come from the configured firmware folder through the same jail the listing
+// route uses, and the printer must not be mid-print. A U1 trusts anything on
+// the LAN (see the firmware module's SECURITY note) — SnapCon deliberately
+// does not make that easy to trigger by accident, which is why there is no
+// option to point this at an arbitrary path or a remote URL.
+//
+// Progress is reported through a job record polled by
+// /api/firmware-deploy-status, exactly like /api/print + /api/print-status.
+// A blocking request is not viable here: upload, MD5 verify and the flash
+// watch together run for minutes, and the caller needs to know WHICH of
+// those it is in — a single spinner over the whole sequence is what makes
+// people power-cycle a printer mid-write.
+const FW_DEPLOYS = new Map();   // jobId -> { phase, done, error, outcome, before, after, file, ts }
+// printer id -> jobId, for as long as a deploy is actually running. Two
+// concurrent flashes of the same machine would interleave two uploads and two
+// systemUpgrade.sh runs against one filesystem; there is no version of that
+// worth allowing.
+const FW_ACTIVE = new Map();
+const newFwJobId = () => "fw" + Date.now() + Math.random().toString(16).slice(2, 6);
+
+// Resolve a browser-supplied RELATIVE path to a real file inside the
+// configured firmware folder, or explain why not.
+//
+// Deliberately called twice: once to answer the request, and again inside the
+// job immediately before the file is read. Between those two moments the
+// admin can edit the firmware folder in Settings, and the file itself can be
+// deleted, moved, or replaced with a symlink pointing somewhere else. The
+// check that matters is the one taken against the state that will actually be
+// used, so it is one function rather than a validated value carried forward.
+function resolveFirmwareFile(relRaw) {
+  const configured = String(CFG.firmwareFolder || "").trim();
+  if (!configured) return { status: 400, error: "No firmware folder is configured" };
+  // Absolute paths are refused outright rather than merely failing the jail
+  // below — the contract with the browser is "relative to the firmware
+  // folder", and anything else is a caller doing something it should not.
+  if (!relRaw || path.isAbsolute(relRaw)) return { status: 400, error: "Invalid path" };
+  const root = path.resolve(BASE_DIR, configured);
+  const file = resolveWithinFolder(relRaw, root);
+  if (!file) return { status: 400, error: "Invalid path" };
+  // lstat, not stat: a symlink is not followed out of the jail here either.
+  try { if (!fs.lstatSync(file).isFile()) return { status: 400, error: "Not a file" }; }
+  catch { return { status: 404, error: "Firmware file not found" }; }
+  return { file };
+}
+
+// Is this printer safe to flash right now? Re-asked immediately before the
+// deploy starts, not only when the request arrived.
+async function firmwareDeployBlockedBy(p) {
+  try {
+    const st = await probeCached(p);
+    if (st && st.online && (st.state === "printing" || st.state === "paused")) {
+      return p.name + " is printing — stop the print before updating firmware";
+    }
+  } catch { /* unreachable printer: let the deploy itself report the failure */ }
+  return null;
+}
+// Same abandoned-record sweep as JOBS above: nobody polls a job whose tab
+// closed mid-flash.
+setInterval(() => {
+  const cutoff = Date.now() - JOB_MAX_AGE;
+  for (const [id, j] of FW_DEPLOYS) if (j.done && j.ts < cutoff) FW_DEPLOYS.delete(id);
+}, 60 * 1000).unref();
+
+app.post("/api/firmware-deploy", requireAdmin, async (req, res) => {
+  const { printer, path: rel } = req.body || {};
+  const p = PRINTERS[printer];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  // Mirrors /api/exclude's refusal: a connector that does not advertise the
+  // capability has no verified flashing protocol, and guessing one at a
+  // printer is not a risk worth taking.
+  if (!getCapabilities(p.connector, p).firmwareDeploy) {
+    return res.status(400).json({ error: p.name + " does not support firmware deployment" });
+  }
+  const relRaw = String(rel || "");
+  const resolved = resolveFirmwareFile(relRaw);
+  if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+
+  // Flashing mid-print destroys the job and leaves the machine in an unknown
+  // state. Asked from the cached probe rather than a fresh one so a printer
+  // that has gone unreachable does not block a recovery flash.
+  const blocked = await firmwareDeployBlockedBy(p);
+  if (blocked) return res.status(400).json({ error: blocked });
+
+  // Claim the printer. This sits AFTER the await above on purpose: from here
+  // to the FW_ACTIVE.set below there is no further await, so two requests that
+  // were both waiting on the probe cannot both get past it — the first to
+  // resume claims the printer and the second sees the claim.
+  if (FW_ACTIVE.has(p.id)) {
+    return res.status(409).json({ error: p.name + " already has a firmware update running" });
+  }
+  const jobId = newFwJobId();
+  FW_ACTIVE.set(p.id, jobId);
+  const job = { phase: "starting", done: false, error: null, outcome: null, result: null,
+                before: null, after: null, file: path.basename(resolved.file), detail: null, ts: Date.now() };
+  FW_DEPLOYS.set(jobId, job);
+  const actor = actorFromReq(req);
+
+  // Deliberately not awaited: the response carries the job id and the client
+  // polls from here.
+  (async () => {
+    try {
+      // Re-ask both questions against the state that will actually be used.
+      // The request-time answers are already stale by the time this runs, and
+      // "the printer was idle a moment ago" is not what makes flashing safe.
+      const stillBlocked = await firmwareDeployBlockedBy(p);
+      if (stillBlocked) throw new Error(stillBlocked);
+      const now = resolveFirmwareFile(relRaw);
+      if (now.error) throw new Error(now.error);
+      const r = await u1Firmware.updateFromFile(p, now.file, {
+        onStep: s => {
+          job.ts = Date.now();
+          job.phase = s.step;
+          if (s.step === "device" && s.info) job.before = s.info;
+          if (s.step === "uploaded") job.detail = s.size ? String(s.size) : null;
+          if (s.step === "progress") job.detail = s.state ? String(s.state.state || s.state.message || "") : (s.kind || null);
+        },
+        // The last exit before anything irreversible. Upload and verify take
+        // minutes, which is long enough for someone to have started a print
+        // since this deploy began — the state answered at request time says
+        // nothing about the state now. Throwing here aborts with nothing
+        // written; the uploaded image stays on the printer, which is inert.
+        beforeFlash: async () => {
+          const busy = await firmwareDeployBlockedBy(p);
+          if (busy) throw new Error(p.name + " started printing during the upload — nothing was flashed");
+        },
+      });
+      // Three distinct endings, kept distinct. A flash that started and took
+      // the printer offline to write the image is a SUCCESS the user should
+      // see as such — but the new version is genuinely not observable yet, so
+      // nothing invents one: `after` stays null and the outcome says why.
+      job.result = r.after ? "updated" : "version-unconfirmed";
+      job.outcome = r.outcome; job.before = r.before; job.after = r.after;
+      job.phase = "done"; job.done = true; job.ts = Date.now();
+      // The audit entry matters more than anything returned to the browser:
+      // this is the record of who flashed what onto which machine. `to` is
+      // null when the printer is still writing the image and has not come
+      // back to report its new version — that is the expected path.
+      auditLog.log({
+        category: "admin", event: "firmware-deploy", ...actor,
+        printerId: p.id, printerName: p.name,
+        detail: { file: job.file, result: job.result,
+                  // the raw watch outcome too, since "disconnected" vs
+                  // "timeout" is the difference between a flash that started
+                  // and one that never reported anything
+                  watch: r.outcome,
+                  from: (r.before && r.before.fullversion) || null,
+                  to: (r.after && r.after.fullversion) || null },
+      });
+    } catch (e) {
+      job.error = e.message; job.phase = "error"; job.done = true; job.ts = Date.now();
+      auditLog.log({
+        category: "admin", event: "firmware-deploy-failed", ...actor,
+        printerId: p.id, printerName: p.name,
+        detail: { file: job.file, error: e.message },
+      });
+    } finally {
+      // Released on every path, including the throws above — a stuck claim
+      // would lock a printer out of firmware updates until restart.
+      if (FW_ACTIVE.get(p.id) === jobId) FW_ACTIVE.delete(p.id);
+    }
+  })();
+
+  res.json({ ok: true, job: jobId });
+});
+
+// Poll a deploy. Same shape and lifetime rules as /api/print-status, except
+// a finished record is kept a little longer: the last phase of a successful
+// flash is "the printer went away", and the user may take a moment to read it.
+app.get("/api/firmware-deploy-status", requireAdmin, (req, res) => {
+  const job = FW_DEPLOYS.get(req.query.job);
+  if (!job) return res.status(404).json({ error: "No such job" });
+  res.json({
+    phase: job.phase, done: job.done, error: job.error, outcome: job.outcome,
+    result: job.result, file: job.file, detail: job.detail,
+    from: (job.before && job.before.fullversion) || null,
+    to: (job.after && job.after.fullversion) || null,
+  });
+  if (job.done) setTimeout(() => FW_DEPLOYS.delete(req.query.job), 30000);
 });
 
 // Recursive walk under `dir`, filtering to the same sliced-file extensions
@@ -1989,6 +2238,7 @@ function publicCfg(role) {
     folderResolved: FOLDER,
     logsFolder: CFG.logsFolder || "",
     cameraFolder: CFG.cameraFolder || "",
+    firmwareFolder: CFG.firmwareFolder || "",
     gcodeSyncFolder: CFG.gcodeSyncFolder || "",
     logsRetentionDays: CFG.logsRetentionDays || null,
     cameraRetentionDays: CFG.cameraRetentionDays || null,
@@ -2382,6 +2632,7 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     // back to whatever was previously saved.
     logsFolder: (typeof b.logsFolder === "string") ? b.logsFolder.trim() : (CFG.logsFolder || ""),
     cameraFolder: (typeof b.cameraFolder === "string") ? b.cameraFolder.trim() : (CFG.cameraFolder || ""),
+    firmwareFolder: (typeof b.firmwareFolder === "string") ? b.firmwareFolder.trim() : (CFG.firmwareFolder || ""),
     gcodeSyncFolder: (typeof b.gcodeSyncFolder === "string") ? b.gcodeSyncFolder.trim() : (CFG.gcodeSyncFolder || ""),
     logsRetentionDays: (typeof b.logsRetentionDays === "number" && b.logsRetentionDays > 0) ? b.logsRetentionDays : undefined,
     cameraRetentionDays: (typeof b.cameraRetentionDays === "number" && b.cameraRetentionDays > 0) ? b.cameraRetentionDays : undefined,
