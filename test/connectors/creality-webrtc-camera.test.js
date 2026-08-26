@@ -17,6 +17,11 @@ const conn = require("../../connectors/creality-klipper");
 const ROOT = path.join(__dirname, "..", "..");
 const appSrc = fs.readFileSync(path.join(ROOT, "public", "app.js"), "utf8");
 const serverSrc = fs.readFileSync(path.join(ROOT, "server.js"), "utf8");
+const SRC_CREALITY_BRANCH = 'if (o.connector === "creality-klipper")';
+const crealityProbeSrc = () => {
+  const i = serverSrc.indexOf("async function detectCrealityWebrtcCamera(");
+  return i > 0 ? serverSrc.slice(i, i + 900) : "";
+};
 
 // The signaling port is part of the contract the device dictates (8000), so
 // a stub standing in for it has to own that port rather than an ephemeral
@@ -133,12 +138,20 @@ test("a signaling service that isn't listening at all also throws rather than re
 // ---- server wiring ----
 
 test("WebRTC detection only runs when no snapshot camera was found, and cannot discard one", () => {
-  const block = serverSrc.match(/if \(o\.connector === "creality-klipper"\)[\s\S]*?\n  \}/)[0];
-  assert.match(block, /if \(!camUrl && conn\.detectCameraWebrtc\)/);
-  // Its own try/catch: an unreachable WebRTC probe must not throw past the
-  // snapshot detection that already succeeded.
-  assert.match(block, /try \{ if \(await conn\.detectCameraWebrtc\(o\)\) o\.cameraWebrtc = true; \}\s*\n\s*catch/);
-  assert.match(block, /if \(existing\.cameraWebrtc\) o\.cameraWebrtc = true;/); // cached like cameraUrl
+  const i = serverSrc.indexOf(SRC_CREALITY_BRANCH);
+  assert.ok(i > 0, "the Creality branch must exist");
+  const block = serverSrc.slice(i, i + 2200);
+  // Both entry points are gated on there being no snapshot URL: a printer
+  // that serves JPEGs keeps the server-side path, which also feeds
+  // notification images.
+  assert.ok(block.includes("if (!camUrl) await detectCrealityWebrtcCamera(conn, o);"));
+  assert.ok(block.includes("else if (!o.cameraUrl) await detectCrealityWebrtcCamera(conn, o);"));
+  assert.ok(block.includes("if (existing.cameraWebrtc) o.cameraWebrtc = true;")); // cached like cameraUrl
+  // The probe owns its own try/catch, so an unreachable WebRTC service can
+  // never throw past snapshot detection that already succeeded.
+  const probe = crealityProbeSrc();
+  assert.ok(probe.includes("if (await conn.detectCameraWebrtc(o)) o.cameraWebrtc = true;"));
+  assert.ok(probe.includes("catch {"));
 });
 
 test("the signaling URL reaches the client through the fleet row, not config.json", () => {
@@ -215,6 +228,72 @@ test("every teardown path closes the session", () => {
   assert.match(cleanup, /entry\.video\.srcObject=null/);
 });
 
+// ---------------------------------------------------------------------------
+// Session cleanup belongs to the VIEW BOUNDARY, not the render loop.
+//
+// List View rows mount no camera elements at all (renderFleetListRows never
+// uses its camRefreshMs argument and emits no <img class="cam-shot"> or
+// <video>), so the only session that can exist while List View is up is the
+// short-lived one the Snapshot modal opens to capture a frame from a
+// WebRTC-only camera. The List View render path used to call
+// closeAllCamRtc() on every render, which killed that session mid-capture on
+// the next fleet poll — the modal then timed out on "Live view is still
+// connecting". Cleanup on leaving Camera View is what actually protects
+// against stale sessions, and that lives in applyViewMode().
+//
+// These are source-level checks: applyViewMode()/renderFleet() are
+// browser-global code with no module system and heavy DOM coupling (the same
+// constraint the rest of this file documents). The behavioral half — a
+// snapshot surviving real polls, and Camera View sessions actually being
+// released on the way to List View — is browser-verified against the device.
+
+test("leaving Camera View releases every session at the view boundary", () => {
+  const fn = appSrc.match(/function applyViewMode\(\)\{[\s\S]*?\n\}/)[0];
+  assert.match(fn, /if\(VIEW_MODE!=='camera'\) closeAllCamRtc\(\);/);
+});
+
+test("every path that switches into List View goes through applyViewMode()", () => {
+  // This is what makes the render-loop call redundant: if any path could set
+  // VIEW_MODE='list' without it, Camera View sessions could survive the switch.
+  const cycle = appSrc.match(/function cycleViewMode\(\)\{[\s\S]*?\n\}/)[0];
+  assert.match(cycle, /VIEW_MODE=next;\s*\n\s*applyViewMode\(\);/);
+  // Settings > View's default-view control, and the initial page-load path.
+  assert.match(appSrc, /VIEW_MODE=\(\$\("setDefaultView"\)\.value==="printfarm"\)\?"regular":\$\("setDefaultView"\)\.value; applyViewMode\(\);/);
+  // No assignment of the literal 'list' anywhere — it only ever arrives via
+  // nextViewMode()/the default-view control, both of which apply the mode.
+  assert.equal(/VIEW_MODE\s*=\s*['"]list['"]/.test(appSrc), false);
+});
+
+test("an ordinary List View render does NOT close WebRTC sessions", () => {
+  const branch = appSrc.match(/if\(VIEW_MODE==='list'\)\{[\s\S]*?renderFleetListRows\([^)]*\);/)[0];
+  assert.equal(/closeAllCamRtc\(\)/.test(branch.replace(/\/\/[^\n]*/g, "")), false,
+    "a fleet refresh in List View must not tear down the Snapshot modal's session");
+  // The rest of the branch is unchanged — the table is still rebuilt.
+  assert.match(branch, /wrap\.innerHTML=""; CARD_CACHE\.clear\(\);/);
+});
+
+test("the full-rebuild teardown path still closes sessions", () => {
+  // renderFleet() called with no arguments (view change, sort, filter, search)
+  // still clears everything, which is what releases Camera View tiles when the
+  // grid itself is rebuilt.
+  assert.match(appSrc, /if\(!incremental\)\{ wrap\.innerHTML=""; CARD_CACHE\.clear\(\); closeAllCamRtc\(\); \}/);
+});
+
+test("sessions can only be created for visible Camera View tiles, so they cannot accumulate across view switches", () => {
+  // mountCamRtc() is reachable from exactly one place, and only under the
+  // camera-view guard; the Snapshot modal opens its own via camRtcFrameSource.
+  const mountCalls = [...appSrc.matchAll(/mountCamRtc\(/g)].length;
+  assert.equal(mountCalls, 2, "its definition and exactly one call site — nothing else may open a tile session");
+  assert.match(appSrc, /if\(rebuilt && VIEW_MODE==='camera' && p\.online && p\.capabilities\?\.camera\)/);
+});
+
+test("List View rows mount no camera elements of their own", () => {
+  const fn = appSrc.match(/function renderFleetListRows\([\s\S]*?\n\}/)[0];
+  assert.equal(/mountCamRtc|mountCamShot|cam-shot-slot/.test(fn), false);
+  // A camera button that opens the Snapshot modal is all a List row carries.
+  assert.match(fn, /data-snap="\$\{p\.id\}"/);
+});
+
 test("sessions are gated on visibility by IntersectionObserver, not opened for every card", () => {
   assert.match(appSrc, /new IntersectionObserver\(/);
   const mount = appSrc.match(/function mountCamRtc\([\s\S]*?\n\}/)[0];
@@ -256,4 +335,101 @@ test("the new strings exist in both bundled locales", () => {
   // No hardcoded English in the new frontend code.
   const rtc = appSrc.match(/const CAM_RTC = new Map\(\)[\s\S]*?async function openCamRtc\([\s\S]*?\n\}/)[0];
   assert.doesNotMatch(rtc, /"Camera available|"Live view is|"Could not capture/);
+});
+
+// ---- model detection, and the upgrade path it feeds ----
+//
+// This connector covers several machines, so the model is detected from
+// printer.cfg's own header stamp and kept. buildPrinterRecord's Creality
+// branch is not exported, so its decision logic is asserted against
+// server.js's source — the same convention the rest of this file uses.
+
+function stubModelCfg(header) {
+  const server = http.createServer((req, res) => {
+    if (!req.url.includes("printer.cfg")) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end(header + "\n[mcu]\nserial: /dev/ttyS1\n");
+  });
+  return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server)));
+}
+
+test("the model comes from printer.cfg's stamp, mapped to a human name", async () => {
+  const server = await stubModelCfg("# F022\n# Printer_size: 260x260x300");
+  try {
+    const m = await conn.detectModel({ name: "i7", url: "http://127.0.0.1:" + server.address().port });
+    assert.deepEqual(m, { code: "F022", label: "SPARKX i7" });
+  } finally { server.close(); }
+});
+
+test("a model the table doesn't know still identifies itself by code", async () => {
+  const server = await stubModelCfg("# F999");
+  try {
+    assert.deepEqual(await conn.detectModel({ name: "x", url: "http://127.0.0.1:" + server.address().port }),
+      { code: "F999", label: "F999" });
+  } finally { server.close(); }
+});
+
+test("firmware with no model stamp reports null rather than guessing", async () => {
+  const server = await stubModelCfg("# some other comment");
+  try {
+    assert.equal(await conn.detectModel({ name: "x", url: "http://127.0.0.1:" + server.address().port }), null);
+  } finally { server.close(); }
+});
+
+test("an unreachable printer throws, so the model is retried on a later save", async () => {
+  await assert.rejects(() => conn.detectModel({ name: "x", url: "http://127.0.0.1:7199" }));
+});
+
+test("only the models confirmed to have a WebRTC camera are probed for one", () => {
+  assert.equal(conn.modelHasWebrtcCamera("F022"), true);   // SPARKX i7
+  assert.equal(conn.modelHasWebrtcCamera("f022"), true);   // case-insensitive
+  assert.equal(conn.modelHasWebrtcCamera("F002"), false);  // Ender-3 V3 Plus — port 8000 closed, confirmed live
+  assert.equal(conn.modelHasWebrtcCamera(null), false);
+});
+
+test("a printer camera-checked BEFORE WebRTC support still gets probed exactly once", () => {
+  // The bug this covers: cameraChecked only ever meant "the snapshot probe
+  // ran". Every Creality added before this feature carries cameraChecked:true
+  // with no camera at all, and sat in the cached branch forever — no amount
+  // of re-saving would ever run the WebRTC probe.
+  const block = serverSrc.match(/if \(o\.connector === "creality-klipper"\)[\s\S]*?\n  \}/)[0];
+  assert.match(block, /if \(existing\.cameraWebrtcChecked\) o\.cameraWebrtcChecked = true;/);
+  assert.match(block, /else if \(!o\.cameraUrl\) await detectCrealityWebrtcCamera\(conn, o\);/);
+  // …and once it has run, the flag stops it running again.
+  const probe = serverSrc.match(/async function detectCrealityWebrtcCamera\([\s\S]*?\n\}/)[0];
+  assert.match(probe, /o\.cameraWebrtcChecked = true;/);
+});
+
+test("a model known NOT to have a WebRTC camera is never probed for one", () => {
+  const probe = serverSrc.match(/async function detectCrealityWebrtcCamera\([\s\S]*?\n\}/)[0];
+  assert.match(probe, /if \(o\.modelCode && !conn\.modelHasWebrtcCamera\(o\.modelCode\)\) \{ o\.cameraWebrtcChecked = true; return; \}/);
+  // An unidentified model is still probed — it is likelier to be a machine
+  // this table has not met than one it has.
+  assert.match(probe, /o\.modelCode &&/);
+});
+
+test("the detected model is tagged once, and stays deleted if removed", () => {
+  const tagBlock = serverSrc.match(/\/\/ A connector that covers several machines tags[\s\S]*?\n  \}/)[0];
+  assert.match(tagBlock, /if \(o\.model && !\(existing && existing\.modelChecked\)\)/);
+  // Case-insensitive, so a user who already typed the model by hand does not
+  // end up with it twice.
+  assert.match(tagBlock, /t\.toLowerCase\(\) === o\.model\.toLowerCase\(\)/);
+  assert.match(tagBlock, /o\.tags = \[\.\.\.tags, o\.model\]/);
+});
+
+test("the snapshot modal works from any view, not only while Camera View streams", () => {
+  // The reported bug: the modal read CAM_RTC and nothing else, so opening it
+  // from the fleet card (no tile streaming) could only ever report "still
+  // connecting". It now opens its own short-lived session when none exists.
+  const src = appSrc.slice(appSrc.indexOf("async function camRtcFrameSource("), appSrc.indexOf("async function camRtcFrameSource(") + 1200);
+  assert.ok(src.includes("const live=CAM_RTC.get(printerId);"));
+  assert.ok(src.includes("if(live&&live.video&&live.video.videoWidth) return live.video;")); // reuse, never re-negotiate
+  assert.ok(src.includes("await openCamRtc(printerId,url,video);"));
+  assert.ok(src.includes("SNAP_RTC_OWNED=live?null:printerId;"));                            // ownership recorded
+  assert.ok(src.includes("while(!video.videoWidth&&Date.now()<deadline)"));                  // wait for a real frame
+});
+
+test("closing the modal closes only a session the modal itself opened", () => {
+  const close = appSrc.slice(appSrc.indexOf("function closeSnapshot()"), appSrc.indexOf("function closeSnapshot()") + 420);
+  assert.ok(close.includes("if(SNAP_RTC_OWNED!=null){ closeCamRtc(SNAP_RTC_OWNED); SNAP_RTC_OWNED=null; }"));
 });

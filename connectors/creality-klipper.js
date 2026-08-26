@@ -26,7 +26,7 @@
 // baked into the connector module.
 const http = require("./http-utils");
 
-exports.label = "Creality (K1 / K2 / Hi)";
+exports.label = "Creality (Klipper)";
 exports.brand = "Creality";
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true,
@@ -609,6 +609,40 @@ async function detectCameraWebrtc(p) {
 }
 exports.detectCameraWebrtc = detectCameraWebrtc;
 exports.webrtcSignalUrl = webrtcSignalUrl;
+
+// ---- Model detection ----
+// This connector covers several physically different machines, and they do
+// not behave identically (the i7 alone has the WebRTC camera; it also has no
+// part-cooling `fan` object at all). Creality stamps an internal model code
+// into the first line of printer.cfg — confirmed across three live units:
+//
+//   # F002   Ender-3 V3 Plus   (300x300x330)   both units report F002
+//   # F022   SPARKX i7         (260x260x300)
+//
+// printer.cfg is the source, NOT the hostname: one V3 Plus reported
+// "v3-brown" (renamed by its owner) and the other still the factory
+// "Ender-3", while both agreed on F002. The i7's hostname happens to start
+// with its code, which is exactly the coincidence that would have made
+// hostname parsing look correct.
+//
+// An unrecognised code returns its raw value rather than null, so a model
+// this table has never seen still identifies itself instead of vanishing.
+const MODEL_CODES = { F002: "Ender-3 V3 Plus", F022: "SPARKX i7" };
+// The one model confirmed to serve a WebRTC camera. Kept as a list so the
+// gate reads as a fact about specific machines rather than a magic string.
+const WEBRTC_CAMERA_MODELS = ["F022"];
+async function detectModel(p) {
+  const r = await http.fetchTimeout(http.baseUrl(p) + "/server/files/config/printer.cfg", 3000);
+  if (!r.ok) throw new Error("Moonraker unreachable"); // retried on a later save
+  // Only the header matters; printer.cfg can be hundreds of lines.
+  const head = (await r.text()).slice(0, 400);
+  const m = /^\s*#\s*(F\d{3})\b/m.exec(head);
+  if (!m) return null; // confirmed readable, but no model stamp in this firmware
+  const code = m[1].toUpperCase();
+  return { code, label: MODEL_CODES[code] || code };
+}
+exports.detectModel = detectModel;
+exports.modelHasWebrtcCamera = code => WEBRTC_CAMERA_MODELS.includes(String(code || "").toUpperCase());
 
 async function getCameraSnapshot(p) {
   if (!p.cameraUrl) throw new Error("No camera detected for this printer");

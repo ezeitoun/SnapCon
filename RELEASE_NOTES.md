@@ -163,6 +163,9 @@ streamed straight from the printer to your browser, and the Snapshot button grab
 - **Not included in notification images.** A snapshot for ntfy/Telegram is taken by the server, and
   a WebRTC camera can only be read by a browser, so notifications for those printers still arrive —
   just without a picture attached. Every other camera is unaffected.
+- **Snapshots work from List View too.** Taking a snapshot of a WebRTC camera from the fleet list
+  is no longer interrupted by the regular fleet refresh, so the picture comes through instead of
+  timing out on "Live view is still connecting".
 - Streams are only opened for camera tiles you can actually see, and are closed as soon as they
   scroll away, you leave Camera View, or the tab goes into the background — so a large farm doesn't
   hold dozens of video connections open.

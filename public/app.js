@@ -5183,7 +5183,16 @@ function renderFleet({incremental}={}){
     });
   }
   if(VIEW_MODE==='list'){
-    wrap.innerHTML=""; CARD_CACHE.clear(); closeAllCamRtc();
+    // No closeAllCamRtc() here. Leaving Camera View already releases every
+    // session at the view boundary (applyViewMode(), which every path into
+    // List View goes through), so calling it again on each render was
+    // redundant for that case — and actively harmful in another: List rows
+    // mount no camera elements, so the only session that can exist while
+    // List View is up is the short-lived one the Snapshot modal opens to
+    // grab a frame from a WebRTC-only camera. A routine fleet refresh was
+    // killing that mid-capture, so the modal timed out on "Live view is
+    // still connecting" every time.
+    wrap.innerHTML=""; CARD_CACHE.clear();
     renderFleetListRows(camFleet, wrap, camRefreshMs);
   } else {
   // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
@@ -6503,7 +6512,36 @@ function openSnapshot(printerId){
   $("snapmodal").classList.add("show");
   loadSnapshot();
 }
-function closeSnapshot(){ $("snapmodal").classList.remove("show"); SNAP_PRINTER=null; }
+function closeSnapshot(){
+  $("snapmodal").classList.remove("show");
+  // Only a session this modal opened — a Camera View tile's session keeps
+  // running behind the modal.
+  if(SNAP_RTC_OWNED!=null){ closeCamRtc(SNAP_RTC_OWNED); SNAP_RTC_OWNED=null; }
+  SNAP_PRINTER=null;
+}
+// Gives the Snapshot modal something to capture from. In Camera View a tile
+// is already streaming and that session is reused untouched; from any other
+// view — the card's camera button, the list view — nothing is connected, so
+// the modal opens its own short-lived session against an offscreen <video>
+// and closes it when the modal closes. Without this the modal could only
+// ever work while Camera View happened to be open, which is where the
+// "still connecting" message came from.
+let SNAP_RTC_OWNED=null; // printer id whose session this modal opened
+async function camRtcFrameSource(printerId,url){
+  const live=CAM_RTC.get(printerId);
+  if(live&&live.video&&live.video.videoWidth) return live.video; // Camera View's, left alone
+  if(!url) throw new Error(t("fleet.camera.no_feed"));
+  const video=document.createElement("video");
+  video.autoplay=true; video.playsInline=true; video.muted=true;
+  await openCamRtc(printerId,url,video);
+  SNAP_RTC_OWNED=live?null:printerId; // only ours to close if it wasn't already running
+  // A frame has to actually arrive before the canvas has anything to draw:
+  // the peer connection resolves before the first decoded frame.
+  const deadline=Date.now()+8000;
+  while(!video.videoWidth&&Date.now()<deadline) await new Promise(r=>setTimeout(r,150));
+  if(!video.videoWidth) throw new Error(t("fleet.modal.snapshot.webrtc_not_ready"));
+  return video;
+}
 // Captures the frame currently showing in a live WebRTC tile. A MediaStream
 // has no origin, so unlike a cross-origin <img> it does not taint the canvas
 // and toBlob() returns real JPEG bytes. Nothing is uploaded — this stays in
@@ -6527,10 +6565,10 @@ async function loadSnapshot(){
   // the tile that is already streaming in Camera View.
   const rtcPrinter=FLEET.find(f=>f.id===SNAP_PRINTER);
   if(rtcPrinter&&rtcPrinter.capabilities?.cameraWebrtc&&!rtcPrinter.capabilities?.cameraSnapshot){
-    const entry=CAM_RTC.get(SNAP_PRINTER);
     try{
       if(!camRtcContextSupported()) throw new Error(t("fleet.camera.lan_only"));
-      const blob=await captureCamRtcFrame(entry&&entry.video);
+      const video=await camRtcFrameSource(SNAP_PRINTER,rtcPrinter.cameraWebrtcUrl);
+      const blob=await captureCamRtcFrame(video);
       const img=new Image();
       img.style.cssText='max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto';
       img.onload=()=>{ wrap.innerHTML=''; wrap.appendChild(img); $("snapts").textContent=t("fleet.modal.snapshot.captured_at",{time:new Date().toLocaleTimeString()}); };

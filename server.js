@@ -2104,6 +2104,22 @@ function sanitizeBrand(value) {
   return value.replace(CONTROL_CHARS, "").trim().slice(0, BRAND_MAX_LENGTH);
 }
 
+// Probes for a WebRTC camera, but only on a model confirmed to have one —
+// the i7 today. Every other Creality would just spend the probe's timeout
+// discovering that nothing is listening on its port 8000, on every save.
+// A model that could not be identified is probed anyway: an unknown machine
+// is more likely to be a model this table has not met than a known one.
+// Its own try/catch, so an unreachable service can never throw past a
+// snapshot URL that was just confirmed.
+async function detectCrealityWebrtcCamera(conn, o) {
+  if (typeof conn.detectCameraWebrtc !== "function") return;
+  if (o.modelCode && !conn.modelHasWebrtcCamera(o.modelCode)) { o.cameraWebrtcChecked = true; return; }
+  try {
+    if (await conn.detectCameraWebrtc(o)) o.cameraWebrtc = true;
+    o.cameraWebrtcChecked = true;
+  } catch { /* unreachable right now — retried on a later save */ }
+}
+
 // Creality-only camera auto-detect (see that connector's detectCamera):
 // runs once per printer, at save time — either on a brand-new printer or
 // whenever its URL changes (could be a different physical unit) — not on
@@ -2187,13 +2203,35 @@ async function buildPrinterRecord(p, existing) {
   }
 
   if (o.connector === "creality-klipper") {
+    const conn = getConnector(o.connector);
     const urlChanged = !existing || existing.url !== o.url;
+    // This connector spans several machines that differ in real ways, so the
+    // model is detected once and kept — it also decides whether the WebRTC
+    // camera probe below is worth making at all.
+    if (!urlChanged && existing && existing.modelChecked) {
+      o.modelChecked = true;
+      if (existing.model) o.model = existing.model;
+      if (existing.modelCode) o.modelCode = existing.modelCode;
+    } else {
+      try {
+        const model = await conn.detectModel(o);
+        o.modelChecked = true;
+        if (model) { o.model = model.label; o.modelCode = model.code; }
+      } catch { /* unreachable right now — leave modelChecked unset, retried next save */ }
+    }
     if (!urlChanged && existing.cameraChecked) {
       o.cameraChecked = true;
       if (existing.cameraUrl) o.cameraUrl = existing.cameraUrl;
       if (existing.cameraWebrtc) o.cameraWebrtc = true;
+      // cameraChecked only ever meant "the SNAPSHOT probe ran". A printer
+      // added before WebRTC support existed carries it with no cameraUrl and
+      // no cameraWebrtc, and would otherwise sit in this branch forever —
+      // never probing for a WebRTC camera no matter how many times it is
+      // saved. cameraWebrtcChecked is absent on every such config, so each
+      // one re-probes exactly once after upgrading and then caches normally.
+      if (existing.cameraWebrtcChecked) o.cameraWebrtcChecked = true;
+      else if (!o.cameraUrl) await detectCrealityWebrtcCamera(conn, o);
     } else {
-      const conn = getConnector(o.connector);
       try {
         const camUrl = await conn.detectCamera(o);
         o.cameraChecked = true;
@@ -2201,14 +2239,18 @@ async function buildPrinterRecord(p, existing) {
         // Only when there's no snapshot camera: a printer that can serve
         // JPEGs keeps the server-side path, which also feeds notification
         // images. WebRTC is the fallback transport, never a replacement.
-        // Its own failure is caught separately so an unreachable WebRTC
-        // service can't discard a snapshot URL that was just confirmed.
-        if (!camUrl && conn.detectCameraWebrtc) {
-          try { if (await conn.detectCameraWebrtc(o)) o.cameraWebrtc = true; }
-          catch { /* unreachable right now — retried on a later save */ }
-        }
+        if (!camUrl) await detectCrealityWebrtcCamera(conn, o);
       } catch { /* unreachable right now — leave cameraChecked unset, retried next save */ }
     }
+  }
+  // A connector that covers several machines tags the printer with the model
+  // it detected, so a mixed fleet can be filtered and told apart at a glance.
+  // Added only on the save that FIRST identifies the model (o.modelChecked
+  // set here, not carried forward), so removing the tag afterwards sticks —
+  // an auto-tag that reappears on every save would be impossible to delete.
+  if (o.model && !(existing && existing.modelChecked)) {
+    const tags = o.tags || [];
+    if (!tags.some(t => t.toLowerCase() === o.model.toLowerCase())) o.tags = [...tags, o.model];
   }
   return o;
 }
