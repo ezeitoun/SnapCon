@@ -6,6 +6,9 @@ const http = require("./http-utils");
 
 exports.label = "Klipper (Moonraker)";
 exports.brand = "Klipper";
+// Address contract: vanilla Moonraker listens on 7125, but a box behind a
+// reverse proxy can be anywhere, so the port is the user's to set.
+exports.address = { scheme: "http", defaultPort: 7125, portEditable: true, required: true };
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true, autoLevel: false,
   unloadFilament: false, firmwareInfo: true, inventory: false, discovery: false, health: true, fileSync: true,

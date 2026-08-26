@@ -8758,7 +8758,7 @@ function updateAllPrinterRowStatuses(){
   const box=$("setPrinters");
   if(!box||!box.children.length) return;
   box.querySelectorAll(".prow").forEach(row=>{
-    const url=row.querySelector(".purl").value.trim().replace(/\/+$/,"");
+    const url=rowAddressUrl(row).replace(/\/+$/,"");
     const f=url && FLEET.find(p=>(p.url||"").replace(/\/+$/,"")===url);
     const dot=row.querySelector(".prow-status-dot"), stateEl=row.querySelector(".prow-conn-state");
     if(!f){
@@ -8789,7 +8789,8 @@ function serializeRowForDiff(row){
     name:row.querySelector(".pname").value.trim(),
     brand:row.querySelector(".pbrand").value.trim(),
     location:row.querySelector(".ploc").value.trim(),
-    url:row.querySelector(".purl").value.trim(),
+    ip:row.querySelector(".pip").value.trim(),
+    port:row.querySelector(".pport").value.trim(),
     connector:row.querySelector(".pconnector").value,
     token:secretFieldValue(row.querySelector(".secret-field")),
     serial:row.querySelector(".pserial").value.trim(),
@@ -8814,7 +8815,7 @@ function serializeRowForDiff(row){
 // load.
 function renderPrinterRowsFromConfig(){
   $("setPrinters").innerHTML="";
-  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
+  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
   baselinePrintersDirty();
 }
 // Settings > Printers shows at most one expanded row: opening one collapses
@@ -8907,16 +8908,69 @@ const PRINTER_POOL_ERROR_KEYS={
   queue_not_empty:"settings.printers.pool_error_queue_not_empty",
   unknown_pool:"settings.printers.pool_error_unknown_pool"
 };
+// ---- Printer address: IP / hostname + port ----
+// The connector owns the rules — scheme, default port, whether the port is
+// the user's to set, and whether the printer has a network address at all
+// (getAddress() in connectors/index.js, delivered with /api/connectors).
+// These mirror the server's connectors/address.js so a row can validate and
+// compose the canonical URL without a round-trip; the server re-derives it
+// from the same inputs on save either way.
+const DEFAULT_CONNECTOR_ADDRESS={scheme:"http",defaultPort:null,portEditable:true,required:true};
+function connectorAddress(type){
+  const c=CONNECTOR_TYPES.find(c=>c.type===type)||{};
+  return {...DEFAULT_CONNECTOR_ADDRESS,...(c.address||{})};
+}
+const ADDR_HOST_RE=/^([A-Za-z0-9]([A-Za-z0-9._-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:.]{2,45}\])$/;
+function isValidHostValue(v){ return ADDR_HOST_RE.test(String(v||"").trim()); }
+// Splits a URL into scheme/host/port, or null for anything that wouldn't
+// survive being recomposed (a path, a query, credentials).
+function parseAddress(url){
+  const raw=String(url||"").trim().replace(/\/+$/,"");
+  if(!raw) return null;
+  let u=null; try{ u=new URL(raw); }catch{ u=null; }
+  if(u&&u.hostname){
+    if((u.pathname&&u.pathname!=="/")||u.search||u.hash||u.username||u.password) return null;
+    return {scheme:u.protocol.replace(/:$/,""),host:u.hostname,port:u.port||""};
+  }
+  const m=/^([A-Za-z0-9]([A-Za-z0-9._-]{0,251}[A-Za-z0-9])?)(?::(\d{1,5}))?$/.exec(raw);
+  return m?{scheme:"",host:m[1],port:m[3]||""}:null;
+}
+// A row's canonical URL, composed exactly the way the server composes it on
+// save. Everything that used to read the old single URL field goes through
+// this: the collapsed-row status lookup, Test connection, the pre-save probe
+// and the post-save id backfill.
+function rowAddressUrl(row){
+  const spec=connectorAddress(row.querySelector(".pconnector").value);
+  if(!spec.required) return row.dataset.url||"";
+  const ip=(row.querySelector(".pip").value||"").trim();
+  if(!isValidHostValue(ip)) return "";
+  const port=(row.querySelector(".pport").value||"").trim();
+  return (row.dataset.scheme||spec.scheme||"http")+"://"+ip+(port?":"+port:"");
+}
 function addPrinterRow(name,url,opts,autoOpen){
   opts=opts||{};
   const uid=++PROW_UID;
-  const displayIp=(url||"").replace(/^https?:\/\//,"").replace(/\/+$/,"");
+  // The address arrives either already split (a saved printer, since the
+  // startup migration and buildPrinterRecord both store ip/port) or as a
+  // plain url (discovery, a duplicated row). A url this can't split lands
+  // in the IP field verbatim rather than vanishing — the value stays
+  // visible, and save-time validation asks for it to be fixed.
+  const addrParsed=parseAddress(url);
+  const addrIp=String(opts.ip||(addrParsed?addrParsed.host:(url||""))||"");
+  const addrPort=String(opts.port||(addrParsed&&addrParsed.port)||"");
+  const displayIp=addrIp+(addrPort?":"+addrPort:"");
   const row=document.createElement("div"); row.className="prow";
   // Round-tripped so the server can match "this is the same printer" by a
   // stable id even if name/URL are edited — not just by URL, which broke the
   // moment someone re-IP'd a printer (maintenance history would silently
   // detach). Blank for a brand-new row; the server mints one on first save.
   row.dataset.printerId=opts.id||"";
+  // The address a row persists under when it has no address fields of its
+  // own — the Simulator's synthetic sim:// url.
+  row.dataset.url=url||"";
+  // Only a scheme that differs from the connector's own is worth carrying;
+  // an https printer must still be https after a save.
+  row.dataset.scheme=(opts.scheme||(addrParsed&&["http","https"].includes(addrParsed.scheme)?addrParsed.scheme:""))||"";
   // Last-resort literal only matters if /api/connectors failed entirely —
   // it mirrors DEFAULT_TYPE in connectors/index.js.
   const connType=opts.connector||(CONNECTOR_TYPES[0]&&CONNECTOR_TYPES[0].type)||"snapmaker-u1-klipper-ws";
@@ -8962,7 +9016,11 @@ function addPrinterRow(name,url,opts,autoOpen){
     `</div>`+
 
     `<div class="prow-section"><div class="prow-section-title" data-i18n="settings.printers.section_connection">${t("settings.printers.section_connection")}</div>`+
-    `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_url">${t("settings.printers.field_url")}</label><input class="field purl" placeholder="http://192.168.1.50" value="${esc(url||"")}"></div>`+
+    `<div class="maint-row2 paddr-row">`+
+    `<div class="maint-field"><label class="fl" for="pip-${uid}" data-i18n="settings.printers.field_ip">${t("settings.printers.field_ip")}</label><input id="pip-${uid}" class="field pip" placeholder="${esc(t("settings.printers.ip_placeholder"))}" data-i18n-placeholder="settings.printers.ip_placeholder" value="${esc(addrIp)}"></div>`+
+    `<div class="maint-field pport-field"><label class="fl" for="pport-${uid}" data-i18n="settings.printers.field_port">${t("settings.printers.field_port")}</label><input id="pport-${uid}" class="field pport" type="number" min="1" max="65535" value="${esc(addrPort)}"></div>`+
+    `</div>`+
+    `<div class="settings-help err paddr-err" style="display:none" data-i18n="settings.printers.ip_invalid">${t("settings.printers.ip_invalid")}</div>`+
     `<div class="maint-row2" style="margin-top:10px">`+
     `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_connector">${t("settings.printers.field_connector")}</label><select class="field pconnector">`+
     CONNECTOR_TYPES.map(c=>`<option value="${esc(c.type)}">${esc(c.label||c.type)}</option>`).join("")+
@@ -9077,20 +9135,33 @@ function addPrinterRow(name,url,opts,autoOpen){
     if(reDerive&&(!brandEl.value.trim()||isKnownConnectorBrand(brandEl.value))) brandEl.value=ct.brand||ct.label||connectorEl.value;
     else if(!brandEl.value.trim()) brandEl.value=ct.brand||ct.label||connectorEl.value;
   };
-  // The Simulator connector has no real hardware address — gatherPrinters()
-  // and the server's own /api/config both drop any printer with a blank url
-  // from the saved list entirely (silently, no error), so a Dummy printer
-  // left with an empty URL field never actually persists no matter how many
-  // times Save is clicked. Auto-fill a synthetic, stable one instead of
-  // asking the user to invent something meaningless to type in.
-  const syncSimulatorUrlField=()=>{
-    const urlField=row.querySelector(".purl");
-    const isSim=connectorEl.value==="simulator";
-    urlField.readOnly=isSim;
-    urlField.placeholder=isSim?t("settings.printers.simulator_url_placeholder"):t("settings.printers.url_placeholder");
-    if(isSim && !urlField.value.trim()){
-      urlField.value="sim://"+Math.random().toString(36).slice(2,10);
-      urlField.dispatchEvent(new Event("input",{bubbles:true}));
+  // Which address fields this row shows is the connector's call, not this
+  // row's (see connectorAddress()). Three shapes exist today: an editable
+  // port (Moonraker-family), a fixed port the connector applies itself (the
+  // U1, FlashForge), and no address at all (the Simulator, which has no
+  // hardware to reach — it persists under a synthetic sim:// url generated
+  // here rather than asking the user to invent something meaningless).
+  const addrRow=row.querySelector(".paddr-row"), addrErr=row.querySelector(".paddr-err");
+  const ipEl=row.querySelector(".pip"), portEl=row.querySelector(".pport"), portField=row.querySelector(".pport-field");
+  const syncAddressFields=(connectorChanged)=>{
+    const spec=connectorAddress(connectorEl.value);
+    addrRow.style.display=spec.required?"":"none";
+    if(!spec.required){
+      addrErr.style.display="none";
+      if(!row.dataset.url) row.dataset.url="sim://"+Math.random().toString(36).slice(2,10);
+      return;
+    }
+    portField.style.display=spec.portEditable?"":"none";
+    portEl.placeholder=spec.defaultPort?String(spec.defaultPort):"";
+    // Only on a deliberate connector change, never on load: switching to a
+    // connector with a fixed port drops the previous brand's port (it would
+    // otherwise keep being composed into the URL from a field nobody can
+    // see), and switching to one with a port offers its default. A stored
+    // port on a fixed-port connector — a hand-edited config pointing
+    // somewhere non-standard — is left exactly as it is.
+    if(connectorChanged){
+      if(!spec.portEditable) portEl.value="";
+      else if(!portEl.value.trim()&&spec.defaultPort) portEl.value=String(spec.defaultPort);
     }
   };
   connectorEl.addEventListener("change", ()=>{
@@ -9098,16 +9169,39 @@ function addPrinterRow(name,url,opts,autoOpen){
     const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
     modelBadgeEl.textContent=ct.label||connectorEl.value;
     syncBrandField(true);
-    syncSimulatorUrlField();
+    syncAddressFields(true);
   });
   syncPrintPrefVisibility();
   syncBrandField(false);
-  syncSimulatorUrlField();
+  // A brand-new row (no saved printer behind it, nothing typed yet) starts
+  // on its connector's default port; an existing one keeps whatever it has.
+  syncAddressFields(!opts.id&&!addrIp&&!addrPort);
   // Live-update the summary header as user types
-  const nameEl=row.querySelector(".pname"), urlEl=row.querySelector(".purl");
+  const nameEl=row.querySelector(".pname");
   const sumName=row.querySelector(".prow-sumname"), sumIp=row.querySelector(".prow-sumip");
   nameEl.addEventListener("input",()=>{ sumName.textContent=nameEl.value.trim()||t("settings.printers.new_printer_default"); });
-  urlEl.addEventListener("input",()=>{ sumIp.textContent=urlEl.value.replace(/^https?:\/\//,"").replace(/\/+$/,"")||"—"; });
+  const syncSummaryIp=()=>{
+    const ip=ipEl.value.trim(), port=portEl.value.trim();
+    sumIp.textContent=ip?(ip+(port?":"+port:"")):"—";
+  };
+  ipEl.addEventListener("input",()=>{ addrErr.style.display="none"; syncSummaryIp(); });
+  portEl.addEventListener("input",syncSummaryIp);
+  // People have a full URL on hand far more often than a bare host — a
+  // pasted "http://192.168.1.50:7125" is split into the fields it belongs
+  // in rather than rejected. Only a value that genuinely is not an address
+  // (a path, a query) gets the error.
+  ipEl.addEventListener("change",()=>{
+    const raw=ipEl.value.trim();
+    addrErr.style.display="none";
+    if(!raw||isValidHostValue(raw)) return;
+    const parsed=parseAddress(raw);
+    if(!parsed||!isValidHostValue(parsed.host)){ addrErr.style.display=""; return; }
+    const spec=connectorAddress(connectorEl.value);
+    ipEl.value=parsed.host;
+    if(parsed.port&&spec.portEditable) portEl.value=parsed.port;
+    if(["http","https"].includes(parsed.scheme)) row.dataset.scheme=parsed.scheme!==spec.scheme?parsed.scheme:"";
+    ipEl.dispatchEvent(new Event("input",{bubbles:true}));
+  });
   wireSecretField(row.querySelector(".secret-field"));
   const tagsEl=row.querySelector(".ptags"), tagsSwatch=row.querySelector(".tags-row-swatch");
   if(tagsEl&&tagsSwatch) tagsEl.addEventListener("input",()=>{ tagsSwatch.innerHTML=colorTagSwatchHtml(tagsEl.value); });
@@ -9136,7 +9230,7 @@ function addPrinterRow(name,url,opts,autoOpen){
   });
   row.querySelector('[data-act="maint"]').addEventListener("click",e=>{
     e.stopPropagation(); menu.classList.remove("open");
-    const u=row.querySelector(".purl").value.trim();
+    const u=rowAddressUrl(row);
     const idx=PRINTERS_CFG.findIndex(p=>p.url===u);
     if(idx>=0) openMaintenance(idx);
   });
@@ -9188,7 +9282,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     row.parentNode.insertBefore(dup,row.nextSibling);
     closeOtherPrinterRows(dup.querySelector(".prow-details"));
     markPrintersDirty();
-    dup.querySelector(".purl").focus();
+    dup.querySelector(".pip").focus();
   });
   row.querySelector('[data-act="up"]').addEventListener("click",e=>{
     e.stopPropagation(); menu.classList.remove("open");
@@ -9231,8 +9325,8 @@ function addPrinterRow(name,url,opts,autoOpen){
   // Klipper-only probe used to auto-fill name/serial on Save.
   row.querySelector(".ptest").addEventListener("click",async()=>{
     const st=row.querySelector(".ptest-status");
-    const u=urlEl.value.trim();
-    if(!u){ st.className="pstatus err"; st.textContent=t("settings.printers.test_connection_no_url"); return; }
+    const u=rowAddressUrl(row);
+    if(!u){ st.className="pstatus err"; st.textContent=t("settings.printers.test_connection_no_ip"); return; }
     st.className="pstatus work"; st.textContent=t("settings.printers.test_connection_testing");
     try{
       // Sends the row's CURRENT field values, not the saved ones — the point
@@ -9625,7 +9719,13 @@ function gatherPrinters(){
   return [...$("setPrinters").querySelectorAll(".prow")].map(r=>({
     id:r.dataset.printerId||undefined,
     name:r.querySelector(".pname").value.trim(),
-    url:r.querySelector(".purl").value.trim(),
+    ip:r.querySelector(".pip").value.trim()||undefined,
+    port:r.querySelector(".pport").value.trim()||undefined,
+    // Composed client-side as well as server-side: a Simulator row has no
+    // address fields and still needs the synthetic url it persists under,
+    // and POST /api/config matches an id-less row to an existing printer
+    // by url — that match has to see the same value it always has.
+    url:rowAddressUrl(r)||r.dataset.url||undefined,
     location:r.querySelector(".ploc").value.trim()||undefined,
     costKwh:r.querySelector(".pkwh").value.trim()||undefined,
     purchaseDate:r.querySelector(".pdate").value||undefined,
@@ -9743,8 +9843,27 @@ async function saveConfig(){
   }
   // auto-fill empty name/serial from printer before saving
   const prows=[...$("setPrinters").querySelectorAll(".prow")];
+  // An address is required by every connector that talks to real hardware.
+  // Without one the server drops the printer from the saved list silently,
+  // which reads as "Save did nothing" — so a row that names a printer but
+  // has no usable address stops the save and says so. A row with nothing in
+  // it at all (Add printer, then second thoughts) is still dropped quietly.
+  const badAddr=prows.find(r=>{
+    if(!connectorAddress(r.querySelector(".pconnector").value).required) return false;
+    const ip=r.querySelector(".pip").value.trim();
+    if(!ip) return !!r.querySelector(".pname").value.trim();
+    return !isValidHostValue(ip);
+  });
+  if(badAddr){
+    const bname=badAddr.querySelector(".pname").value.trim()||t("settings.printers.new_printer_default");
+    setSaveStatus("err",t("settings.printers.save_error_missing_ip",{name:bname}));
+    if(saveBtn) saveBtn.disabled=false;
+    badAddr.querySelector(".prow-details").open=true;
+    badAddr.querySelector(".pip").focus();
+    return;
+  }
   const needProbe=prows.filter(r=>{
-    const url=r.querySelector(".purl").value.trim();
+    const url=rowAddressUrl(r);
     const noName=!r.querySelector(".pname").value.trim();
     const noSerial=!r.querySelector(".pserial").value.trim();
     return url&&(noName||noSerial);
@@ -9752,7 +9871,7 @@ async function saveConfig(){
   if(needProbe.length){
     setSaveStatus("work",t("settings.dirty_bar.probing_printers"));
     await Promise.all(needProbe.map(async r=>{
-      const url=r.querySelector(".purl").value.trim();
+      const url=rowAddressUrl(r);
       try{
         const d=await getJSON("/api/probe-printer?url="+encodeURIComponent(url));
         const nameEl=r.querySelector(".pname"), serialEl=r.querySelector(".pserial");
@@ -9831,7 +9950,7 @@ async function saveConfig(){
     });
     prows.forEach(r=>{
       if(r.dataset.printerId) return;
-      const url=r.querySelector(".purl").value.trim();
+      const url=rowAddressUrl(r)||r.dataset.url;
       const matched=(c.printers||[]).find(p=>p.url===url);
       if(matched) r.dataset.printerId=matched.id;
     });

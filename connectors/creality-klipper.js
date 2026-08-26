@@ -28,6 +28,9 @@ const http = require("./http-utils");
 
 exports.label = "Creality (Klipper)";
 exports.brand = "Creality";
+// Address contract: same Moonraker default as generic Klipper, and
+// editable for the same reason.
+exports.address = { scheme: "http", defaultPort: 7125, portEditable: true, required: true };
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true,
   // G29 (see applyHeadMapping below) is real, registered, and confirmed

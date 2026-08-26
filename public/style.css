@@ -512,6 +512,10 @@
   .maint-field .fl{margin-bottom:5px;}
   .maint-row2{display:flex; gap:12px;}
   .maint-row2 .maint-field{flex:1;}
+  /* Printer address: the IP/hostname takes the room it needs and the port
+     stays narrow. On a connector whose port is fixed the port field is
+     hidden and the hostname simply fills the row. */
+  .paddr-row .pport-field{flex:0 0 120px;}
   .maint-readonly{color:var(--ink-dim); cursor:default; user-select:text;}
   .maint-footer{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:4px;}
   .maint-offline-check{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-dim); cursor:pointer;}

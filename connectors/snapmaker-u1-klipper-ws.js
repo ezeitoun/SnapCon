@@ -30,6 +30,10 @@ const base = require("./snapmaker-u1-klipper");
 exports.label = "SnapMaker U1";
 exports.brand = "SnapMaker";
 exports.capabilities = base.capabilities;
+// Addressed exactly like the HTTP connector it delegates to — the
+// WebSocket endpoint is derived from the same URL, not configured
+// separately.
+exports.address = base.address;
 
 // ---- debug logging (per-message detail, off by default) ----
 const DEBUG = /^(1|true)$/i.test(process.env.SNAPCON_U1WS_DEBUG || "");

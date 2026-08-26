@@ -13,6 +13,8 @@ const { normHex } = require("../parser");
 
 exports.label = "FlashForge AD5X";
 exports.brand = "FlashForge";
+// Address contract: same fixed 8898 API as the Adventurer.
+exports.address = { scheme: "http", defaultPort: 8898, portEditable: false, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,

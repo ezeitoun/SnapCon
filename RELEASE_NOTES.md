@@ -169,4 +169,19 @@ streamed straight from the printer to your browser, and the Snapshot button grab
 - Streams are only opened for camera tiles you can actually see, and are closed as soon as they
   scroll away, you leave Camera View, or the tab goes into the background — so a large farm doesn't
   hold dozens of video connections open.
+### Printers Are Now Set Up by IP and Port
+A printer's address used to be one URL field you had to type in full. It is now the two things you
+actually know about the machine: its **IP / Hostname**, and — only where it matters — its **Port**.
+- **Each printer type asks for what it needs.** Snapmaker U1 and FlashForge use a fixed port, so
+  there is no port box to fill in. Klipper/Moonraker printers (including Creality) show a Port box
+  that starts at 7125, which you can change for a printer behind a proxy or on a custom setup. The
+  Simulator asks for no address at all.
+- **Your existing printers move over by themselves.** SnapCon splits every saved address the first
+  time it starts after the update. Nothing about how a printer is reached changes, and every
+  printer keeps its identity — its maintenance history, group access, queue and pool assignment all
+  stay attached.
+- **Paste a full URL if that's what you have.** Type or paste `http://192.168.1.50:7125` into the
+  IP / Hostname box and SnapCon splits it into the right boxes for you.
+- **Saving tells you when an address is missing** instead of quietly dropping the printer from the
+  list, which is what used to happen with an empty address field.
 

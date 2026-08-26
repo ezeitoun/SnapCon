@@ -14,7 +14,8 @@ const crypto = require("crypto");
 const readline = require("readline");
 const { parseGcodeMap, parseGcodeMapLines } = require("./parser");
 const auth = require("./auth");
-const { getConnector, listConnectorTypes, getCapabilities, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
+const { getConnector, listConnectorTypes, getCapabilities, getAddress, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
+const { isValidHost, normalizePort, parseAddressUrl, composeAddressUrl } = require("./connectors/address");
 const connHttp = require("./connectors/http-utils");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 const { createAuditLog } = require("./audit/AuditLog");
@@ -201,6 +202,27 @@ const { migrateU1ConnectorConfig } = require("./connectors/migrateU1Connector");
   if (changed && !CONFIG_LOAD_FAILED) {
     try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
     console.log("[config] migrated printers from the retired snapmaker-u1-klipper connector to snapmaker-u1-klipper-ws");
+  }
+})();
+// Splits each printer's stored `url` into the IP/hostname and port the
+// user now configures directly (see connectors/migratePrinterAddress.js).
+// `url` remains the canonical value every connector reads, so this changes
+// nothing about how a printer is reached — recomposing from the parts
+// yields the same string. Runs after the connector migration above
+// because the address contract (default port, whether a port is even
+// configurable) comes from the connector a printer ends up on.
+const { migratePrinterAddressConfig } = require("./connectors/migratePrinterAddress");
+(function migratePrinterAddressOnStartup() {
+  const { cfg, changed, issues } = migratePrinterAddressConfig(CFG);
+  CFG = cfg;
+  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  // Reported, never rewritten: a URL this migration can't take apart
+  // keeps working exactly as it did, and the admin can fix the address in
+  // Settings when they choose to.
+  for (const i of issues) console.warn("[config] printer " + JSON.stringify(i.name) + ": could not split " + JSON.stringify(i.url) + " into an address and port — left unchanged");
+  if (changed && !CONFIG_LOAD_FAILED) {
+    try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
+    console.log("[config] migrated printer addresses to separate IP/hostname and port fields");
   }
 })();
 function ensureGroupsSchema() {
@@ -2120,6 +2142,39 @@ async function detectCrealityWebrtcCamera(conn, o) {
   } catch { /* unreachable right now — retried on a later save */ }
 }
 
+// Turns whatever a caller submitted into the one address shape SnapCon
+// stores: the ip/port the user configures plus the canonical `url` every
+// connector's baseUrl() reads. The connector owns the rules (scheme,
+// default port, whether a port is configurable, whether an address is
+// needed at all) — see connectors/index.js's getAddress().
+//
+// Both directions are accepted and converge on the same record: a browser
+// row sends ip/port, while an older API client (or the discovery flow)
+// sends a plain url and gets its parts derived from it. Idempotent, so
+// running it again on an already-resolved printer changes nothing.
+// A url it cannot take apart is passed through untouched rather than
+// blanked — that value is the only address the printer has.
+function resolvePrinterAddress(p) {
+  const connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
+  const spec = getAddress(connector);
+  const url = String(p.url == null ? "" : p.url).trim();
+  // Connectors with no hardware to reach (the simulator) keep whatever
+  // synthetic url they were given and get no address fields.
+  if (!spec.required) return { url };
+  const ip = String(p.ip == null ? "" : p.ip).trim();
+  const addr = isValidHost(ip)
+    ? { host: ip, port: p.port, scheme: p.scheme }
+    : parseAddressUrl(url);
+  if (!addr || !isValidHost(addr.host)) return { url };
+  // Only the two schemes SnapCon actually speaks are honored from client
+  // input; anything else falls back to the connector's own.
+  const scheme = ["http", "https"].includes(addr.scheme) ? addr.scheme : spec.scheme;
+  const port = normalizePort(addr.port);
+  const out = { url: composeAddressUrl({ scheme, host: addr.host, port }, spec), ip: addr.host };
+  if (port) out.port = port;
+  if (scheme !== spec.scheme) out.scheme = scheme;
+  return out;
+}
 // Creality-only camera auto-detect (see that connector's detectCamera):
 // runs once per printer, at save time — either on a brand-new printer or
 // whenever its URL changes (could be a different physical unit) — not on
@@ -2128,7 +2183,12 @@ async function detectCrealityWebrtcCamera(conn, o) {
 // couldn't even reach the printer leaves cameraChecked unset so it's retried
 // on a later save instead of permanently caching a false negative.
 async function buildPrinterRecord(p, existing) {
-  const o = { name: String(p.name || p.url), url: String(p.url) };
+  const connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
+  const addr = resolvePrinterAddress(p);
+  const o = { name: String(p.name || addr.url), url: addr.url };
+  if (addr.ip) o.ip = addr.ip;
+  if (addr.port) o.port = addr.port;
+  if (addr.scheme) o.scheme = addr.scheme;
   if (p.location) o.location = String(p.location);
   if (p.costKwh) o.costKwh = String(p.costKwh);
   if (p.purchaseDate) o.purchaseDate = String(p.purchaseDate);
@@ -2145,7 +2205,7 @@ async function buildPrinterRecord(p, existing) {
   } else if (existing && existing.forceDefaults === false) {
     o.forceDefaults = false;
   }
-  o.connector = CONNECTOR_TYPES.includes(p.connector) ? p.connector : DEFAULT_CONNECTOR_TYPE;
+  o.connector = connector;
   // Brand is derived from the connector for every connector except generic
   // Klipper (Moonraker) — that one is a protocol many vendors speak, so
   // "Klipper" names the connector, not the machine's maker, and the user may
@@ -2298,9 +2358,16 @@ app.post("/api/config", requireAdmin, async (req, res) => {
           // from the saved list entirely (see the `.filter(p && p.url)`
           // below), so the same fallback is applied here too rather than
           // trusting the client.
-          .map(p => (p && p.connector === "simulator" && !String(p.url || "").trim())
-            ? { ...p, url: "sim://" + crypto.randomBytes(4).toString("hex") }
-            : p)
+          .map(p => {
+            if (!p) return p;
+            if (p.connector === "simulator") {
+              return String(p.url || "").trim() ? p : { ...p, url: "sim://" + crypto.randomBytes(4).toString("hex") };
+            }
+            // Compose the canonical url here, before the filter and the
+            // identity match below — both still key on `url`, and a row
+            // from the browser now carries ip/port instead.
+            return { ...p, ...resolvePrinterAddress(p) };
+          })
           .filter(p => p && p.url)
           .map(p => {
             const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === String(p.url));

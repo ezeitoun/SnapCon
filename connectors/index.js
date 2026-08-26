@@ -32,8 +32,20 @@ function getConnector(type) {
 function listConnectorTypes() {
   return Object.keys(REGISTRY).map(type => {
     const c = getConnector(type);
-    return { type, label: c.label || type, brand: c.brand || c.label || type, capabilities: c.capabilities };
+    return { type, label: c.label || type, brand: c.brand || c.label || type, capabilities: c.capabilities, address: getAddress(type) };
   });
+}
+
+// How a printer on this connector is addressed. `scheme` and `defaultPort`
+// build the canonical URL, `portEditable` decides whether Settings offers a
+// Port field at all (a connector with a fixed port applies it itself), and
+// `required` is false only for connectors with no hardware to reach. Every
+// connector declares its own — this fallback just keeps an incomplete
+// third-party module from crashing the registry.
+const DEFAULT_ADDRESS = { scheme: "http", defaultPort: null, portEditable: true, required: true };
+function getAddress(type) {
+  const a = getConnector(type).address;
+  return a ? { ...DEFAULT_ADDRESS, ...a } : { ...DEFAULT_ADDRESS };
 }
 
 // Capabilities are usually fixed per connector module, but a handful of
@@ -48,4 +60,4 @@ function getCapabilities(type, printer) {
   return typeof c.getCapabilities === "function" ? c.getCapabilities(printer) : c.capabilities;
 }
 
-module.exports = { getConnector, listConnectorTypes, getCapabilities, DEFAULT_TYPE, CONNECTOR_TYPES: Object.keys(REGISTRY) };
+module.exports = { getConnector, listConnectorTypes, getCapabilities, getAddress, DEFAULT_TYPE, CONNECTOR_TYPES: Object.keys(REGISTRY) };

@@ -13,6 +13,10 @@ const ff = require("./flashforge-utils");
 
 exports.label = "FlashForge (Adventurer 5M / 5M Pro)";
 exports.brand = "FlashForge";
+// Address contract: FlashForge's own HTTP API is fixed at 8898 and this
+// connector applies it itself (see flashforge-utils baseUrl), so the
+// stored URL stays host-only and no port field is shown.
+exports.address = { scheme: "http", defaultPort: 8898, portEditable: false, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: false, excludeObject: false, autoLevel: false,
   unloadFilament: false, firmwareInfo: false, inventory: false, discovery: false,

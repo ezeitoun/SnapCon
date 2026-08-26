@@ -39,6 +39,10 @@ function computeSimState(entry, nowMs) {
 
 exports.label = "Simulator (testing)";
 exports.brand = "Simulator";
+// Address contract: no hardware, no address. The client auto-fills a
+// synthetic sim:// URL purely so the printer persists at all, so neither
+// an address nor a port field belongs on this connector.
+exports.address = { scheme: "sim", defaultPort: null, portEditable: false, required: false };
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: false, autoLevel: false,
   unloadFilament: false, firmwareInfo: false, inventory: false, discovery: false,

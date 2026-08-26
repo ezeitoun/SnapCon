@@ -15,6 +15,10 @@ const http = require("./http-utils");
 
 exports.label = "SnapMaker U1 (Old)";
 exports.brand = "SnapMaker";
+// Address contract (see connectors/index.js): the U1 serves Moonraker on
+// the plain HTTP port, so there is no port for the user to set — the
+// stored URL stays host-only and this connector never adds one.
+exports.address = { scheme: "http", defaultPort: 80, portEditable: false, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: true, autoLevel: true,
   unloadFilament: true, firmwareInfo: true, inventory: true, discovery: true, health: true, fileSync: true,
