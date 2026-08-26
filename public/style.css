@@ -242,7 +242,7 @@
   .pill-btn{background:none; border:none; padding:0; cursor:pointer; display:block; text-decoration:none; transition:opacity .15s,transform .12s;}
   .pill-btn img{width:28px; height:28px; display:block;}
   .pill-btn-sm img{width:15px; height:15px;}
-  .pill-btn:hover{opacity:0.8; transform:translateY(-1px);}
+  .pill-btn:hover{opacity:0.8;}
   .status-badge{display:flex;align-items:center;background:color-mix(in srgb,var(--status-color) 13%,rgba(12,14,22,0.8));border:1px solid color-mix(in srgb,var(--status-color) 45%,transparent);border-radius:20px;padding:5px 12px;font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:0.14em;color:var(--status-color);box-shadow:0 0 14px color-mix(in srgb,var(--status-color) 28%,transparent);white-space:nowrap;text-transform:uppercase;}
   /* Light theme: a glowing outlined chip on white reads as an error state,
      not a badge — becomes a flat tinted fill instead (no glow), same
@@ -331,15 +331,15 @@
   .btn.danger:hover{background:#3a1c1c; border-color:var(--bad);}
 
   /* semantic button variants */
-  .btn-base{flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:9px 8px; border-radius:10px; font-size:11px; font-weight:600; letter-spacing:0.03em; border:1px solid; cursor:pointer; font-family:'Inter',system-ui,sans-serif; transition:background .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease;}
+  .btn-base{flex:1; display:flex; align-items:center; justify-content:center; gap:5px; padding:9px 8px; border-radius:10px; font-size:11px; font-weight:600; letter-spacing:0.03em; border:1px solid; cursor:pointer; font-family:'Inter',system-ui,sans-serif; transition:background .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease, transform .12s ease;}
   .btn-svg{flex:0 0 calc((100% - 27px) / 4); background:none; border:none; padding:0; cursor:pointer; display:flex; align-items:center; transition:opacity .15s,transform .12s;}
   .btn-svg img{width:100%; height:auto; display:block;}
-  .btn-svg:hover:not(:disabled){opacity:0.85; transform:translateY(-1px);}
+  .btn-svg:hover:not(:disabled){opacity:0.85;}
   .btn-svg:disabled{opacity:0.35; cursor:not-allowed;}
   .btn-chip{flex:0 0 calc((100% - 27px) / 4); display:flex; align-items:center; justify-content:center; gap:5px; background:var(--panel-2); border:1px solid var(--line); border-radius:999px; padding:8px 6px; cursor:pointer; color:var(--ink); font:inherit; font-size:12px; font-weight:600; transition:opacity .15s,transform .12s,border-color .15s;}
   .btn-chip img{width:15px; height:15px; flex:none; display:block;}
   .btn-chip span{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-  .btn-chip:hover:not(:disabled){border-color:var(--ink-faint); transform:translateY(-1px);}
+  .btn-chip:hover:not(:disabled){border-color:var(--ink-faint);}
   .btn-chip:disabled{opacity:0.35; cursor:not-allowed;}
   .btn-chip.danger{border-color:color-mix(in srgb,var(--bad) 45%,transparent); color:var(--bad);}
   .btn-chip.danger:hover:not(:disabled){border-color:var(--bad);}
@@ -362,9 +362,19 @@
   .btn-green  {background:rgba(52,211,153,0.08); border-color:rgba(52,211,153,0.28); color:#34d399;}
   .btn-green:hover{background:rgba(52,211,153,0.16);}
 
-  .modal{display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:50; align-items:center; justify-content:center; padding:18px;}
+  .modal{display:none; position:fixed; inset:0; background:rgba(0,0,0,.62); z-index:50; align-items:center; justify-content:center; padding:18px; transition:opacity .2s ease-out;}
   .modal.show{display:flex;}
-  .modalbox{background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:560px; width:100%; max-height:90vh; overflow:auto; padding:16px;}
+  .modalbox{background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:560px; width:100%; max-height:90vh; overflow:auto; padding:16px; transition:transform .2s ease-out;}
+  /* Entrance only, and with no JS: @starting-style gives the browser a value
+     to animate FROM as the element goes from display:none to display:flex,
+     so all 19 modals keep their existing .show toggle untouched. Closing
+     stays instant (no transition-behavior:allow-discrete) — dismissal should
+     not gain latency, and that keeps the 26 close paths risk-free. A browser
+     without @starting-style simply gets today's instant appearance. */
+  @starting-style{
+    .modal.show{opacity:0;}
+    .modal.show .modalbox{transform:scale(.98);}
+  }
   .modalhdr{display:flex; justify-content:space-between; align-items:center; font-weight:700; font-size:14px; margin-bottom:12px;}
   .modalx{background:transparent; border:none; color:var(--ink-dim); font-size:17px; cursor:pointer; line-height:1;}
   .modalx:hover{color:var(--ink);}
@@ -379,7 +389,22 @@
   .lang-key-row.placeholder-mismatch .lang-key-tr input{border-color:var(--bad);}
   .color-grid{display:grid; grid-template-columns:repeat(6, 1fr); gap:8px; max-width:280px; margin:0 auto;}
   .color-swatch{width:36px; height:36px; border-radius:8px; border:2px solid var(--line); cursor:pointer; padding:0; transition:transform .1s, border-color .15s;}
-  .color-swatch:hover{transform:scale(1.08); border-color:var(--ink-faint);}
+  .color-swatch:hover{border-color:var(--ink-faint);}
+  /* Hover MOVEMENT only happens on a real pointer. A touchscreen fires a
+     synthetic hover on tap that never clears, which left card buttons stuck
+     in the lifted state on a tablet next to the printers. The colour/opacity
+     half of each hover state above is deliberately left ungated — only the
+     transform is conditional.
+     ORDERING: this block must stay ABOVE the :active press block further
+     down. `.btn-chip:hover:not(:disabled)` and `.btn-chip:active:not(:disabled)`
+     have identical specificity, so source order decides which wins while a
+     hovered button is being pressed — and the press has to win. */
+  @media (hover:hover) and (pointer:fine){
+    .pill-btn:hover{transform:translateY(-1px);}
+    .btn-svg:hover:not(:disabled){transform:translateY(-1px);}
+    .btn-chip:hover:not(:disabled){transform:translateY(-1px);}
+    .color-swatch:hover{transform:scale(1.08);}
+  }
   .color-swatch.active{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent);}
 
   /* ---- Spool color editor (reused inline inside #unloadmodal, and by the
@@ -554,7 +579,7 @@
   .plate-footer{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px;}
   .plate-footer-status{font-size:12px; color:var(--ink-dim);}
   .plate-footer-actions{display:flex; gap:8px;}
-  .plate-skip-btn{background:color-mix(in srgb,var(--bad) 12%,transparent); border:1px solid color-mix(in srgb,var(--bad) 40%,transparent); color:var(--bad); flex:0 0 auto; padding:9px 18px; font:inherit; font-size:12.5px; font-weight:700; border-radius:8px; cursor:pointer; transition:background .15s;}
+  .plate-skip-btn{background:color-mix(in srgb,var(--bad) 12%,transparent); border:1px solid color-mix(in srgb,var(--bad) 40%,transparent); color:var(--bad); flex:0 0 auto; padding:9px 18px; font:inherit; font-size:12.5px; font-weight:700; border-radius:8px; cursor:pointer; transition:background .15s, transform .12s ease;}
   .plate-skip-btn:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 22%,transparent);}
   .plate-skip-btn:disabled{opacity:.35; cursor:default;}
   .pfile-body{display:flex; gap:12px; align-items:flex-start; margin-bottom:12px;}
@@ -582,11 +607,27 @@
   .po-badge-text{font-family:var(--mono); font-size:8px; font-weight:700; fill:var(--ink); text-anchor:middle; dominant-baseline:central; pointer-events:none;}
   .platenote{color:var(--ink-dim); padding:26px; text-align:center; font-size:13px;}
   .pcard .matchline b{color:var(--accent);}
-  .btn{font:inherit; font-size:12.5px; font-weight:700; letter-spacing:.02em; cursor:pointer; border-radius:7px; padding:9px 14px; border:1px solid transparent;}
+  .btn{font:inherit; font-size:12.5px; font-weight:700; letter-spacing:.02em; cursor:pointer; border-radius:7px; padding:9px 14px; border:1px solid transparent; transition:transform .12s ease;}
   .btn.primary{background:var(--accent); color:#fff;} .btn.primary:hover{filter:brightness(1.1);}
   .btn.ghost{background:transparent; color:var(--ink); border-color:var(--line);} .btn.ghost:hover{border-color:var(--ink-faint);}
   .btn.purple{background:var(--violet); color:#fff;} .btn.purple:hover{background:#8f78ff;}
   .btn:disabled{opacity:.4; cursor:default;}
+  /* Press feedback. The interface acknowledges the press itself rather than
+     only its result — Pause/Cancel/E-Stop all wait on a printer round-trip,
+     and until it returns there was nothing on screen saying the click landed.
+     Must stay BELOW the hover media block (see its ordering note): equal
+     specificity means source order decides, and pressing beats hovering.
+     Two deliberate exclusions:
+       .hc-hold-btn  — hold-to-confirm owns pointerdown/pointerup and runs a
+                       2-3s fill sweep; a press scale would sit compressed for
+                       the whole hold and fight feedback that already exists.
+       .color-swatch — already scales on hover, and picking a colour is a
+                       selection, not a commit. */
+  .pill-btn:active:not(:disabled),
+  .btn-svg:active:not(:disabled),
+  .btn-chip:active:not(:disabled),
+  .btn-base:active:not(:disabled),
+  .btn:active:not(:disabled):not(.hc-hold-btn){transform:scale(.97);}
   .set-tabs{display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--line);}
   .set-tab{font:inherit; font-size:13px; color:var(--ink-dim); background:transparent; border:none; border-bottom:2px solid transparent; padding:8px 14px; cursor:pointer;}
   .set-tab:hover{color:var(--ink);}
@@ -732,6 +773,13 @@
   .sort-menu{display:none; position:absolute; right:0; top:calc(100% + 6px); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:5px; min-width:170px; z-index:40; box-shadow:0 8px 24px rgba(0,0,0,.4);}
   .sort-menu.open{display:block;}
   .sort-menu.left{left:0; right:auto;}
+  /* Scales from the trigger it hangs off, not from its own centre, so the
+     menu visibly belongs to the button that opened it. Origin follows the
+     same geometry the rules above already set: right-aligned by default,
+     left-aligned under .left. */
+  .sort-menu{transform-origin:top right; transition:opacity .15s ease-out,transform .15s ease-out;}
+  .sort-menu.left{transform-origin:top left;}
+  @starting-style{ .sort-menu.open{opacity:0; transform:scale(.96);} }
   .sort-opt{display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:none; color:var(--ink-dim); font:inherit; font-size:12px; padding:8px 10px; border-radius:7px; cursor:pointer; white-space:nowrap;}
   .sort-opt:hover{background:var(--panel-2); color:var(--ink);}
   .sort-opt.active{color:var(--ink); font-weight:600;}
@@ -1072,7 +1120,12 @@
   .qitem-remove:hover{color:var(--bad);}
 
   .setcard{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:17px; margin-top:10px;}
-  .fl{display:block; font-size:12px; font-weight:700; letter-spacing:.04em; color:var(--ink-dim); margin-bottom:6px; text-transform:uppercase;}
+  /* Sentence case, per the labels rule in CLAUDE.md. The +.04em tracking
+     went with it: that existed to open up uppercase, and on sentence-case
+     text it just reads loose. Every string rendered through .fl is already
+     authored in sentence case with its acronyms intact ("IP / Hostname",
+     "API token", "US ZIP code"), so nothing here changes wording. */
+  .fl{display:block; font-size:12px; font-weight:700; color:var(--ink-dim); margin-bottom:6px;}
   .fl .hint{text-transform:none; font-weight:400; color:var(--ink-faint); letter-spacing:0; margin-left:6px;}
   .field{width:100%; font:inherit; font-size:14px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:7px; padding:10px 12px;}
   .field:disabled{opacity:.55; cursor:not-allowed; color:var(--ink-dim);}
@@ -1220,6 +1273,13 @@
   /* Flipped by flipPrinterMenuIfClipped() (app.js) when opening downward
      would run past the Settings panel's scroll edge — shadow flips with it. */
   .prow-menu.up{top:auto; bottom:calc(100% + 4px); box-shadow:0 -8px 24px rgba(0,0,0,.4);}
+  /* Same trigger-anchored entrance as .sort-menu. .up is applied by
+     flipPrinterMenuIfClipped() synchronously right after .open is toggled,
+     so a menu that flips upward is already using the bottom origin before
+     the first frame of the animation. */
+  .prow-menu{transform-origin:top right; transition:opacity .15s ease-out,transform .15s ease-out;}
+  .prow-menu.up{transform-origin:bottom right;}
+  @starting-style{ .prow-menu.open{opacity:0; transform:scale(.96);} }
   .prow-menu-item{display:block; width:100%; text-align:left; background:transparent; border:none; color:var(--ink-dim); font:inherit; font-size:12.5px; padding:8px 10px; border-radius:7px; cursor:pointer;}
   .prow-menu-item:hover{background:var(--panel-2); color:var(--ink);}
   .prow-menu-item.danger:hover{color:var(--bad); background:color-mix(in srgb,var(--bad) 10%,transparent);}
@@ -1602,6 +1662,15 @@
        favor of the countdown text alone under reduced motion, so hide it
        defensively even though app.js also skips writing its width. */
     .hc-hold-fill{display:none;}
+    /* Modal/menu entrances keep their opacity fade — that explains a surface
+       arrived — and drop the movement, the same split this block already
+       applies above. With transform no longer transitioned, the
+       @starting-style scale never animates; the surface renders at its final
+       size immediately.
+       The :active press scale is deliberately NOT dropped here: it is direct
+       1:1 feedback on the user's own press, not ambient motion — the same
+       reasoning that leaves the hover lifts alone. */
+    .modalbox,.sort-menu,.prow-menu{transition-property:opacity;}
   }
   .fleet-list .status-badge{display:inline-flex;}
   .list-status-cam{display:inline-block; vertical-align:middle;}

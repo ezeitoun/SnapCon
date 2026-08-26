@@ -219,7 +219,12 @@ test("opening a session is idempotent, so re-renders cannot stack peer connectio
 test("every teardown path closes the session", () => {
   assert.match(appSrc, /if\(e\.isIntersecting\)[\s\S]*?\}else\{\s*\n\s*closeCamRtc\(id\);/); // leaves viewport
   assert.match(appSrc, /if\(VIEW_MODE!=='camera'\) closeAllCamRtc\(\);/);                    // leaves Camera View
-  assert.match(appSrc, /if\(cached\)\{ cached\.el\.remove\(\); closeCamRtc\(p\.id\); \}/);   // card rebuilt
+  // The rebuild branch gained a cursor guard between the brace and the
+  // teardown (reconcileFleetCards' position-aware insertion has to step the
+  // cursor off a node before detaching it), so this matches the pair inside
+  // the block rather than one exact line. Same behavior asserted: a rebuilt
+  // card removes its old node and closes that printer's session.
+  assert.match(appSrc, /if\(cached\)\{[\s\S]*?cached\.el\.remove\(\); closeCamRtc\(p\.id\);/);   // card rebuilt
   assert.match(appSrc, /if\(!seen\.has\(id\)\)\{ closeCamRtc\(id\);/);                        // deleted / offline / filtered
   assert.match(appSrc, /CARD_CACHE\.clear\(\); closeAllCamRtc\(\);/);                         // full rebuild
   assert.match(appSrc, /if\(document\.hidden\)\{ closeAllCamRtc\(\); return; \}/);            // tab hidden

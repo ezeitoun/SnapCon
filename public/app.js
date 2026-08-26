@@ -4606,8 +4606,12 @@ function heatBarInfo(actual,target){
   const pct=Math.min(100,Math.max(0,((actual-HEAT_BAR_AMBIENT_C)/span)*100));
   return { pct, bg:heatBarColor(pct), targetTxt: target+'°' };
 }
+// Shared by the build path (heatBarFillStyle, a style string) and the live
+// path (updateFleetCardLiveValues, individual properties) so the two can
+// never drift apart.
+function heatBarShadow(bg){ return bg?`0 0 6px ${bg}`:""; }
 function heatBarFillStyle(bar){
-  return `width:${bar.pct}%`+(bar.bg?`;background:${bar.bg};box-shadow:0 0 6px ${bar.bg}`:'');
+  return `width:${bar.pct}%`+(bar.bg?`;background:${bar.bg};box-shadow:${heatBarShadow(bar.bg)}`:'');
 }
 
 function renderSkeletonFleet(){
@@ -4885,23 +4889,82 @@ const CARD_CACHE = new Map();
 //   - The MAPSEL self-heal write inside buildCardHtml()'s mapHtml block is a
 //     one-time default-fill side effect, not part of what a signature
 //     should represent.
+// Patches the four values cardSignature() deliberately ignores into a card
+// reconcileFleetCards() decided to keep. Because everything else still
+// invalidates the signature, this function never has to add, remove or
+// re-order an element, change a class, or re-translate a string — it only
+// writes text and individual style properties into nodes that already
+// exist, addressed by explicit data-live hooks in buildCardHtml().
+//
+// Individual style properties, never the whole `style` attribute:
+// .prog-fill carries a per-card animation-delay seed that holds the
+// shimmer's phase steady, and rewriting the attribute would restart it on
+// every poll — one of the artifacts this change exists to remove.
+//
+// Every lookup is null-guarded rather than assumed: an offline card, and
+// an online one showing the Klipper error panel, legitimately have no
+// stats bar and no progress section at all.
+function updateFleetCardLiveValues(card, p){
+  const setText=(sel,txt)=>{ const el=card.querySelector(sel); if(el&&el.textContent!==txt) el.textContent=txt; };
+  const setBar=(sel,info)=>{
+    const el=card.querySelector(sel); if(!el) return;
+    el.style.width=info.pct+"%";
+    el.style.background=info.bg||"";
+    el.style.boxShadow=heatBarShadow(info.bg);
+  };
+  const pct=(p.progress*100).toFixed(1);
+  setText('[data-live="pct"]', pct+"%");
+  const fill=card.querySelector('[data-live="bar"]');
+  if(fill) fill.style.width=pct+"%";
+  setText('[data-live="elapsed"]', fmtDuration(p.elapsed));
+  // Absent by design once the print completes — that cell becomes
+  // "Finished <time>" instead, which is driven by completedAt and stays
+  // structural. setText simply finds nothing then.
+  setText('[data-live="remaining"]', fmtRemaining(p.elapsed,p.progress));
+  // The target moves with the reading (both live on p.hotend/p.bed), so
+  // setting a new bed target has to show up here too, not wait for the
+  // next structural change.
+  const hotA=p.hotend?Math.round(p.hotend.temp):0, hotT=p.hotend?Math.round(p.hotend.target):0;
+  const bedA=p.bed?Math.round(p.bed.temp):0, bedT=p.bed?Math.round(p.bed.target):0;
+  const hotBar=heatBarInfo(hotA,hotT), bedBar=heatBarInfo(bedA,bedT);
+  setText('[data-live="hotend-val"]', hotA+"°");
+  setText('[data-live="hotend-target"]', hotBar.targetTxt);
+  setBar('[data-live="hotend-bar"]', hotBar);
+  setText('[data-live="bed-val"]', bedA+"°");
+  setText('[data-live="bed-target"]', bedBar.targetTxt);
+  setBar('[data-live="bed-bar"]', bedBar);
+}
 function cardSignature(p){
   const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
   const stem=queuedReady?queuedReady.name:(p.filename||"");
   return JSON.stringify({
     online:p.online, state:p.state, name:p.name, brand:p.brand, url:p.url,
-    filename:p.filename, progress:p.progress, elapsed:p.elapsed,
+    // progress/elapsed/bed/hotend are deliberately ABSENT — they are the
+    // four values that move on their own while a printer runs, and while
+    // they were in here every actively printing card was destroyed and
+    // rebuilt on every poll: a WebRTC camera renegotiated its session,
+    // a .pstatus message being written by an in-flight action was wiped,
+    // keyboard focus was lost, and the progress shimmer restarted. They
+    // are patched into the surviving card by
+    // updateFleetCardLiveValues() instead — that function and this
+    // omission are one mechanism, so a field removed here MUST have a
+    // data-live hook there, and nothing else may be removed without
+    // giving it one.
+    filename:p.filename,
     filamentUsed:p.filamentUsed, completedAt:p.completedAt,
     errorCode:p.errorCode, message:p.message, plate:p.plate,
     activeExt:p.activeExt, forceDefaults:p.forceDefaults,
     heads:p.heads, capabilities:p.capabilities, tags:p.tags,
     queuedFile:p.queuedFile, layer:p.layer, stem,
-    // A printer sitting idle/"Loaded" with nothing else in this signature
-    // changing (state, queuedFile, progress all static) can still have its
-    // bed/hotend genuinely drifting — omitting them meant the card's cached
-    // DOM element never got rebuilt in that case, freezing whatever temps
-    // happened to be showing at the last real change, indefinitely.
-    bed:p.bed, hotend:p.hotend,
+    // Temperatures used to live here for a real reason: a printer sitting
+    // idle/"Loaded" with nothing else in this signature changing can still
+    // have its bed/hotend genuinely drifting, and with them omitted and
+    // nothing else to patch the card, the displayed temps froze at
+    // whatever they were on the last real change. That failure is what
+    // updateFleetCardLiveValues() now prevents — it runs on EVERY reused
+    // card, not only on printing ones, which is exactly the case that bug
+    // came from. Do not omit a field from this signature unless that
+    // function patches it.
     // STATUS_OVERRIDE is client-only UI state, not part of `p` at all — a
     // change there needs to force a rebuild the same way a real server-
     // reported change does, or the badge would only catch up once
@@ -5007,8 +5070,8 @@ function buildCardHtml(p, need, dragEnabled){
           ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
-          `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.card.hotend_label"))}</div><div class="stats-cell-val">${extA}°<span class="stats-sep">/</span><span class="stats-inline-target">${hotendBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" style="${heatBarFillStyle(hotendBar)}"></div></div></div>`+
-          `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="${esc(t("fleet.card.bed_temp_title"))}"><div class="stats-cell-label">${esc(t("fleet.card.bed_label"))}</div><div class="stats-cell-val">${bedA}°<span class="stats-sep">/</span><span class="stats-inline-target">${bedBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" style="${heatBarFillStyle(bedBar)}"></div></div></div>`+
+          `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.card.hotend_label"))}</div><div class="stats-cell-val"><span data-live="hotend-val">${extA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="hotend-target">${hotendBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="hotend-bar" style="${heatBarFillStyle(hotendBar)}"></div></div></div>`+
+          `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="${esc(t("fleet.card.bed_temp_title"))}"><div class="stats-cell-label">${esc(t("fleet.card.bed_label"))}</div><div class="stats-cell-val"><span data-live="bed-val">${bedA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="bed-target">${bedBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="bed-bar" style="${heatBarFillStyle(bedBar)}"></div></div></div>`+
           `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.progress.layer_label"))}</div><div class="stats-cell-val">${layer?layer.current:'—'}<span class="stats-inline-target">${layer?'/'+layer.total:''}</span></div></div>`+
           thumbCell+
           `</div>`;
@@ -5039,8 +5102,8 @@ function buildCardHtml(p, need, dragEnabled){
         // .prog-file, unchanged from before) and nested inside .cam-prog-file
         // for camera view, where the thumbnail spans both the filename row
         // and this row via CSS grid (see .cam-prog-file in style.css).
-        const progRowHtml=`<div class="prog-row"><span class="prog-pct ${pctCls}">${pct}%</span>`+
-          `<div class="prog-track ${trackCls}"><div class="prog-fill ${fillCls}" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div></div></div>`;
+        const progRowHtml=`<div class="prog-row"><span class="prog-pct ${pctCls}" data-live="pct">${pct}%</span>`+
+          `<div class="prog-track ${trackCls}"><div class="prog-fill ${fillCls}" data-live="bar" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div></div></div>`;
         // The progress bar itself always renders, error or not (unchanged
         // from before this camera-view work) — only the filename/thumbnail
         // part is hidden on error, in favor of the klipper-err-panel above
@@ -5058,13 +5121,13 @@ function buildCardHtml(p, need, dragEnabled){
         return `<div class="progress-section">`+
           fileSection+
           (p.errorCode||p.message?'':`<div class="prog-times">`+
-          `<div class="prog-time-cell"><span class="prog-time-label">${esc(p.state==='complete'?t("fleet.progress.total_time_label"):t("fleet.progress.elapsed_label"))}</span><span class="prog-time-val">${fmtDuration(p.elapsed)}</span></div>`+
+          `<div class="prog-time-cell"><span class="prog-time-label">${esc(p.state==='complete'?t("fleet.progress.total_time_label"):t("fleet.progress.elapsed_label"))}</span><span class="prog-time-val" data-live="elapsed">${fmtDuration(p.elapsed)}</span></div>`+
           `<div class="prog-time-sep"></div>`+
           `<div class="prog-time-cell center"><span class="prog-time-label">${esc(camView?t("fleet.progress.layer_label"):t("fleet.progress.filament_label"))}</span><span class="prog-time-val">${camView?layerTxt:filM}</span></div>`+
           `<div class="prog-time-sep"></div>`+
           (p.state==='complete'
             ? `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.finished_label"))}</span><span class="prog-time-val">${fmtFinishedTime(p.completedAt)}</span></div>`
-            : `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="prog-time-val">${fmtRemaining(p.elapsed,p.progress)}</span></div>`)+
+            : `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="prog-time-val" data-live="remaining">${fmtRemaining(p.elapsed,p.progress)}</span></div>`)+
           `</div>`)+`</div>`;
       })():""}
       ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'):''}
@@ -5106,12 +5169,32 @@ function buildCardHtml(p, need, dragEnabled){
 function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremental){
   const need=neededColors();
   const seen=new Set();
+  // `cursor` is the node currently sitting where the next card belongs.
+  // A card already there needs NO DOM operation: re-appending a node that
+  // is already in the right place is still a remove + insert as far as the
+  // DOM is concerned, and removing a focused element resets focus to
+  // <body> — which is why the previous unconditional appendChild() dropped
+  // keyboard focus off a card on every poll, even when the card itself was
+  // successfully reused. Anything not already in place is moved before the
+  // cursor: exactly one operation per genuinely misplaced card, and the
+  // resulting order is camFleet's order regardless of what it started as.
+  //
+  // Foreign nodes (a leftover skeleton card, the "unreachable" message
+  // loadFleet() writes when the very first poll fails) are never the
+  // cursor's equal, so cards get inserted before them in camFleet order —
+  // card order stays correct either way. Neither this nor the previous
+  // appendChild() removes such a node; only cards this function owns are
+  // cleaned up, in the CARD_CACHE sweep below.
+  let cursor=wrap.firstChild;
   camFleet.forEach(p=>{
     seen.add(p.id);
     const sig=cardSignature(p);
     const cached=CARD_CACHE.get(p.id);
     let el, rebuilt=true;
-    if(incremental && cached && cached.sig===sig){ el=cached.el; rebuilt=false; }
+    // The reused node keeps its camera session, its .pstatus text, its
+    // focus and its shimmer phase — only the four live values are written
+    // into it (see updateFleetCardLiveValues / cardSignature).
+    if(incremental && cached && cached.sig===sig){ el=cached.el; rebuilt=false; updateFleetCardLiveValues(el, p); }
     else {
       el=buildCardHtml(p, need, dragEnabled);
       // A rebuild replaces the cached element with a brand-new one — the
@@ -5120,7 +5203,12 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
       // (still visible, no longer reachable via CARD_CACHE) every time this
       // printer's card is rebuilt, i.e. on every poll its displayed data
       // changes — which for an actively-printing card is every single poll.
-      if(cached){ cached.el.remove(); closeCamRtc(p.id); }
+      if(cached){
+        // Step the cursor off this node BEFORE detaching it: insertBefore()
+        // against a reference node that is no longer a child throws.
+        if(cursor===cached.el) cursor=cursor.nextSibling;
+        cached.el.remove(); closeCamRtc(p.id);
+      }
       CARD_CACHE.set(p.id, { sig, el });
     }
     if(rebuilt && VIEW_MODE==='camera' && p.online && p.capabilities?.camera){
@@ -5133,7 +5221,10 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
         else mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
       }
     }
-    wrap.appendChild(el);
+    // insertBefore(el, null) is appendChild(el), so a new card at the end
+    // of the fleet still lands correctly.
+    if(el===cursor) cursor=cursor.nextSibling;
+    else wrap.insertBefore(el, cursor);
   });
   for(const [id, entry] of [...CARD_CACHE]){
     // closeCamRtc() is a no-op for a printer that never had a session, so

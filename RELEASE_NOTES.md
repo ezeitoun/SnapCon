@@ -185,3 +185,32 @@ actually know about the machine: its **IP / Hostname**, and — only where it ma
 - **Saving tells you when an address is missing** instead of quietly dropping the printer from the
   list, which is what used to happen with an empty address field.
 
+### A More Responsive Interface
+SnapCon's interface gives clearer, more immediate feedback during everyday use.
+- **Buttons respond the moment you press them.** Printer controls that wait on the machine to
+  answer — Pause, Cancel, E-Stop — previously gave no sign your click had landed until the printer
+  replied.
+- **Better on touchscreens.** Tapping a control on a tablet no longer leaves it stuck looking
+  "hovered" until you tap somewhere else.
+- **Menus and dialogs open with a small amount of motion** that shows where they came from. Closing
+  is still immediate — nothing was slowed down to make room for it.
+- **Settings labels are easier to read**, in ordinary sentence case rather than all capitals.
+- **Reduce Motion is respected.** If your system asks for less motion, the movement is dropped and
+  the feedback you actually need is kept.
+
+### Faster, Steadier Fleet Updates
+Printer cards now update their live readings in place, instead of being rebuilt from scratch every
+time progress, elapsed time or a temperature changes. That makes the fleet steadier to watch and
+considerably lighter on a large farm.
+- **Camera feeds stay connected while a printer prints.** A live WebRTC video session (confirmed on
+  the Creality SPARKX i7) was being dropped and reconnected on every routine fleet refresh.
+- **Status messages stay on screen.** A message like "Pausing…" is no longer wiped away by the next
+  refresh.
+- **Keyboard focus stays where you put it** during routine refreshes, instead of being lost every
+  few seconds.
+- **Progress, elapsed time, remaining time and temperatures update in place**, and the progress
+  bar's shimmer now runs continuously instead of restarting on every refresh.
+- **Temperature bars ease between readings** as the values change.
+- **Large fleets ask far less of the browser.** With 100 actively printing test printers, the work
+  each refresh costs dropped by roughly 8x.
+
