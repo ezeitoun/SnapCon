@@ -40,15 +40,21 @@ test("every registered connector declares a complete address contract", () => {
 });
 
 test("the address contract matches each connector's real protocol", () => {
-  // The U1 serves Moonraker on the plain HTTP port and FlashForge's API is
-  // fixed at 8898 (applied inside flashforge-utils' own baseUrl) — neither
-  // has a port for the user to set. Moonraker-family boxes can sit behind a
-  // reverse proxy, so theirs is editable. The simulator has no hardware.
+  // The U1 serves Moonraker on the plain HTTP port, so it has no port for the
+  // user to set. Moonraker-family boxes can sit behind a reverse proxy, so
+  // theirs is editable. The simulator has no hardware.
+  //
+  // FlashForge keeps 8898 as its default — the stock API's fixed port, applied
+  // inside flashforge-utils' own baseUrl, which is what keeps existing configs
+  // byte-identical — but the port is editable because the port is no longer the
+  // whole story: a firmware mod (ZMOD, Forge-X) takes 8898 down and serves
+  // Moonraker on 7125 instead. The connector detects which transport is live;
+  // the port field is the escape hatch for a box on neither default.
   assert.deepEqual(getAddress("snapmaker-u1-klipper-ws"), { scheme: "http", defaultPort: 80, portEditable: false, required: true });
   assert.deepEqual(getAddress("klipper-moonraker"), { scheme: "http", defaultPort: 7125, portEditable: true, required: true });
   assert.deepEqual(getAddress("creality-klipper"), { scheme: "http", defaultPort: 7125, portEditable: true, required: true });
-  assert.deepEqual(getAddress("flashforge-adventurer"), { scheme: "http", defaultPort: 8898, portEditable: false, required: true });
-  assert.deepEqual(getAddress("flashforge-ad5x"), { scheme: "http", defaultPort: 8898, portEditable: false, required: true });
+  assert.deepEqual(getAddress("flashforge-adventurer"), { scheme: "http", defaultPort: 8898, portEditable: true, required: true });
+  assert.deepEqual(getAddress("flashforge-ad5x"), { scheme: "http", defaultPort: 8898, portEditable: true, required: true });
   assert.equal(getAddress("simulator").required, false);
 });
 

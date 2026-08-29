@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 41,
+    "version": 42,
     "snapconVersion": "0.6.0",
     "updated": "2026-08-21"
   },
@@ -1058,7 +1058,12 @@
       "discover_added_button": "Added",
       "discover_none_found": "No printers found on {subnets}. Add manually instead.",
       "discover_scan_failed": "Scan failed: {message}",
-      "discover_needs_update": "This needs the updated server.js — replace it and restart the hub."
+      "discover_needs_update": "This needs the updated server.js — replace it and restart the hub.",
+      "field_transport": "Transport",
+      "transport_option_auto": "Detect automatically",
+      "transport_option_native": "FlashForge API (port 8898)",
+      "transport_option_moonraker": "Moonraker (port 7125)",
+      "transport_hint": "Stock firmware serves the FlashForge API on port 8898. A firmware mod such as ZMOD or Forge-X replaces it with Moonraker on port 7125. SnapCon normally detects which is live and re-checks if it changes — pin a specific one only if detection gets it wrong."
     },
     "firmware": {
       "get_button": "Get Firmware",

@@ -9,12 +9,18 @@
 // Same config fields as flashforge-adventurer.js (url incl. :8898, serial,
 // verificationCode).
 const ff = require("./flashforge-utils");
+const http = require("./http-utils");
+const fm = require("./flashforge-moonraker");
+const mode = require("./flashforge-mode");
 const { normHex } = require("../parser");
 
 exports.label = "FlashForge AD5X";
 exports.brand = "FlashForge";
-// Address contract: same fixed 8898 API as the Adventurer.
-exports.address = { scheme: "http", defaultPort: 8898, portEditable: false, required: true };
+// Address contract: same fixed 8898 API as the Adventurer, with the port field
+// exposed only because a firmware mod (ZMOD) takes 8898 down and serves
+// Moonraker on 7125 instead. Stored URLs stay host-only, so existing configs
+// are byte-identical.
+exports.address = { scheme: "http", defaultPort: 8898, portEditable: true, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,
@@ -39,9 +45,135 @@ exports.capabilities = {
   singleToolhead: true
 };
 
+// ---- transport mode ----
+// An AD5X runs either stock firmware (native API on 8898) or ZMOD, which takes
+// 8898 down and serves Moonraker on 7125. flashforge-mode.js owns the decision;
+// this file supplies the two liveness probes and every AD5X-specific meaning.
+const modeProbes = p => ({
+  native: () => ff.ffPost(p, "/detail", {}, 3500),
+  moonraker: () => fm.ping(p, 3500)
+});
+
+// The four IFS slot sensors, as Klipper object names. Both this prefix and a
+// bare `filament_switch_sensor` form appear in objects/list, but ONLY this one
+// returns data — querying the intuitive name yields an empty status block and
+// silently zero slots (confirmed live).
+const IFS_PORT = n => `zmod_ifs_switch_sensor _ifs_port_sensor_${n}`;
+const IFS_VARS = "gcode_macro _IFS_VARS";
+const IFS_OBJECTS = [IFS_PORT(1), IFS_PORT(2), IFS_PORT(3), IFS_PORT(4), IFS_VARS];
+
+function moonrakerCaps(extra) {
+  return {
+    ...exports.capabilities,
+    camera: false, cameraSnapshot: false,
+    excludeObject: true, firmwareInfo: true, health: true, fileSync: true, webUi: true,
+    // Hardware gates — each ships off until individually verified.
+    setColor: false, unloadFilament: false, autoLevel: false,
+    // Gated on the print-start macro (see startPrintFile below). Offering a
+    // mapping picker that cannot be acted on is worse than offering nothing.
+    headMapping: false,
+    filamentHeads: false,
+    ...extra
+  };
+}
+
+// Runs once per detection. IFS presence is read from the printer's live object
+// list — never inferred from the model name, the connector type, or the
+// presence of Adventurer5M.json (that file exists on 5M Pros too, without any
+// FFMInfo block, so it proves nothing about a material station).
+async function buildMoonrakerProfile(p) {
+  let objects = [];
+  try { objects = await fm.listObjects(p); } catch { objects = []; }
+  const ifs = objects.includes(IFS_PORT(1));
+  let cameraUrl = null;
+  try { cameraUrl = await fm.resolveWebcam(p); } catch { cameraUrl = null; }
+  return {
+    transport: "moonraker", ifs, cameraUrl,
+    capabilities: moonrakerCaps({
+      ...(cameraUrl ? { camera: true, cameraSnapshot: true } : {}),
+      ...(ifs ? { filamentHeads: true } : {})
+    })
+  };
+}
+
+// slot is 1-based, matching both the native API's slotId and ffmColorN.
+function decodeMoonrakerHeads(status, ffm) {
+  return [1, 2, 3, 4].map(slot => {
+    const sensor = status[IFS_PORT(slot)] || {};
+    // Presence gates colour, never the reverse: ffmColorN persists after a
+    // spool is pulled, so a stored colour is not evidence of filament.
+    if (!sensor.filament_detected) return { loaded: false, hex: null, material: null, sub: null, official: false };
+    return {
+      loaded: true,
+      hex: normHex((ffm || {})["ffmColor" + slot]) || null,
+      material: (ffm || {})["ffmType" + slot] || null,
+      sub: null, official: false
+    };
+  });
+}
+
+async function probeMoonraker(p) {
+  const prof = mode.getProfile(p) || await buildMoonrakerProfile(p);
+  if (!mode.getProfile(p)) mode.setProfile(p, prof);
+  // The IFS terms ride along on the one status query when there is an IFS to
+  // read, and are omitted entirely when there isn't — no wasted request.
+  const { status, state } = await fm.probeCommon(p, prof.ifs ? IFS_OBJECTS : []);
+  if (!prof.ifs) return { ...state, heads: [], activeExt: null };
+  const cfg = await fm.readConfigJson(p, "Adventurer5M.json");
+  return {
+    ...state,
+    heads: decodeMoonrakerHeads(status, cfg && cfg.FFMInfo),
+    // _IFS_VARS.current_tool is a TOOL index and tools[] maps tool->slot, so
+    // the active slot is tools[current_tool]-1 — NOT current_tool. That mapping
+    // is unverified against a real multi-colour print, so this reports null
+    // rather than a plausible guess.
+    activeExt: null
+  };
+}
+
 async function probe(p) {
+  let d = { mode: null };
+  try { d = await mode.detect(p, modeProbes(p)); } catch { d = { mode: null }; }
+  if (!d.mode) {
+    // Prefer the native transport's message: FlashForge's API reports real,
+    // user-actionable auth failures ("SN is different", "check code error"),
+    // and replacing those with a generic "could not reach" would hide the one
+    // thing that tells the user what to fix.
+    return { name: p.name, online: false, error: d.nativeError || d.moonrakerError || "Could not reach " + p.name };
+  }
+  const m = d.mode;
+  if (m === "moonraker") {
+    try {
+      const r = await probeMoonraker(p);
+      mode.noteSuccess(p);
+      return r;
+    } catch (e) {
+      mode.noteFailure(p);
+      return { name: p.name, online: false, error: e.name === "AbortError" ? "timeout" : e.message };
+    }
+  }
+  return probeNative(p);
+}
+exports.probe = probe;
+
+function getCapabilities(p) {
+  if (!p) return exports.capabilities;
+  if (p.transport === "moonraker") {
+    const pinned = mode.getProfile(p);
+    return (pinned && pinned.capabilities) || moonrakerCaps({});
+  }
+  if (p.transport === "native") return exports.capabilities;
+  const prof = mode.getProfile(p);
+  return (prof && prof.capabilities) || exports.capabilities;
+}
+exports.getCapabilities = getCapabilities;
+
+// ---- native path (unchanged behaviour) ----
+async function probeNative(p) {
   try {
     const d = await ff.ffDetail(p);
+    mode.noteSuccess(p);
+    if (!mode.getProfile(p)) mode.setProfile(p, { transport: "native", capabilities: exports.capabilities });
     const base = ff.decodeCommonStatus(p, d);
     const ms = d.matlStationInfo;
     if (d.hasMatlStation && ms && Array.isArray(ms.slotInfos)) {
@@ -64,18 +196,55 @@ async function probe(p) {
     }
     return base;
   } catch (e) {
+    mode.noteFailure(p);
     return { name: p.name, online: false, error: e.name === "AbortError" ? "timeout" : e.message };
   }
 }
-exports.probe = probe;
 
-exports.uploadFile = ff.uploadFile;
-exports.pause = ff.pause;
-exports.resume = ff.resume;
-exports.cancel = ff.cancel;
-exports.eject = ff.eject;
-exports.estop = ff.estop;
-exports.bedTemp = ff.bedTemp;
+// ---- control dispatch ----
+// Status is only half the job: a modded printer has :8898 CLOSED, so any
+// control call left pointing at the native API fails outright rather than
+// degrading. Each operation below therefore asks which transport is live and
+// routes accordingly. The NATIVE branch of every pair is the exact expression
+// this connector used before dual transport existed.
+async function currentMode(p) {
+  if (p.transport === "native" || p.transport === "moonraker") return p.transport;
+  const prof = mode.getProfile(p);
+  if (prof && prof.transport) return prof.transport;
+  // A control action arriving before the first probe runs detection rather
+  // than guessing; if nothing answers, native keeps today's behaviour.
+  try { return (await mode.detect(p, modeProbes(p))).mode || "native"; }
+  catch { return "native"; }
+}
+
+// Routes one operation to the transport actually in use.
+const byMode = (nativeFn, moonFn) => async (p, ...args) =>
+  (await currentMode(p)) === "moonraker" ? moonFn(p, ...args) : nativeFn(p, ...args);
+
+// Moonraker-only: these have no native :8898 equivalent, so the native branch
+// says so plainly instead of failing obscurely. getCapabilities reports them
+// false in native mode, so this is defence in depth, not the usual path.
+const moonrakerOnly = (what, fn) => async (p, ...args) => {
+  if ((await currentMode(p)) !== "moonraker") throw new Error(what + " is not available on this printer's stock firmware");
+  return fn(p, ...args);
+};
+
+exports.uploadFile = byMode(ff.uploadFile, http.uploadFile);
+exports.pause = byMode(ff.pause, http.pause);
+exports.resume = byMode(ff.resume, http.resume);
+exports.cancel = byMode(ff.cancel, http.cancel);
+exports.eject = byMode(ff.eject, http.eject);
+// E-Stop is the ONE deliberate cross-transport retry. Native estop is a raw TCP
+// sequence, Moonraker's is an HTTP call — unrelated mechanisms — and a stale or
+// mistaken mode must never be what swallows an emergency stop. Bounded: two
+// attempts, worst case ~2x one timeout, and only for this operation.
+exports.estop = async p => {
+  const first = (await currentMode(p)) === "moonraker" ? http.estop : ff.estop;
+  const second = first === http.estop ? ff.estop : http.estop;
+  try { return await first(p); }
+  catch (e) { try { return await second(p); } catch { throw e; } }
+};
+exports.bedTemp = byMode(ff.bedTemp, http.bedTemp);
 
 // FlashForge's /printGcode bundles material-station mapping directly into
 // the same request that starts the print — there's no separate "set
@@ -87,11 +256,65 @@ exports.bedTemp = ff.bedTemp;
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const pendingMapping = new Map(); // p.url -> { tools, map, ts }
 
+// Tool/slot values are interpolated into G-code, so they are range-checked as
+// integers rather than merely passed through assertSafeGcodeArg — for a value
+// that must be an integer, a range check is strictly stronger than a
+// character-class check (CLAUDE.md §8, defense in depth at the dangerous sink).
+function intInRange(v, lo, hi, what) {
+  const n = typeof v === "number" ? v : parseInt(String(v), 10);
+  if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`Invalid ${what}: ${v}`);
+  return n;
+}
+
+// ZMOD keeps mapping and print-start as two separate calls, which matches
+// SnapCon's interface directly — so this path needs no pendingMapping stash and
+// carries none of its TTL leak window. _IFS_COLORS_ASSIGN writes state without
+// starting motion, so it is safe to ship while print-start stays gated below.
+async function applyHeadMappingMoonraker(p, tools, map) {
+  for (const t of tools) {
+    const tool = intInRange(t, 0, 15, "tool");
+    const slot = intInRange(map[t], 0, 3, "slot") + 1; // our indexes are 0-based; IFS ports are 1-based
+    await fm.sendMacro(p, `_IFS_COLORS_ASSIGN TOOL=${tool} PORT=${slot} DIALOG=0`);
+  }
+}
+
 async function applyHeadMapping(p, tools, map) {
+  if (mode.getProfile(p) && mode.getProfile(p).transport === "moonraker") {
+    return applyHeadMappingMoonraker(p, tools, map);
+  }
   pendingMapping.set(p.url, { tools, map, ts: Date.now() });
 }
 
+// HARDWARE GATE — see docs/superpowers/specs/flashforge-dual-transport-design.md §8.
+//
+// ZMOD overrides SDCARD_PRINT_FILE, and its own _IFS_COLORS_PRINT calls
+// BASE_SDCARD_PRINT_FILE instead — which implies the override opens a
+// touchscreen confirmation dialog. If it does, an unattended queue start would
+// hang waiting for a human, and the only way a runtime "try one, fall back to
+// the other" strategy could detect that is by observing a print fail to start:
+// a hung job on real hardware, possibly overnight.
+//
+// So this refuses instead of guessing. It is not a stub to be filled in
+// casually — lifting it requires a controlled multi-colour print on real
+// AD5X/ZMOD hardware, with the exact macro sent and the observed behaviour
+// recorded in docs/superpowers/specs/flashforge-hardware-verification.md.
+// getCapabilities reports headMapping:false in this mode for the same reason.
+async function startPrintFileMoonraker(p) {
+  throw new Error(
+    "Starting a print over Moonraker is not yet verified on this firmware. " +
+    "The ZMOD print-start macro may require confirmation on the printer's touchscreen, " +
+    "which would leave an unattended job waiting. Start this print from the printer or Fluidd."
+  );
+}
+
 async function startPrintFile(p, filename) {
+  if (mode.getProfile(p) && mode.getProfile(p).transport === "moonraker") {
+    return startPrintFileMoonraker(p, filename);
+  }
+  return startPrintFileNative(p, filename);
+}
+
+async function startPrintFileNative(p, filename) {
   const body = { fileName: filename, levelingBeforePrint: false };
   const pending = pendingMapping.get(p.url);
   pendingMapping.delete(p.url);
@@ -222,12 +445,31 @@ async function setFilamentColor(p, extruderIndex, hex) {
 }
 exports.setFilamentColor = setFilamentColor;
 
-exports.listFiles = ff.listFiles;
-exports.getThumbnail = ff.getThumbnail;
+exports.listFiles = byMode(ff.listFiles, http.listFiles);
+exports.getThumbnail = byMode(ff.getThumbnail, http.getThumbnail);
 // Reads /gcodeList's gcodeListDetail for multi-material jobs — real palette
 // + print-time data when useMatlStation was used, an empty palette otherwise.
-exports.getFileMetadata = ff.getFileMetadata;
-exports.getCameraSnapshot = ff.getCameraSnapshot;
+exports.getFileMetadata = byMode(ff.getFileMetadata, http.getFileMetadata);
+// Native derives its stream URL from the printer's own host already
+// (flashforge-utils getCameraSnapshot). The Moonraker branch goes through the
+// verified, host-locked, redirect-bounded path in flashforge-moonraker.js.
+exports.getCameraSnapshot = byMode(ff.getCameraSnapshot, async p => {
+  const prof = mode.getProfile(p);
+  const url = (prof && prof.cameraUrl) || await fm.resolveWebcam(p);
+  if (!url) throw new Error("No camera detected for this printer");
+  return fm.fetchSnapshot(p, url);
+});
+
+// ---- Moonraker-only capabilities ----
+// Advertised by moonrakerCaps(), so they must exist — otherwise the UI offers a
+// control the backend then refuses as "not supported".
+exports.getPlate = moonrakerOnly("Exclude-object", http.getPlate);
+exports.excludeObject = moonrakerOnly("Exclude-object", http.excludeObject);
+exports.getHealth = moonrakerOnly("Health", http.queryHealth);
+exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo);
+exports.querySyncFiles = moonrakerOnly("File sync", http.queryRemoteFileList);
+exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadRemoteFile);
+exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteRemoteFile);
 
 // No getPlate/excludeObject, getFirmwareInfo, getInventory, discoverAt — see
 // flashforge-adventurer.js's matching comment; same gaps apply here.

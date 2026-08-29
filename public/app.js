@@ -9103,6 +9103,7 @@ function serializeRowForDiff(row){
     pushNotify:row.querySelector('[id^="ppushnotify-"]').checked,
     forceDefaults:row.querySelector('[id^="pforcedefaults-"]').checked,
     filamentMode:row.querySelector(".pfilmode").value,
+    transport:row.querySelector(".ptransport").value,
     tags:row.querySelector(".ptags").value.trim(),
     allowedGroups:[...row.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value).sort().join(",")
   });
@@ -9115,7 +9116,7 @@ function serializeRowForDiff(row){
 // load.
 function renderPrinterRowsFromConfig(){
   $("setPrinters").innerHTML="";
-  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
+  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,transport:p.transport,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
   baselinePrintersDirty();
 }
 // Settings > Printers shows at most one expanded row: opening one collapses
@@ -9351,6 +9352,15 @@ function addPrinterRow(name,url,opts,autoOpen){
     `</select>`+
     `<div class="hint" style="margin-top:6px" data-i18n="settings.printers.filament_system_hint">${t("settings.printers.filament_system_hint")}</div>`+
     `</div>`+
+    `<div class="transport-wrap" style="display:none;margin-top:10px;max-width:320px">`+
+    `<label class="fl" data-i18n="settings.printers.field_transport">${t("settings.printers.field_transport")}</label>`+
+    `<select class="field ptransport">`+
+    `<option value="auto" data-i18n="settings.printers.transport_option_auto">${t("settings.printers.transport_option_auto")}</option>`+
+    `<option value="native" data-i18n="settings.printers.transport_option_native">${t("settings.printers.transport_option_native")}</option>`+
+    `<option value="moonraker" data-i18n="settings.printers.transport_option_moonraker">${t("settings.printers.transport_option_moonraker")}</option>`+
+    `</select>`+
+    `<div class="hint" style="margin-top:6px" data-i18n="settings.printers.transport_hint">${t("settings.printers.transport_hint")}</div>`+
+    `</div>`+
     `</div>`+
 
     `<div class="prow-section"><div class="prow-section-title" data-i18n="settings.printers.section_behavior">${t("settings.printers.section_behavior")}</div>`+
@@ -9398,6 +9408,8 @@ function addPrinterRow(name,url,opts,autoOpen){
   connectorEl.value=connType;
   const filModeWrap=row.querySelector(".filmode-wrap"), filModeEl=row.querySelector(".pfilmode");
   filModeEl.value=(opts.filamentMode==="cfs")?"cfs":"single";
+  const transportWrap=row.querySelector(".transport-wrap"), transportEl=row.querySelector(".ptransport");
+  transportEl.value=(opts.transport==="native"||opts.transport==="moonraker")?opts.transport:"auto";
   const syncPrintPrefVisibility=()=>{
     const caps=connectorCaps(connectorEl.value);
     PRINTER_PREF_SWITCHES.forEach(({cap,wrapEl,inputEl})=>{
@@ -9412,6 +9424,14 @@ function addPrinterRow(name,url,opts,autoOpen){
     const isCreality=connectorEl.value==="creality-klipper";
     filModeWrap.style.display=isCreality?"":"none";
     if(!isCreality) filModeEl.value="single";
+    // Transport mode is a FlashForge-only choice: those printers run either
+    // the stock :8898 API or a firmware mod (ZMOD, Forge-X) serving Moonraker
+    // on :7125, and the connector normally detects which. Every other
+    // connector speaks exactly one protocol, so offering the choice there
+    // would imply a switch that does nothing.
+    const isFlashForge=connectorEl.value==="flashforge-ad5x"||connectorEl.value==="flashforge-adventurer";
+    transportWrap.style.display=isFlashForge?"":"none";
+    if(!isFlashForge) transportEl.value="auto";
   };
   const brandEl=row.querySelector(".pbrand");
   // Brand is editable for generic Klipper only (see the derivedBrand comment
@@ -10044,6 +10064,10 @@ function gatherPrinters(){
     // the derived value being echoed back, which the server re-derives anyway.
     brand:r.querySelector(".pbrand").value.trim()||undefined,
     filamentMode:r.querySelector(".pfilmode").value==="cfs"?"cfs":undefined,
+    // Sent for every row; the server allowlists it and only the FlashForge
+    // connectors ever read it. "auto" is the absence of a pin, so it is sent
+    // as undefined rather than stored.
+    transport:(v=>v==="native"||v==="moonraker"?v:undefined)(r.querySelector(".ptransport").value),
     serial:r.querySelector(".pserial").value.trim()||undefined,
     verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
     token:secretFieldValue(r.querySelector(".secret-field")),

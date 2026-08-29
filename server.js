@@ -2468,6 +2468,11 @@ async function buildPrinterRecord(p, existing) {
   // getCapabilities) — harmless if present on any other connector,
   // just never read.
   if (p.filamentMode === "cfs") o.filamentMode = "cfs";
+  // Only meaningful for the FlashForge connectors (see connectors/
+  // flashforge-mode.js): pins a printer to the stock :8898 API or to the
+  // Moonraker a firmware mod exposes, instead of auto-detecting. An allowlist,
+  // not a passthrough — anything else, absent included, means auto.
+  if (p.transport === "native" || p.transport === "moonraker") o.transport = p.transport;
   if (p.serial) o.serial = String(p.serial);
   // Was capped at 4 chars (Snapmaker's pairing code length) — widened
   // for FlashForge's checkCode, documented as 4-5 digits.
