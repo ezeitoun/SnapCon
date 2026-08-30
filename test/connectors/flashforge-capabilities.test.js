@@ -22,7 +22,7 @@ const adv = require("../../connectors/flashforge-adventurer");
 function fakePrinter(opts = {}) {
   const {
     native = false, moonraker = false,
-    webcams = [], camImagePath = null, ifs = false, ffmInfo = null, printStartOverridden = false,
+    webcams = [], camImagePath = null, ifs = false, ffmInfo = null, printStartOverridden = false, objectsListFails = false,
     ifsVars = null, portSensors = [false, false, false, false]
   } = opts;
   const seen = [];
@@ -50,6 +50,9 @@ function fakePrinter(opts = {}) {
       return res.end(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9]));
     }
     if (u.pathname === "/printer/objects/list") {
+      // A Moonraker that cannot answer its object list leaves the override
+      // state UNKNOWN — which must never be read as "not overridden".
+      if (objectsListFails) { res.statusCode = 500; return res.end(); }
       const objs = ["print_stats", "virtual_sdcard", "heater_bed", "extruder", "toolhead", "exclude_object"];
       // ZMOD replaces the built-in with a macro of the same name; Forge-X does not.
       if (printStartOverridden) objs.push("gcode_macro SDCARD_PRINT_FILE");
@@ -421,5 +424,88 @@ test("the AD5X stays gated on ZMOD, which does override the command", async () =
     const p = P(s);
     await ad5x.probe(p);
     await assert.rejects(() => ad5x.startPrintFile(p, "cube.gcode"), /not yet verified/i);
+  } finally { s.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// Unknown hardware evidence must fail CLOSED.
+//
+// The print-start gate keys on whether the live firmware replaces Klipper's
+// SDCARD_PRINT_FILE. Treating "we have not looked yet" or "the look failed" as
+// "it does not override" is the permissive default, and it is wrong: ZMOD runs
+// on the 5M too, so the Adventurer connector can be pointed at firmware that
+// does override the command.
+// ---------------------------------------------------------------------------
+
+test("pinned moonraker, no cached profile, live evidence says overridden -> gated, zero macros", async () => {
+  const s = await fakePrinter({ moonraker: true, printStartOverridden: true });
+  try {
+    const p = { ...P(s), transport: "moonraker" };   // never probed
+    await assert.rejects(() => adv.startPrintFile(p, "cube.gcode"), /not yet verified/i);
+    assert.ok(!s.seen.some(x => x.includes("gcode/script")), "no macro may be sent: " + s.seen.join(" | "));
+  } finally { s.close(); }
+});
+
+test("pinned moonraker, no cached profile, live evidence says NOT overridden -> normal print start", async () => {
+  const s = await fakePrinter({ moonraker: true, printStartOverridden: false });
+  try {
+    const p = { ...P(s), transport: "moonraker" };
+    await adv.startPrintFile(p, "cube.gcode");
+    assert.ok(s.seen.some(x => x.includes("gcode/script") && x.includes("SDCARD_PRINT_FILE")),
+      "expected the stock command: " + s.seen.join(" | "));
+  } finally { s.close(); }
+});
+
+test("pinned moonraker, evidence cannot be established -> fails closed with zero macros", async () => {
+  const s = await fakePrinter({ moonraker: true, objectsListFails: true });
+  try {
+    const p = { ...P(s), transport: "moonraker" };
+    await assert.rejects(() => adv.startPrintFile(p, "cube.gcode"), /could not|unable|cannot/i);
+    assert.ok(!s.seen.some(x => x.includes("gcode/script")), "no macro may be sent: " + s.seen.join(" | "));
+  } finally { s.close(); }
+});
+
+test("a cached overridden profile is still gated", async () => {
+  const s = await fakePrinter({ moonraker: true, printStartOverridden: true });
+  try {
+    const p = P(s);
+    await adv.probe(p);
+    s.seen.length = 0;
+    await assert.rejects(() => adv.startPrintFile(p, "cube.gcode"), /not yet verified/i);
+    assert.ok(!s.seen.some(x => x.includes("gcode/script")));
+  } finally { s.close(); }
+});
+
+test("a cached non-overridden profile behaves exactly as before", async () => {
+  const s = await fakePrinter({ moonraker: true, printStartOverridden: false });
+  try {
+    const p = P(s);
+    await adv.probe(p);
+    s.seen.length = 0;
+    await adv.startPrintFile(p, "cube.gcode");
+    assert.ok(s.seen.some(x => x.includes("SDCARD_PRINT_FILE")));
+  } finally { s.close(); }
+});
+
+test("no alternative print-start command is ever tried as a fallback", async () => {
+  for (const opts of [{ printStartOverridden: true }, { objectsListFails: true }]) {
+    const s = await fakePrinter({ moonraker: true, ...opts });
+    try {
+      const p = { ...P(s), transport: "moonraker" };
+      await adv.startPrintFile(p, "cube.gcode").catch(() => {});
+      const sent = decodeURIComponent(s.seen.join(" | "));
+      assert.ok(!/BASE_SDCARD_PRINT_FILE|_IFS_COLORS_PRINT/.test(sent), "fallback emitted: " + sent);
+    } finally { s.close(); }
+  }
+});
+
+test("the gate reads live object data, not the firmware's name", async () => {
+  // system_info reports "zmod" here, but the object list has no override, so
+  // the printer must NOT be gated — the decision is evidence, not branding.
+  const s = await fakePrinter({ moonraker: true, printStartOverridden: false });
+  try {
+    const p = { ...P(s), transport: "moonraker" };
+    await adv.startPrintFile(p, "cube.gcode");
+    assert.ok(s.seen.some(x => x.includes("SDCARD_PRINT_FILE")));
   } finally { s.close(); }
 });

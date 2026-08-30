@@ -67,9 +67,15 @@ async function buildMoonrakerProfile(p) {
   // override is what may require a touchscreen confirmation. Forge-X leaves the
   // built-in alone. Detect which, rather than assuming by model — ZMOD also
   // supports the FF5M, so a 5M Pro can be on either.
-  let objects = [];
-  try { objects = await fm.listObjects(p); } catch { objects = []; }
-  const printStartOverridden = objects.includes("gcode_macro SDCARD_PRINT_FILE");
+  // Tri-state on purpose: true / false / null-for-unknown. A failed or empty
+  // object list must NOT collapse to "not overridden" — that is the permissive
+  // answer, and unknown hardware evidence has to fail closed. A live Moonraker
+  // always reports objects, so an empty list means the read did not succeed.
+  let printStartOverridden = null;
+  try {
+    const objects = await fm.listObjects(p);
+    if (objects.length) printStartOverridden = objects.includes("gcode_macro SDCARD_PRINT_FILE");
+  } catch { printStartOverridden = null; }
   let cameraUrl = null;
   try { cameraUrl = await fm.resolveWebcam(p); } catch { cameraUrl = null; }
   return {
@@ -205,8 +211,21 @@ exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteRemoteFile);
 // would mean a queue job hanging overnight. An untouched built-in is stock
 // Klipper, which klipper-moonraker and creality-klipper already send.
 exports.startPrintFile = byMode(ff.startPrintFile, async (p, filename) => {
-  const prof = mode.getProfile(p);
-  if (prof && prof.printStartOverridden) {
+  // Only POSITIVE evidence that the firmware leaves the built-in command alone
+  // permits a print start. An absent profile means "not looked at yet", not
+  // "safe", so resolve it through the established profile-building path first.
+  let prof = mode.getProfile(p);
+  if (!prof || prof.printStartOverridden == null) {
+    try { prof = await buildMoonrakerProfile(p); } catch { prof = null; }
+  }
+  if (!prof || prof.printStartOverridden == null) {
+    throw new Error(
+      "Could not determine how this printer's firmware starts a print, so SnapCon " +
+      "will not send one. Check that the printer is reachable and try again, or " +
+      "start this print from the printer or Fluidd."
+    );
+  }
+  if (prof.printStartOverridden) {
     throw new Error(
       "Starting a print over Moonraker is not yet verified on this firmware. " +
       "It replaces Klipper's print-start command with its own, which may require confirmation " +
