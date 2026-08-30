@@ -21,11 +21,19 @@ const FFM_INFO = {
 };
 
 function zmodPrinter(opts = {}) {
-  const { portSensors = [true, true, false, false], ifsVars = { tools: [2, 1, 3, 4], current_tool: -1 }, ffmInfo = FFM_INFO } = opts;
-  const seen = { queries: [], gcode: [] };
+  // `native` is off by default: a printer running ZMOD has :8898 CLOSED. It is
+  // switched on only to prove the native-pinned path still reaches it.
+  const { portSensors = [true, true, false, false], ifsVars = { tools: [2, 1, 3, 4], current_tool: -1 }, ffmInfo = FFM_INFO, native = false } = opts;
+  const seen = { queries: [], gcode: [], all: [] };
   const json = (res, b) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify(b)); };
   const srv = http.createServer((req, res) => {
     const u = new URL(req.url, "http://x");
+    seen.all.push(req.method + " " + u.pathname);
+    if (req.method === "POST" && (u.pathname === "/detail" || u.pathname === "/printGcode")) {
+      if (!native) { res.statusCode = 404; return res.end(); }
+      res.setHeader("content-type", "application/json");
+      return res.end(JSON.stringify({ code: 0, detail: { status: "ready" } }));
+    }
     if (u.pathname === "/printer/info") return json(res, { result: { state: "ready" } });
     if (u.pathname === "/server/webcams/list") return json(res, { result: { webcams: [] } });
     if (u.pathname === "/server/files/config/Adventurer5M.json") return json(res, { FFMInfo: ffmInfo });
@@ -156,5 +164,65 @@ test("start-print refuses rather than guessing which macro is safe unattended", 
     const before = s.seen.gcode.length;
     await assert.rejects(() => ad5x.startPrintFile(p, "cube.gcode"), /not (yet )?(verified|supported)/i);
     assert.equal(s.seen.gcode.length, before, "must not send a speculative macro");
+  } finally { s.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// Transport routing must come from the normal mode-resolution path, not from
+// "is a profile cached". A profile only exists after a successful probe, so
+// keying on it meant an explicitly pinned printer took the WRONG branch until
+// its first poll landed.
+// ---------------------------------------------------------------------------
+
+test("a printer pinned to moonraker hits the hardware gate even before its first probe", async () => {
+  const s = await zmodPrinter();
+  try {
+    // No probe() first, so nothing is cached — only the explicit pin.
+    const p = { ...P(s), transport: "moonraker" };
+    await assert.rejects(() => ad5x.startPrintFile(p, "cube.gcode"), /not yet verified/i);
+    assert.ok(!s.seen.all.some(x => x.includes("/printGcode")), "must not fall through to the native API");
+    assert.equal(s.seen.gcode.length, 0, "must emit no print-start macro");
+  } finally { s.close(); }
+});
+
+test("applyHeadMapping on a pinned, unprobed printer takes the Moonraker path", async () => {
+  const s = await zmodPrinter();
+  try {
+    const p = { ...P(s), transport: "moonraker" };
+    await ad5x.applyHeadMapping(p, [0], { 0: 1 });
+    assert.match(s.seen.gcode.join("\n"), /_IFS_COLORS_ASSIGN TOOL=0 PORT=2/);
+    assert.ok(!s.seen.all.some(x => x.includes("/printGcode")), "must not touch the native API");
+  } finally { s.close(); }
+});
+
+test("a printer pinned to native still uses the native print path", async () => {
+  const s = await zmodPrinter({ native: true });
+  try {
+    const p = { ...P(s), transport: "native" };
+    await ad5x.startPrintFile(p, "cube.gcode").catch(() => {});
+    assert.ok(s.seen.all.some(x => x.includes("/printGcode")), "native pin must reach the native API");
+    assert.equal(s.seen.gcode.length, 0, "and must emit no Moonraker macro");
+  } finally { s.close(); }
+});
+
+test("auto-detected Moonraker still hits the gate, unchanged", async () => {
+  const s = await zmodPrinter();
+  try {
+    const p = P(s);
+    await ad5x.probe(p);                       // auto-detects moonraker
+    await assert.rejects(() => ad5x.startPrintFile(p, "cube.gcode"), /not yet verified/i);
+    assert.equal(s.seen.gcode.length, 0);
+  } finally { s.close(); }
+});
+
+test("no Moonraker print-start macro is emitted on any routing path", async () => {
+  const s = await zmodPrinter();
+  try {
+    for (const t of [undefined, "moonraker", "native"]) {
+      const p = { ...P(s), ...(t ? { transport: t } : {}) };
+      await ad5x.startPrintFile(p, "cube.gcode").catch(() => {});
+    }
+    const g = s.seen.gcode.join("\n");
+    assert.ok(!/SDCARD_PRINT_FILE|BASE_SDCARD_PRINT_FILE|_IFS_COLORS_PRINT/.test(g), "emitted: " + g);
   } finally { s.close(); }
 });

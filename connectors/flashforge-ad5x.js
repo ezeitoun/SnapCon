@@ -279,7 +279,12 @@ async function applyHeadMappingMoonraker(p, tools, map) {
 }
 
 async function applyHeadMapping(p, tools, map) {
-  if (mode.getProfile(p) && mode.getProfile(p).transport === "moonraker") {
+  // Route on the resolved transport, not on whether a profile happens to be
+  // cached: a profile only exists after a successful probe, so keying on it
+  // sent an explicitly pinned printer down the wrong branch until its first
+  // poll landed. currentMode() honours the pin and detects when nothing is
+  // known yet — the same path every other operation on this connector uses.
+  if ((await currentMode(p)) === "moonraker") {
     return applyHeadMappingMoonraker(p, tools, map);
   }
   pendingMapping.set(p.url, { tools, map, ts: Date.now() });
@@ -308,7 +313,11 @@ async function startPrintFileMoonraker(p) {
 }
 
 async function startPrintFile(p, filename) {
-  if (mode.getProfile(p) && mode.getProfile(p).transport === "moonraker") {
+  // Same reason as applyHeadMapping above. This one matters more: routing on a
+  // missing profile meant a printer pinned to Moonraker silently attempted the
+  // native :8898 API — which is closed on modded firmware — instead of
+  // returning the hardware gate's explanation.
+  if ((await currentMode(p)) === "moonraker") {
     return startPrintFileMoonraker(p, filename);
   }
   return startPrintFileNative(p, filename);
