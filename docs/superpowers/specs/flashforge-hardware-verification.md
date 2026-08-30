@@ -17,7 +17,7 @@ or macro sent, the exact response, and the observed physical behaviour.
 | 1 | Print-start macro | Moonraker `startPrintFile`; `headMapping` | **NOT VERIFIED** |
 | 2 | `assigned_tools` | `applyHeadMapping` completeness | **NOT VERIFIED** |
 | 3 | `activeExt` tool→slot mapping | `activeExt` in Moonraker mode | **NOT VERIFIED** |
-| 4 | `setColor` | `setColor` capability | **NOT VERIFIED** |
+| 4 | `setColor` | `setColor` capability | **NO MECHANISM IDENTIFIED** — open design question, not a pending test |
 | 5 | `unloadFilament` | `unloadFilament` capability | **NOT VERIFIED** |
 | 6 | `autoLevel` | `autoLevel` capability | **NOT VERIFIED** |
 
@@ -96,15 +96,55 @@ from items 1–2, but verify it during the same controlled print if possible.
 
 ---
 
-## 4–6. `setColor`, `unloadFilament`, `autoLevel`
+## 4. `setColor` — NO IDENTIFIED MECHANISM (open design question)
 
-Verified **individually** — confirming one does not enable another.
+**Status: not a pending test.** An earlier draft named ZMOD's `COLOR` macro as
+the candidate for changing a stored slot colour. Live inspection of
+`printer-ad5x-a` (ZMOD 1.7.1-53) on 2026-08-30 showed that is wrong:
 
-| Item | Candidate macro | What to confirm |
-|---|---|---|
-| `setColor` | ZMOD `COLOR` | Does it change the stored slot colour, and does SnapCon read the change back? |
-| `unloadFilament` | `UNLOAD_FILAMENT` / `_IFS_UNLOAD` | Does it unload the named slot, and does it need the printer hot? |
-| `autoLevel` | `AUTO_FULL_BED_LEVEL` | Full level routine or a bare mesh calibrate? How long does it take? |
+```
+[gcode_macro COLOR]        # mod/ff5.cfg
+gcode:
+    GET_ZCOLOR
+```
+
+`COLOR` resolves to `GET_ZCOLOR` — a **getter**. It does not set a slot's
+colour. Related macros were checked and none is a slot-colour setter either:
+
+- `SET_ZCOLOR` exists, but is invoked internally at print start with a
+  `FILENAME` argument — it is part of per-file colour handling, not a persistent
+  per-slot setter.
+- `SET_ACTIVE_SPOOL` is **SpoolMan integration** (`action_call_remote_method
+  "spoolman_set_active_spool"`), unrelated to the IFS material station.
+
+So there is **no identified, let alone verified, mechanism** for `setColor` over
+Moonraker. This cannot be resolved by running a test — it needs a design
+decision. The plausible options, none investigated:
+
+1. leave `setColor: false` in Moonraker mode permanently (colours remain
+   read-only there, edited on the touchscreen or in the stock UI);
+2. write `FFMInfo.ffmColorN` in `Adventurer5M.json` directly — a config-file
+   write, with all the risk that implies, and unknown effect on the running
+   firmware.
+
+Worth noting the native path's own comment already records that even
+FlashForge's `msConfig_cmd` does not reliably refresh the touchscreen, so the
+native equivalent is itself imperfect.
+
+**Capability ships `false`. Do not enable it without a design decision.**
+
+---
+
+## 5–6. `unloadFilament`, `autoLevel`
+
+Verified **individually** — confirming one does not enable another. Both macros
+were confirmed present in `printer-ad5x-a`'s live object list on 2026-08-30;
+presence is not semantics, so both still require a controlled run.
+
+| Item | Candidate macro | What to confirm | Physical effect of testing |
+|---|---|---|---|
+| `unloadFilament` | `UNLOAD_FILAMENT` / `_IFS_UNLOAD` | Does it unload the named slot, and does it need the printer hot? | **Heats the nozzle** to `M600`'s temp, waits, then retracts 75 mm |
+| `autoLevel` | `AUTO_FULL_BED_LEVEL` | Full level routine or a bare mesh calibrate? How long does it take? | Full bed level at 240 °C nozzle / 80 °C bed, then heaters off; several minutes of motion |
 
 **Results:** _not yet run_
 

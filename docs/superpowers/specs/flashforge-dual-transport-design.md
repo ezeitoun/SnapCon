@@ -695,12 +695,33 @@ which firmware actually carries the risk:
 
 Gating by model would miss a case: **ZMOD also supports the FF5M**, so a 5M Pro
 on ZMOD uses the *Adventurer* connector and must be gated too. Detection
-therefore records `printStartOverridden` from the live object list, and:
+therefore records `printStartOverridden` from the live object list.
 
-- **Override present → print-start refuses**, with a user-facing explanation.
-  No macro is sent at all.
-- **Override absent → stock Klipper `SDCARD_PRINT_FILE`**, the same call two
-  shipping connectors already make.
+**`printStartOverridden` is tri-state — `true` / `false` / unknown — and only a
+confirmed `false` permits a print start:**
+
+| Evidence | Outcome |
+|---|---|
+| `true` — the live object list contains `gcode_macro SDCARD_PRINT_FILE` | **Refuse.** No macro is sent at all. |
+| `false` — the object list was read and contains no such macro | **Allow** stock Klipper `SDCARD_PRINT_FILE`, the same call two shipping connectors already make. |
+| **unknown** — no profile cached yet, or the object list could not be read | **Refuse.** No macro is sent at all. |
+
+**Absence of evidence is not evidence of absence.** "We have not looked yet" and
+"the look failed" are not the same as "the firmware does not override the
+command", and must never be collapsed into it. Two paths originally did collapse
+them and were fixed:
+
+- an absent profile read as permissive, because a profile only exists after a
+  successful probe. The gate now resolves one through the established
+  profile-building path before deciding.
+- a failed object-list read returned an empty array, and `[].includes(...)` is
+  `false`. Note `listObjects()` returns `[]` on a non-OK response *without*
+  throwing, so a `try`/`catch` alone would not have caught this; a live
+  Moonraker always reports objects, so an empty list is treated as unknown.
+
+In the unknown case the user is told the state could not be determined, rather
+than being given either a silent no-op or a speculative macro.
+
 - **AD5X `headMapping` reports `false`** in Moonraker mode regardless, so the UI
   never offers a mapping picker that cannot be acted on. Multi-colour start
   stays gated on items 1–2 below even where single-colour start is allowed.
@@ -928,10 +949,10 @@ corresponding behavior ships**, and each ships **off** until then.
 
 | # | Item | Gate | Ships as | Risk |
 |---|---|---|---|---|
-| 1 | **Print-start macro.** Which of `SDCARD_PRINT_FILE` / `BASE_SDCARD_PRINT_FILE` starts a print without a touchscreen confirmation, on firmware that overrides it. **No runtime fallback** — see §8. | §8 Moonraker `startPrintFile` | **refuses** where `printStartOverridden` (ZMOD); stock Klipper command where not (Forge-X). `headMapping: false` either way | **High** |
+| 1 | **Print-start macro.** Which of `SDCARD_PRINT_FILE` / `BASE_SDCARD_PRINT_FILE` starts a print without a touchscreen confirmation, on firmware that overrides it. **No runtime fallback** — see §8. | §8 Moonraker `startPrintFile` | Tri-state, fail-closed: override `true` → **refuse**; override `false` (read successfully) → stock Klipper command allowed; **unknown or unreadable → refuse**. Unknown is never treated as `false`. `headMapping: false` in every case | **High** |
 | 2 | **`assigned_tools`.** Whether `variable_assigned_tools` must be populated alongside `tools[]` or the touchscreen re-prompts. | §8 `applyHeadMapping` | implemented but inert while #1 is gated | Medium |
 | 3 | **`activeExt` mapping.** Confirm `tools[current_tool] - 1`. Status reporting only — no motion, no unattended risk — so it may remain a separate item, but verify it during the same controlled print if possible. | §7 | `activeExt: null` until verified | Medium |
-| 4 | **`setColor`** in Moonraker mode (ZMOD `COLOR` macro semantics). | §6 capability | `false` | Low |
+| 4 | **`setColor`** in Moonraker mode. **Not a pending test** — live inspection showed ZMOD's `COLOR` macro is a *getter* (`GET_ZCOLOR`), and no slot-colour setter was found. Open design question; see the verification record. | §6 capability | `false` | Low |
 | 5 | **`unloadFilament`** in Moonraker mode (`UNLOAD_FILAMENT` / `_IFS_UNLOAD`). | §6 capability | `false` | Low |
 | 6 | **`autoLevel`** in Moonraker mode (`AUTO_FULL_BED_LEVEL` semantics). | §6 capability | `false` | Low |
 
