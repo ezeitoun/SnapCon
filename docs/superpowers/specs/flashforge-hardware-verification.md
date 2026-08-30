@@ -18,12 +18,13 @@ or macro sent, the exact response, and the observed physical behaviour.
 | 2 | `assigned_tools` | `applyHeadMapping` completeness | **NOT VERIFIED** |
 | 3 | `activeExt` tool→slot mapping | `activeExt` in Moonraker mode | **NOT VERIFIED** |
 | 4 | `setColor` | `setColor` capability | **NO MECHANISM IDENTIFIED** — open design question, not a pending test |
-| 5 | `unloadFilament` | `unloadFilament` capability | **NOT VERIFIED** |
+| 5 | `unloadFilament` | `unloadFilament` capability | **VERIFIED NEGATIVE 2026-08-30** — no equivalent mechanism exists; stays `false` |
 | 6 | `autoLevel` | `autoLevel` capability | **NOT VERIFIED** |
 
-None of the six gates above has been verified: `printer-ad5x-a` (the ZMOD AD5X)
-went unreachable during the session before any controlled test could be run, and
-all six require that machine.
+Gate 5 has been **verified negative** (see below): the investigation completed
+and its answer is that no equivalent mechanism exists, so the capability stays
+`false` permanently unless upstream ZMOD documentation changes that. Gates 1–3
+and 6 remain open and require `printer-ad5x-a`.
 
 One **separate** item — the camera trust rule — *was* verified on `printer-adventurer-a`
 and did change the spec. See "Camera trust rule" below.
@@ -135,18 +136,89 @@ native equivalent is itself imperfect.
 
 ---
 
-## 5–6. `unloadFilament`, `autoLevel`
+## 5. `unloadFilament` — VERIFIED NEGATIVE 2026-08-30 (`printer-ad5x-a`, ZMOD 1.7.1-53)
 
-Verified **individually** — confirming one does not enable another. Both macros
-were confirmed present in `printer-ad5x-a`'s live object list on 2026-08-30;
-presence is not semantics, so both still require a controlled run.
+**Completed investigation with a negative result.** This is not a pending test:
+the question was answered, and the answer is that no equivalent exists.
+**No command was sent to the printer during this verification** — it was
+resolved entirely from the live object list and the machine's own config files.
+
+### The semantic that must be matched
+
+SnapCon's native implementation (`connectors/flashforge-ad5x.js`) is
+**arbitrary-slot**:
+
+```js
+async function unloadFilament(p, extruders) {
+  for (const e of extruders) await ff.ffControl(p, "ms_cmd", { action: 1, slot: parseInt(e,10)+1 });
+}
+```
+
+It takes a list of slot indices and unloads each named slot, whether or not that
+slot is the one currently threaded to the nozzle. Any Moonraker equivalent has
+to do the same.
+
+### Candidates, evaluated from their actual bodies
+
+| Candidate | What it actually is | Verdict |
+|---|---|---|
+| `UNLOAD_FILAMENT` | Defined **twice** — `mod/base.cfg` and the lesswaste plugin, which loads last and therefore wins. The effective body takes `SPEED` / `EXTRUDER_TEMP=255` / `EXTRUDE_LEN=120` and **has no slot or port parameter**; it sets `_IFS_VARS extruder_port=0`, heats to 255 °C and retracts 120 mm from the **toolhead**. | Toolhead-only. **Not equivalent.** |
+| `_IFS_UNLOAD PORT=n` | Guarded by `{% if extruder_port > 0 %}`, cuts the filament (`_REZGEM_PRUTOK`), moves the toolhead to the trash area (`_GOTO_TRASH`), then calls the primitives below. Operates on the **currently threaded / active** filament path. | **Not equivalent** — see the caveat below. |
+| `IFS_F24` / `IFS_F11` / `IFS_F39 PRUTOK=n` | The only genuinely per-port primitives. **Undocumented opaque function codes** from ZMOD's `zmod_ifs` Python module: zero `gcode_macro` definitions in any config, absent from `/printer/objects/list`, no entry in `/printer/gcode/help`, module not readable through Moonraker, and no documentation anywhere in the mod tree. Their only use is inside `_CHECK_FILAMENT` as a recovery nudge — *"We pulled each slot a little bit in case one of them was just activating the sensor without being gripped by the extruder."* | **Not executed blindly.** Semantics unknown. |
+
+### Why nothing was run
+
+Two independent reasons:
+
+1. **A toolhead-unload test would have carried no evidential value.** Live state
+   at the time of verification: `head_switch_sensor.filament_detected = false`
+   and `_IFS_VARS.extruder_port = 0` — **no filament in the toolhead**. Running
+   `UNLOAD_FILAMENT` would have heated the nozzle to 255 °C and retracted 120 mm
+   of nothing, proving only that the macro executes, which was never in question.
+2. **Executing `IFS_F24` / `IFS_F11` blind is precisely what this document
+   forbids.** They are undocumented commands driving a filament-gripping
+   mechanism, with no way to predict the outcome. A jam is a worse result than
+   an unavailable capability.
+
+### Important caveat if this is revisited
+
+`_IFS_UNLOAD` may at best represent an **active-filament unload** — returning
+whatever is currently threaded to the nozzle back to its port. That is **not
+automatically the same capability** as SnapCon's existing arbitrary-slot unload
+API, which can unload any slot regardless of what is loaded. Even a fully
+successful test of `_IFS_UNLOAD` would therefore not, by itself, justify
+enabling `unloadFilament`: it would demonstrate a *different, narrower*
+operation. Enabling the capability on that basis would misrepresent to the UI
+and to the queue what the printer can actually be asked to do.
+
+### Conclusion
+
+**There is currently no verified Moonraker mechanism matching the native
+per-slot semantic. `unloadFilament` remains `false`.** No production code or
+capability was changed as a result of this verification, because the correct
+behaviour is already the shipped behaviour.
+
+**Future resolution requires either:**
+
+- upstream ZMOD documentation or source for `IFS_F24` / `IFS_F11` / `IFS_F39`
+  (`ghzserg/zmod`, the `zmod_ifs` module), establishing whether any of them is a
+  per-slot unload; **or**
+- a controlled hardware test with the relevant filament path **actually loaded**,
+  which can only settle the active-filament case — and would still leave the
+  arbitrary-slot case open per the caveat above.
+
+---
+
+## 6. `autoLevel`
+
+Confirmed present in `printer-ad5x-a`'s live object list on 2026-08-30; presence
+is not semantics, so it still requires a controlled run.
 
 | Item | Candidate macro | What to confirm | Physical effect of testing |
 |---|---|---|---|
-| `unloadFilament` | `UNLOAD_FILAMENT` / `_IFS_UNLOAD` | Does it unload the named slot, and does it need the printer hot? | **Heats the nozzle** to `M600`'s temp, waits, then retracts 75 mm |
 | `autoLevel` | `AUTO_FULL_BED_LEVEL` | Full level routine or a bare mesh calibrate? How long does it take? | Full bed level at 240 °C nozzle / 80 °C bed, then heaters off; several minutes of motion |
 
-**Results:** _not yet run_
+**Result:** _not yet run_
 
 ---
 
