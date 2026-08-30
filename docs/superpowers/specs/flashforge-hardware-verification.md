@@ -19,12 +19,13 @@ or macro sent, the exact response, and the observed physical behaviour.
 | 3 | `activeExt` tool→slot mapping | `activeExt` in Moonraker mode | **NOT VERIFIED** |
 | 4 | `setColor` | `setColor` capability | **NO MECHANISM IDENTIFIED** — open design question, not a pending test |
 | 5 | `unloadFilament` | `unloadFilament` capability | **VERIFIED NEGATIVE 2026-08-30** — no equivalent mechanism exists; stays `false` |
-| 6 | `autoLevel` | `autoLevel` capability | **NOT VERIFIED** |
+| 6 | `autoLevel` | `autoLevel` capability | **BLOCKED BY GATE 1** — a print-start preference with no executable path; not independently testable |
 
 Gate 5 has been **verified negative** (see below): the investigation completed
 and its answer is that no equivalent mechanism exists, so the capability stays
-`false` permanently unless upstream ZMOD documentation changes that. Gates 1–3
-and 6 remain open and require `printer-ad5x-a`.
+`false` permanently unless upstream ZMOD documentation changes that. Gate 6 is
+**blocked by gate 1** rather than awaiting its own hardware run. Gates 1–3 remain
+genuinely open and all three require `printer-ad5x-a`.
 
 One **separate** item — the camera trust rule — *was* verified on `printer-adventurer-a`
 and did change the spec. See "Camera trust rule" below.
@@ -209,16 +210,76 @@ behaviour is already the shipped behaviour.
 
 ---
 
-## 6. `autoLevel`
+## 6. `autoLevel` — BLOCKED BY GATE 1 (inspected read-only 2026-08-30)
 
-Confirmed present in `printer-ad5x-a`'s live object list on 2026-08-30; presence
-is not semantics, so it still requires a controlled run.
+**Reclassified.** This is not an item awaiting a hardware run: it cannot be
+meaningfully verified until Moonraker print-start is resolved, because that is
+the only place the preference is ever consumed. **No leveling command was sent
+during this inspection.**
 
-| Item | Candidate macro | What to confirm | Physical effect of testing |
-|---|---|---|---|
-| `autoLevel` | `AUTO_FULL_BED_LEVEL` | Full level routine or a bare mesh calibrate? How long does it take? | Full bed level at 240 °C nozzle / 80 °C bed, then heaters off; several minutes of motion |
+### `autoLevel` is a preference, not an operation
 
-**Result:** _not yet run_
+Tracing how SnapCon actually uses the capability:
+
+```
+public/app.js:36-40      PRINT_OPT_DEFS → { key:"autoLevel", cap:"autoLevel", … }   a print-dialog option
+public/app.js:5656       the same option in Quick Print
+server.js:1285,1371      passed as `prefs` into applyHeadMapping on /api/print and /api/printfile
+creality-klipper.js:360  if (autoLevel) await sendG29WithRecovery(p)      inside startPrintFile
+snapmaker-u1-klipper.js:204  withPrefFallback(prefs.autoLevel, p.autoLevel)  inside applyHeadMapping
+```
+
+Confirmed absent:
+
+- **no** standalone `/api/*level*` route in `server.js`
+- **no** connector exports an `autoLevel` / `bedLevel` / `level` function
+
+The capability's only effect is whether the print dialog offers an
+"Auto leveling" toggle. It is a **per-print preference**, never a standalone
+connector operation.
+
+### Why it is blocked
+
+On a FlashForge printer in Moonraker mode, `startPrintFile` **refuses** (gate 1)
+and `applyHeadMapping` is inert (`headMapping: false`). The preference therefore
+has **no executable path to the printer**. Setting `autoLevel: true` today would
+put a control in the print dialog for a print that cannot start — a UI control
+that provably does nothing. That is worse than an absent option.
+
+### What the macro does (read-only inspection)
+
+```
+[gcode_macro AUTO_FULL_BED_LEVEL]          # mod/base.cfg
+  EXTRUDER_TEMP=240, BED_TEMP=80, PROFILE="auto"
+  _FULL_BED_LEVEL …
+  _STOP                                    turns the heaters off afterwards
+
+[gcode_macro _FULL_BED_LEVEL]
+  BED_MESH_CLEAR FROM=_FULL_BED_LEVEL      clears the existing bed mesh
+  _ORIG_CLEAR_NOZZLE EXTRUDER_TEMP=240 BED_TEMP=80   heats and nozzle-cleans
+  _BED_MESH_CALIBRATE PROFILE="auto"       full mesh calibration
+  _UGOL_PARK                               parks
+```
+
+So it is a **full routine**, not a bare mesh calibrate: clear mesh → heat →
+nozzle clean → full calibration → park → heaters off. Several minutes of motion.
+
+**Because it begins with `BED_MESH_CLEAR`, an interrupted or failed standalone
+test leaves the printer with no mesh profile at all** — a worse state than before
+the test. That is a real cost for evidence that cannot lift the gate.
+
+### Additional reason not to run it now
+
+`printer-ad5x-a` showed **intermittent reachability** during this inspection —
+two of three state queries returned nothing, the same flakiness observed earlier
+in the day. Starting a multi-minute heated, mesh-destroying routine on a printer
+whose network connection drops in and out is an unnecessary risk.
+
+### Conclusion
+
+**`autoLevel` remains `false`.** Verification becomes meaningful only once the
+Moonraker print-start path is resolved, because that is where the preference must
+actually be consumed. Until then this is a dependency, not a pending test.
 
 ---
 
