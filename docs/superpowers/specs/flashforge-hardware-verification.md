@@ -14,7 +14,7 @@ or macro sent, the exact response, and the observed physical behaviour.
 
 | # | Item | Gated behaviour | Status |
 |---|---|---|---|
-| 1 | Print-start macro | Moonraker `startPrintFile`; `headMapping` | **NOT VERIFIED** |
+| 1 | Print-start macro | Moonraker `startPrintFile`; `headMapping` | **PARTIALLY VERIFIED 2026-08-30** — direct single-colour start confirmed unattended; multi-colour path untested. Capability stays gated |
 | 2 | `assigned_tools` | `applyHeadMapping` completeness | **NOT VERIFIED** |
 | 3 | `activeExt` tool→slot mapping | `activeExt` in Moonraker mode | **NOT VERIFIED** |
 | 4 | `setColor` | `setColor` capability | **NO MECHANISM IDENTIFIED** — open design question, not a pending test |
@@ -24,8 +24,10 @@ or macro sent, the exact response, and the observed physical behaviour.
 Gate 5 has been **verified negative** (see below): the investigation completed
 and its answer is that no equivalent mechanism exists, so the capability stays
 `false` permanently unless upstream ZMOD documentation changes that. Gate 6 is
-**blocked by gate 1** rather than awaiting its own hardware run. Gates 1–3 remain
-genuinely open and all three require `printer-ad5x-a`.
+**blocked by gate 1** rather than awaiting its own hardware run. Gate 1 is
+**partially verified** — the direct start path is confirmed, the multi-colour
+path is not — and gates 2–3 remain genuinely open, all requiring
+`printer-ad5x-a`.
 
 One **separate** item — the camera trust rule — *was* verified on `printer-adventurer-a`
 and did change the spec. See "Camera trust rule" below.
@@ -60,6 +62,93 @@ command. The gate is therefore keyed on the live object list
 (`printStartOverridden`), not on the model, which also covers a **5M Pro running
 ZMOD** — that machine uses the Adventurer connector and would otherwise have
 been left ungated.
+
+---
+
+## 1a. Direct start path — VERIFIED POSITIVE 2026-08-30 (`printer-ad5x-a`, ZMOD 1.7.1-53)
+
+**`SDCARD_PRINT_FILE` starts a virtual-SD job unattended. No touchscreen
+confirmation is required.**
+
+### The hypothesis this refuted
+
+The gate was written on the reasoning: *"ZMOD overrides `SDCARD_PRINT_FILE`, and
+`_IFS_COLORS_PRINT` calls `BASE_SDCARD_PRINT_FILE` instead, therefore the
+override probably prompts."* That inferred behaviour from the **existence** of an
+override rather than its contents — the mistake this document exists to prevent.
+
+Klipper's own resolved config (`/printer/objects/query?configfile`, not the
+include files) shows the override is a bare pass-through:
+
+```
+[gcode_macro sdcard_print_file]
+  rename_existing: BASE_SDCARD_PRINT_FILE
+  gcode: BASE_SDCARD_PRINT_FILE {rawparams}
+```
+
+The MD5 check, the `action:prompt_*` dialogs and the IFS colour flow all live in
+a **separately named** macro, `_ZSDCARD_PRINT_FILE`, which nothing in the config
+calls — it is invoked by the touchscreen/Fluidd UI. The two paths are distinct.
+
+### Test performed
+
+A purpose-built probe was uploaded, run, and deleted. Contents — no extrusion, no
+heating, no leveling, no tool change:
+
+```gcode
+G90 / M83 / G28 / G1 Z10 F600 / M400 / G4 P2000 / M84
+```
+
+573 bytes, sha256 `c41bd4015b0c1506a28925614bbd8c260a05114d22646ec5b3e85d7fc8b276c4`,
+uploaded to `gcodes` root with `print=false` (Moonraker confirmed
+`print_started: false`), content verified byte-identical after round-trip.
+
+**Command sent (this one only — no `BASE_SDCARD_PRINT_FILE`, no fallback):**
+
+```
+POST /printer/gcode/script?script=SDCARD_PRINT_FILE FILENAME="snapcon-gate1-probe.gcode"
+```
+
+**Observed:**
+
+```
+t= 0.1s  HTTP 200 {"result":"ok"}
+t= 1.4s  print_stats=printing  virtual_sdcard.is_active=true  homed_axes="xyz"
+         nozzle 24.6C target 0   bed 23.4C target 0
+t=23.7s  print_stats=complete   progress=1.00   heaters still target 0
+```
+
+**Touchscreen (operator at the machine):** no dialog or confirmation at start;
+the panel showed "print complete" at the end — the normal end-of-job message.
+
+**Cleanup:** probe deleted (`http=200`), file count returned to 16, printer left
+`complete` / `Ready`, axes unhomed, heaters off.
+
+### What this establishes — and what it does not
+
+**Establishes:** `SDCARD_PRINT_FILE` reaches `BASE_SDCARD_PRINT_FILE` and starts
+a job without invoking `_ZSDCARD_PRINT_FILE` or any confirmation. `G28` ran, so
+motion began unattended. Heaters were never commanded.
+
+**Does not establish** that a real sliced multi-colour job behaves the same. Such
+files go through `_ZSDCARD_PRINT_FILE` with `CHECK_MD5` and `_IFS_COLORS`, which
+this probe never reached. The probe also carried **no slicer metadata**, so it
+cannot speak for files that do.
+
+### Why the capability still ships gated
+
+`printStartOverridden` refuses whenever `gcode_macro SDCARD_PRINT_FILE` exists in
+the object list. On this firmware that is now demonstrably **over-broad for a
+plain single-colour start** — but it is deliberately left in place:
+
+- the probe carried no metadata, so a real file may route differently;
+- the check is coarse and cannot distinguish a pass-through override from a
+  genuinely prompting one on some other ZMOD build;
+- an AD5X's realistic use is multi-colour, which is precisely the untested path.
+
+Loosening this needs a narrower signal than "is the macro present", designed
+deliberately, and gates 2–3 resolved first. **No capability was changed as a
+result of this verification.**
 
 ---
 
