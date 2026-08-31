@@ -151,7 +151,11 @@ test("both FlashForge connectors route their print through the confirmation, not
   const path = require("path");
   const ad5x = fs.readFileSync(path.join(__dirname, "..", "..", "connectors", "flashforge-ad5x.js"), "utf8");
   const utils = fs.readFileSync(path.join(__dirname, "..", "..", "connectors", "flashforge-utils.js"), "utf8");
-  assert.match(ad5x, /issuePrintAndConfirm\(p, body\)/);
-  assert.doesNotMatch(ad5x, /ffPost\(p, "\/printGcode"/, "AD5X must not bypass the confirmation");
+  // Matches the CALL, not the argument expression: the printer passed in is now
+  // endpoint-resolved (asNative(p)) so native operations use the native port
+  // rather than whatever is stored. Pinning the old literal argument made this
+  // test fail on a change that did not alter what it exists to protect.
+  assert.match(ad5x, /issuePrintAndConfirm\(\s*(asNative\(p\)|p)\s*,\s*body\s*\)/);
+  assert.doesNotMatch(ad5x, /ffPost\((asNative\(p\)|p), "\/printGcode"/, "AD5X must not bypass the confirmation");
   assert.match(utils, /startPrintFile = \(p, filename\) => issuePrintAndConfirm\(/);
 });

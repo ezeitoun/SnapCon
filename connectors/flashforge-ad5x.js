@@ -20,7 +20,13 @@ exports.brand = "FlashForge";
 // exposed only because a firmware mod (ZMOD) takes 8898 down and serves
 // Moonraker on 7125 instead. Stored URLs stay host-only, so existing configs
 // are byte-identical.
-exports.address = { scheme: "http", defaultPort: 8898, portEditable: true, required: true };
+// NO defaultPort, deliberately. Each transport applies its own port (see
+// forTransport below). A default here is worse than useless: the Settings
+// row pre-fills a new printer's port with it, which persisted ":8898" into
+// the stored URL and made auto-detection probe 8898 for BOTH transports,
+// reporting a healthy modded printer as offline. The port stays editable as
+// the advanced override, and is authoritative under a pin.
+exports.address = { scheme: "http", defaultPort: null, portEditable: true, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,
@@ -49,9 +55,26 @@ exports.capabilities = {
 // An AD5X runs either stock firmware (native API on 8898) or ZMOD, which takes
 // 8898 down and serves Moonraker on 7125. flashforge-mode.js owns the decision;
 // this file supplies the two liveness probes and every AD5X-specific meaning.
+// ---- transport endpoints ----
+// Each transport talks to its own port. `resolveEndpoint` decides which, given
+// the pin and whatever port is stored (see its comment for the full rule); this
+// wraps the printer so BOTH detection and every later operation use the same
+// resolved endpoint. Without that, a legacy printer stored as ":8898" would
+// detect Moonraker on 7125 and then quietly send pause/cancel/camera back to
+// 8898 — a split brain that reads as online but cannot be controlled.
+//
+// mode.* always receives the ORIGINAL printer: its cache is keyed on p.id and
+// invalidates on p.url change, so handing it a rewritten url would drop the
+// entry on every call.
+const NATIVE_PORT = "8898", MOONRAKER_PORT = "7125";
+const forTransport = (p, want) =>
+  ({ ...p, url: fm.resolveEndpoint(p, { want, nativePort: NATIVE_PORT, moonrakerPort: MOONRAKER_PORT }) });
+const asNative = p => forTransport(p, "native");
+const asMoon = p => forTransport(p, "moonraker");
+
 const modeProbes = p => ({
-  native: () => ff.ffPost(p, "/detail", {}, 3500),
-  moonraker: () => fm.ping(p, 3500)
+  native: () => ff.ffPost(asNative(p), "/detail", {}, 3500),
+  moonraker: () => fm.ping(asMoon(p), 3500)
 });
 
 // The four IFS slot sensors, as Klipper object names. Both this prefix and a
@@ -83,10 +106,10 @@ function moonrakerCaps(extra) {
 // FFMInfo block, so it proves nothing about a material station).
 async function buildMoonrakerProfile(p) {
   let objects = [];
-  try { objects = await fm.listObjects(p); } catch { objects = []; }
+  try { objects = await fm.listObjects(asMoon(p)); } catch { objects = []; }
   const ifs = objects.includes(IFS_PORT(1));
   let cameraUrl = null;
-  try { cameraUrl = await fm.resolveWebcam(p); } catch { cameraUrl = null; }
+  try { cameraUrl = await fm.resolveWebcam(asMoon(p)); } catch { cameraUrl = null; }
   return {
     transport: "moonraker", ifs, cameraUrl,
     capabilities: moonrakerCaps({
@@ -117,9 +140,9 @@ async function probeMoonraker(p) {
   if (!mode.getProfile(p)) mode.setProfile(p, prof);
   // The IFS terms ride along on the one status query when there is an IFS to
   // read, and are omitted entirely when there isn't — no wasted request.
-  const { status, state } = await fm.probeCommon(p, prof.ifs ? IFS_OBJECTS : []);
+  const { status, state } = await fm.probeCommon(asMoon(p), prof.ifs ? IFS_OBJECTS : []);
   if (!prof.ifs) return { ...state, heads: [], activeExt: null };
-  const cfg = await fm.readConfigJson(p, "Adventurer5M.json");
+  const cfg = await fm.readConfigJson(asMoon(p), "Adventurer5M.json");
   return {
     ...state,
     heads: decodeMoonrakerHeads(status, cfg && cfg.FFMInfo),
@@ -171,7 +194,7 @@ exports.getCapabilities = getCapabilities;
 // ---- native path (unchanged behaviour) ----
 async function probeNative(p) {
   try {
-    const d = await ff.ffDetail(p);
+    const d = await ff.ffDetail(asNative(p));
     mode.noteSuccess(p);
     if (!mode.getProfile(p)) mode.setProfile(p, { transport: "native", capabilities: exports.capabilities });
     const base = ff.decodeCommonStatus(p, d);
@@ -219,14 +242,14 @@ async function currentMode(p) {
 
 // Routes one operation to the transport actually in use.
 const byMode = (nativeFn, moonFn) => async (p, ...args) =>
-  (await currentMode(p)) === "moonraker" ? moonFn(p, ...args) : nativeFn(p, ...args);
+  (await currentMode(p)) === "moonraker" ? moonFn(asMoon(p), ...args) : nativeFn(asNative(p), ...args);
 
 // Moonraker-only: these have no native :8898 equivalent, so the native branch
 // says so plainly instead of failing obscurely. getCapabilities reports them
 // false in native mode, so this is defence in depth, not the usual path.
 const moonrakerOnly = (what, fn) => async (p, ...args) => {
   if ((await currentMode(p)) !== "moonraker") throw new Error(what + " is not available on this printer's stock firmware");
-  return fn(p, ...args);
+  return fn(asMoon(p), ...args);
 };
 
 exports.uploadFile = byMode(ff.uploadFile, http.uploadFile);
@@ -241,8 +264,10 @@ exports.eject = byMode(ff.eject, http.eject);
 exports.estop = async p => {
   const first = (await currentMode(p)) === "moonraker" ? http.estop : ff.estop;
   const second = first === http.estop ? ff.estop : http.estop;
-  try { return await first(p); }
-  catch (e) { try { return await second(p); } catch { throw e; } }
+  const firstP = first === http.estop ? asMoon(p) : asNative(p);
+  const secondP = second === http.estop ? asMoon(p) : asNative(p);
+  try { return await first(firstP); }
+  catch (e) { try { return await second(secondP); } catch { throw e; } }
 };
 exports.bedTemp = byMode(ff.bedTemp, http.bedTemp);
 
@@ -274,7 +299,7 @@ async function applyHeadMappingMoonraker(p, tools, map) {
   for (const t of tools) {
     const tool = intInRange(t, 0, 15, "tool");
     const slot = intInRange(map[t], 0, 3, "slot") + 1; // our indexes are 0-based; IFS ports are 1-based
-    await fm.sendMacro(p, `_IFS_COLORS_ASSIGN TOOL=${tool} PORT=${slot} DIALOG=0`);
+    await fm.sendMacro(asMoon(p), `_IFS_COLORS_ASSIGN TOOL=${tool} PORT=${slot} DIALOG=0`);
   }
 }
 
@@ -337,8 +362,8 @@ async function startPrintFileNative(p, filename) {
     // the target slot right now). Previously sent as blank strings, which the
     // documented example never shows — fetch the real values instead.
     const [gcodeList, detail] = await Promise.all([
-      ff.ffPost(p, "/gcodeList", {}, 8000).catch(() => null),
-      ff.ffDetail(p).catch(() => null)
+      ff.ffPost(asNative(p), "/gcodeList", {}, 8000).catch(() => null),
+      ff.ffDetail(asNative(p)).catch(() => null)
     ]);
     const fileDetail = gcodeList && Array.isArray(gcodeList.gcodeListDetail)
       ? gcodeList.gcodeListDetail.find(f => f.gcodeFileName === filename) : null;
@@ -361,7 +386,7 @@ async function startPrintFileNative(p, filename) {
   // silently discards after an upload (see that function's comment). This
   // connector builds a different body but hits the identical endpoint, so it
   // needs the identical confirmation.
-  return ff.issuePrintAndConfirm(p, body);
+  return ff.issuePrintAndConfirm(asNative(p), body);
 }
 exports.applyHeadMapping = applyHeadMapping;
 exports.startPrintFile = startPrintFile;
@@ -369,7 +394,7 @@ exports.startPrintFile = startPrintFile;
 // action: 0=load, 1=unload, 2=cancel; slot is 1-based (our extruder indexes are 0-based).
 async function unloadFilament(p, extruders) {
   for (const e of extruders) {
-    await ff.ffControl(p, "ms_cmd", { action: 1, slot: parseInt(e, 10) + 1 });
+    await ff.ffControl(asNative(p), "ms_cmd", { action: 1, slot: parseInt(e, 10) + 1 });
   }
 }
 exports.unloadFilament = unloadFilament;
@@ -443,13 +468,13 @@ function nearestPaletteColor(hex) {
 // actually got applied (after palette-snapping) so the caller can tell the
 // user if it differs from what they picked.
 async function setFilamentColor(p, extruderIndex, hex) {
-  const d = await ff.ffDetail(p);
+  const d = await ff.ffDetail(asNative(p));
   const ms = d.matlStationInfo;
   const slot = extruderIndex + 1;
   const current = ms && Array.isArray(ms.slotInfos) ? ms.slotInfos.find(s => s.slotId === slot) : null;
   const mt = (current && current.materialName) || "PLA";
   const snapped = nearestPaletteColor(normHex(hex) || "#FFFFFF");
-  await ff.ffControl(p, "msConfig_cmd", { slot, mt, rgb: snapped.replace(/^#/, "") });
+  await ff.ffControl(asNative(p), "msConfig_cmd", { slot, mt, rgb: snapped.replace(/^#/, "") });
   return snapped;
 }
 exports.setFilamentColor = setFilamentColor;
@@ -462,12 +487,19 @@ exports.getFileMetadata = byMode(ff.getFileMetadata, http.getFileMetadata);
 // Native derives its stream URL from the printer's own host already
 // (flashforge-utils getCameraSnapshot). The Moonraker branch goes through the
 // verified, host-locked, redirect-bounded path in flashforge-moonraker.js.
-exports.getCameraSnapshot = byMode(ff.getCameraSnapshot, async p => {
+// NOT byMode: this needs the profile, and byMode hands its moonFn a printer
+// whose url has already been rewritten to the resolved endpoint. mode.* keys on
+// p.id and invalidates on a p.url change, so looking the profile up with that
+// rewritten printer would DELETE the cache entry on every snapshot. mode.* gets
+// the original; only the transport call gets the rewritten one.
+exports.getCameraSnapshot = async p => {
+  if ((await currentMode(p)) !== "moonraker") return ff.getCameraSnapshot(asNative(p));
   const prof = mode.getProfile(p);
-  const url = (prof && prof.cameraUrl) || await fm.resolveWebcam(p);
+  const mp = asMoon(p);
+  const url = (prof && prof.cameraUrl) || await fm.resolveWebcam(mp);
   if (!url) throw new Error("No camera detected for this printer");
-  return fm.fetchSnapshot(p, url);
-});
+  return fm.fetchSnapshot(mp, url);
+};
 
 // ---- Moonraker-only capabilities ----
 // Advertised by moonrakerCaps(), so they must exist — otherwise the UI offers a

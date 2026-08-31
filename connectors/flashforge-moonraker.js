@@ -25,6 +25,35 @@ const baseUrl = p => {
   return u;
 };
 
+// Which host:port a given transport should talk to, for one printer.
+//
+// AUTO   — a stored port equal to a CONVENTIONAL transport default tells Auto
+//          nothing it does not already know, so it is not authoritative and
+//          each transport uses its own default. Any other port is information
+//          Auto lacks, and IS authoritative for both transports.
+// PINNED — the stored port is ALWAYS authoritative, including unusual pairings
+//          such as Moonraker on 8898 or native on 7125. That is the escape
+//          hatch for a genuinely remapped service.
+//
+// The two conventional ports are supplied by the CALLER, so this module encodes
+// no belief about which protocol may live on which port. Nothing here says
+// "8898 can only be native"; the pinned rows exist to prove it.
+//
+// Why the auto exception exists at all: SnapCon's own Settings row used to
+// pre-fill 8898 into every FlashForge printer (address.defaultPort), so stored
+// 8898s are indistinguishable from deliberate ones and cannot be migrated. See
+// docs/superpowers/specs/flashforge-dual-transport-design.md.
+function resolveEndpoint(p, { want, nativePort, moonrakerPort }) {
+  const def = String(want === "native" ? nativePort : moonrakerPort);
+  let u;
+  try { u = new URL(String(p.url).replace(/\/+$/, "")); } catch { return String(p.url); }
+  const stored = u.port;
+  const pinned = p.transport === "native" || p.transport === "moonraker";
+  const conventional = stored === String(nativePort) || stored === String(moonrakerPort);
+  u.port = pinned ? (stored || def) : ((!stored || conventional) ? def : stored);
+  return u.toString().replace(/\/+$/, "");
+}
+
 // Liveness only. Used as the moonraker thunk handed to flashforge-mode.resolve()
 // — it answers "is there a Moonraker here", nothing more.
 async function ping(p, ms = 3500) {
@@ -260,7 +289,7 @@ const sendMacro = (p, script, ms) => http.sendGcode(p, script, ms);
 function _resetCaches() { configCache.clear(); }
 
 module.exports = {
-  baseUrl, ping, probeCommon, listObjects,
+  baseUrl, resolveEndpoint, ping, probeCommon, listObjects,
   resolveWebcam, fetchSnapshot, onPrinterHost, sameHost, MAX_REDIRECTS,
   readConfigJson, sendMacro,
   _resetCaches

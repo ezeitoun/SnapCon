@@ -21,7 +21,13 @@ exports.brand = "FlashForge";
 // existing configs are byte-identical. The port is editable now only because a
 // firmware mod (ZMOD, Forge-X) takes 8898 down and serves Moonraker on 7125
 // instead — the port field is the escape hatch when neither default fits.
-exports.address = { scheme: "http", defaultPort: 8898, portEditable: true, required: true };
+// NO defaultPort, deliberately. Each transport applies its own port (see
+// forTransport below). A default here is worse than useless: the Settings
+// row pre-fills a new printer's port with it, which persisted ":8898" into
+// the stored URL and made auto-detection probe 8898 for BOTH transports,
+// reporting a healthy modded printer as offline. The port stays editable as
+// the advanced override, and is authoritative under a pin.
+exports.address = { scheme: "http", defaultPort: null, portEditable: true, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: false, excludeObject: false, autoLevel: false,
   unloadFilament: false, firmwareInfo: false, inventory: false, discovery: false,
@@ -38,9 +44,26 @@ exports.capabilities = {
 // Forge-X — which takes 8898 down and serves Moonraker on 7125. The decision
 // lives in flashforge-mode.js; this file only supplies the two liveness probes
 // and interprets the answer.
+// ---- transport endpoints ----
+// Each transport talks to its own port. `resolveEndpoint` decides which, given
+// the pin and whatever port is stored (see its comment for the full rule); this
+// wraps the printer so BOTH detection and every later operation use the same
+// resolved endpoint. Without that, a legacy printer stored as ":8898" would
+// detect Moonraker on 7125 and then quietly send pause/cancel/camera back to
+// 8898 — a split brain that reads as online but cannot be controlled.
+//
+// mode.* always receives the ORIGINAL printer: its cache is keyed on p.id and
+// invalidates on p.url change, so handing it a rewritten url would drop the
+// entry on every call.
+const NATIVE_PORT = "8898", MOONRAKER_PORT = "7125";
+const forTransport = (p, want) =>
+  ({ ...p, url: fm.resolveEndpoint(p, { want, nativePort: NATIVE_PORT, moonrakerPort: MOONRAKER_PORT }) });
+const asNative = p => forTransport(p, "native");
+const asMoon = p => forTransport(p, "moonraker");
+
 const modeProbes = p => ({
-  native: () => ff.ffPost(p, "/detail", {}, 3500),
-  moonraker: () => fm.ping(p, 3500)
+  native: () => ff.ffPost(asNative(p), "/detail", {}, 3500),
+  moonraker: () => fm.ping(asMoon(p), 3500)
 });
 
 // What Moonraker mode can actually do on this model. Derived from what the
@@ -73,11 +96,11 @@ async function buildMoonrakerProfile(p) {
   // always reports objects, so an empty list means the read did not succeed.
   let printStartOverridden = null;
   try {
-    const objects = await fm.listObjects(p);
+    const objects = await fm.listObjects(asMoon(p));
     if (objects.length) printStartOverridden = objects.includes("gcode_macro SDCARD_PRINT_FILE");
   } catch { printStartOverridden = null; }
   let cameraUrl = null;
-  try { cameraUrl = await fm.resolveWebcam(p); } catch { cameraUrl = null; }
+  try { cameraUrl = await fm.resolveWebcam(asMoon(p)); } catch { cameraUrl = null; }
   return {
     transport: "moonraker",
     printStartOverridden,
@@ -99,7 +122,7 @@ async function probe(p) {
   const m = d.mode;
   if (m === "native") {
     try {
-      const d = await ff.ffDetail(p);
+      const d = await ff.ffDetail(asNative(p));
       mode.noteSuccess(p);
       if (!mode.getProfile(p)) mode.setProfile(p, { transport: "native", capabilities: exports.capabilities });
       return { ...ff.decodeCommonStatus(p, d), heads: [] };
@@ -109,7 +132,7 @@ async function probe(p) {
     }
   }
   try {
-    const { state } = await fm.probeCommon(p);
+    const { state } = await fm.probeCommon(asMoon(p));
     mode.noteSuccess(p);
     if (!mode.getProfile(p)) mode.setProfile(p, await buildMoonrakerProfile(p));
     return state;
@@ -155,14 +178,14 @@ async function currentMode(p) {
 
 // Routes one operation to the transport actually in use.
 const byMode = (nativeFn, moonFn) => async (p, ...args) =>
-  (await currentMode(p)) === "moonraker" ? moonFn(p, ...args) : nativeFn(p, ...args);
+  (await currentMode(p)) === "moonraker" ? moonFn(asMoon(p), ...args) : nativeFn(asNative(p), ...args);
 
 // Moonraker-only: these have no native :8898 equivalent, so the native branch
 // says so plainly instead of failing obscurely. getCapabilities reports them
 // false in native mode, so this is defence in depth, not the usual path.
 const moonrakerOnly = (what, fn) => async (p, ...args) => {
   if ((await currentMode(p)) !== "moonraker") throw new Error(what + " is not available on this printer's stock firmware");
-  return fn(p, ...args);
+  return fn(asMoon(p), ...args);
 };
 
 exports.uploadFile = byMode(ff.uploadFile, http.uploadFile);
@@ -177,8 +200,10 @@ exports.eject = byMode(ff.eject, http.eject);
 exports.estop = async p => {
   const first = (await currentMode(p)) === "moonraker" ? http.estop : ff.estop;
   const second = first === http.estop ? ff.estop : http.estop;
-  try { return await first(p); }
-  catch (e) { try { return await second(p); } catch { throw e; } }
+  const firstP = first === http.estop ? asMoon(p) : asNative(p);
+  const secondP = second === http.estop ? asMoon(p) : asNative(p);
+  try { return await first(firstP); }
+  catch (e) { try { return await second(secondP); } catch { throw e; } }
 };
 exports.bedTemp = byMode(ff.bedTemp, http.bedTemp);
 
@@ -188,12 +213,19 @@ exports.getFileMetadata = byMode(ff.getFileMetadata, http.getFileMetadata);
 // Native derives its stream URL from the printer's own host already
 // (flashforge-utils getCameraSnapshot). The Moonraker branch goes through the
 // verified, host-locked, redirect-bounded path in flashforge-moonraker.js.
-exports.getCameraSnapshot = byMode(ff.getCameraSnapshot, async p => {
+// NOT byMode: this needs the profile, and byMode hands its moonFn a printer
+// whose url has already been rewritten to the resolved endpoint. mode.* keys on
+// p.id and invalidates on a p.url change, so looking the profile up with that
+// rewritten printer would DELETE the cache entry on every snapshot. mode.* gets
+// the original; only the transport call gets the rewritten one.
+exports.getCameraSnapshot = async p => {
+  if ((await currentMode(p)) !== "moonraker") return ff.getCameraSnapshot(asNative(p));
   const prof = mode.getProfile(p);
-  const url = (prof && prof.cameraUrl) || await fm.resolveWebcam(p);
+  const mp = asMoon(p);
+  const url = (prof && prof.cameraUrl) || await fm.resolveWebcam(mp);
   if (!url) throw new Error("No camera detected for this printer");
-  return fm.fetchSnapshot(p, url);
-});
+  return fm.fetchSnapshot(mp, url);
+};
 
 // ---- Moonraker-only capabilities ----
 // These are advertised by moonrakerCaps(), so they must exist. Without them the
@@ -210,7 +242,11 @@ exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteRemoteFile);
 // the thing that may prompt on the touchscreen, and discovering it at runtime
 // would mean a queue job hanging overnight. An untouched built-in is stock
 // Klipper, which klipper-moonraker and creality-klipper already send.
-exports.startPrintFile = byMode(ff.startPrintFile, async (p, filename) => {
+// NOT byMode, for the same reason as getCameraSnapshot above: this reads the
+// profile, and byMode would hand it a url-rewritten printer that invalidates
+// the cache entry on lookup.
+exports.startPrintFile = async (p, filename) => {
+  if ((await currentMode(p)) !== "moonraker") return ff.startPrintFile(asNative(p), filename);
   // Only POSITIVE evidence that the firmware leaves the built-in command alone
   // permits a print start. An absent profile means "not looked at yet", not
   // "safe", so resolve it through the established profile-building path first.
@@ -233,8 +269,8 @@ exports.startPrintFile = byMode(ff.startPrintFile, async (p, filename) => {
       "Start this print from the printer or Fluidd."
     );
   }
-  return http.startPrintFile(p, filename);
-});
+  return http.startPrintFile(asMoon(p), filename);
+};
 // Degrades to an empty palette on this printer (confirmed live) — plain
 // single-material files have no gcodeListDetail to read from, only AD5X
 // multi-material jobs do — but still needs to exist so the client's file
