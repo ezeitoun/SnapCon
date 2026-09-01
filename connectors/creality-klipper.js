@@ -258,10 +258,24 @@ function fetchCfsStatus(p) {
       const payload = JSON.stringify({ method: "get", params: { boxsInfo: 1 } });
       const timer = setTimeout(() => { try { ws.close(); } catch {} finish(null); }, 2500);
       ws.onopen = () => ws.send(payload);
+      // The printer streams status asynchronously and answers this query a few
+      // frames later — captured live on a SPARKX i7 with a CFS attached: 33
+      // messages over 20s, boxsInfo in exactly one of them (index 2, ~50ms in).
+      // Resolving on the FIRST message therefore read a status frame, found no
+      // boxsInfo and reported a working CFS as absent. Keep listening until the
+      // answer arrives or the existing timeout fires.
+      //
+      // Note the status frame also carries cfsConnect: 0 on a printer whose CFS
+      // is plainly attached and enumerating slots, so that field is deliberately
+      // not used as a presence check — the boxsInfo payload itself is.
       ws.onmessage = ev => {
+        if (done) return;                   // already answered — cleanup is once-only
+        let boxsInfo = null;
+        try { boxsInfo = JSON.parse(ev.data).boxsInfo || null; } catch { boxsInfo = null; }
+        if (!boxsInfo) return;              // status noise — keep waiting
         clearTimeout(timer);
         try { ws.close(); } catch {}
-        try { finish(JSON.parse(ev.data).boxsInfo || null); } catch { finish(null); }
+        finish(boxsInfo);
       };
       ws.onerror = () => { clearTimeout(timer); finish(null); };
       ws.onclose = () => { clearTimeout(timer); finish(null); };
