@@ -6,7 +6,10 @@
 function lookupKlipperError(code, msg){
   if(!code&&!msg) return null;
   const entry=code?ERROR_CODES[code]:null;
-  return{code, title:entry?entry.t:(code||t("fleet.error_panel.unknown_error_title")), description:entry?entry.d:(msg||code||''), url:entry?entry.u:''};
+  // An entry with an EMPTY description defers to the live message. Only the
+  // two KLIPPER_* entries use that; all 413 Snapmaker codes carry curated
+  // text and are unaffected (pinned by test/klipperErrorPanel.test.js).
+  return{code, title:entry?entry.t:(code||t("fleet.error_panel.unknown_error_title")), description:(entry&&entry.d)||msg||code||'', url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
 const VERSION = "0.6.0";

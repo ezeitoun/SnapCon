@@ -1,4 +1,12 @@
 ﻿const ERROR_CODES={
+  // Klipper machine-health faults, emitted by http-utils.js's klipperFault()
+  // for every Klipper-family connector (see docs/TODO.md item 9b). Not
+  // Snapmaker codes -- these are the one brand-neutral pair in this table.
+  // d is intentionally empty: the live webhooks.state_message is the real
+  // diagnostic ("Lost communication with MCU 'mcu'", plus the FIRMWARE_RESTART
+  // remedy), and a canned description here would hide it.
+  "KLIPPER_SHUTDOWN":{t:"Klipper Shutdown",d:"",u:""},
+  "KLIPPER_ERROR":{t:"Klipper Error",d:"",u:""},
   "0003-0522-0000-0000":{t:"System Anomaly",d:"See anomaly details. Contact technical support.",u:"https://wiki.snapmaker.com/en/snapmaker_u1/troubleshooting/0003-0522-0000-0002or0000"},
   "0003-0522-0000-0001":{t:"System Anomaly",d:"Contact technical support.",u:""},
   "0003-0522-0000-0002":{t:"System Anomaly",d:"Printer stopped. See anomaly details. Contact technical support.",u:"https://wiki.snapmaker.com/en/snapmaker_u1/troubleshooting/0003-0522-0000-0002or0000"},
