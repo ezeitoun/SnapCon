@@ -82,7 +82,7 @@ exports.getCapabilities = getCapabilities;
 // klipper-moonraker.js) so this connector stays independently editable when
 // K2 CFS support lands, without touching another brand's file.
 async function probe(p) {
-  const url = http.baseUrl(p) + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&fan&gcode_move&toolhead&exclude_object";
+  const url = http.baseUrl(p) + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&fan&gcode_move&toolhead&exclude_object&webhooks";
   try {
     const { ok, status, json: j } = await http.fetchJSONTimeout(url, 3500);
     if (!ok) return { name: p.name, online: false, error: "HTTP " + status };
@@ -103,11 +103,18 @@ async function probe(p) {
     const plate = (eo.objects && eo.objects.length)
       ? { total: eo.objects.length, excluded: (eo.excluded_objects || []).length, current: eo.current_object || null }
       : null;
+    // Klippy machine health outranks everything below. webhooks rides the
+    // same query (no extra request); http.klipperFault() is the one shared
+    // rule -- see its comment for why a shutdown must beat a frozen
+    // print_stats. Stale filename/progress are deliberately left on the
+    // payload as diagnostics; suppressing the active-print UI is the
+    // frontend's job, driven by message/errorCode.
+    const fault = http.klipperFault(st);
     const result = {
       name: p.name, online: true,
-      state: ps.state || "unknown",
-      message: ps.message || "",
-      errorCode: "",
+      state: fault ? fault.state : (ps.state || "unknown"),
+      message: fault ? fault.message : (ps.message || ""),
+      errorCode: fault ? fault.errorCode : "",
       filename: ps.filename || "",
       // display_status.progress tracks real gcode EXECUTION; virtual_sdcard.
       // progress tracks how far Klipper's SD-card reader has read AHEAD into

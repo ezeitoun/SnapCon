@@ -31,6 +31,40 @@ async function fetchJSONTimeout(url, ms = 3500) {
   } finally { clearTimeout(id); }
 }
 
+// Klipper machine health, normalized once for every Klipper-family connector.
+//
+// Klippy's `webhooks` object says whether the MACHINE is alive; print_stats
+// says what the JOB was doing. Those are independent, and when Klipper shuts
+// down mid-print the job fields simply freeze at plausible-looking values --
+// confirmed live on a SPARKX i7 sitting in webhooks.state "shutdown" with a
+// real state_message while SnapCon showed it idle. Health therefore wins
+// absolutely: a fault here overrides state, however convincing print_stats,
+// virtual_sdcard, filename or progress still look.
+//
+// Returns null when there is no fault, so a caller can simply skip the
+// override. 'ready' MUST return null even though state_message is populated
+// ("Printer is ready" on all 18 machines here) -- p.message is the flag the
+// fleet card uses to suppress its progress/thumbnail/lanes block, so leaking
+// it on a healthy printer would blank the whole fleet.
+//
+// 'startup' is deliberately not a fault: Moonraker refuses object queries
+// while Klippy is not ready, so that case already resolves through the
+// caller's own !ok -> online:false path. An unrecognised future value is left
+// alone rather than guessed at.
+//
+// Distinct from Klippy being DISCONNECTED (process gone): that fails the query
+// outright and is correctly reported as offline. Do not merge the two.
+function klipperFault(st) {
+  const w = st && st.webhooks;
+  if (!w || typeof w !== "object") return null;
+  if (w.state !== "shutdown" && w.state !== "error") return null;
+  return {
+    state: "error",
+    errorCode: w.state === "shutdown" ? "KLIPPER_SHUTDOWN" : "KLIPPER_ERROR",
+    message: String(w.state_message || "").trim()
+  };
+}
+
 // POST to a printer's Moonraker endpoint. Throws a user-showable error on
 // network failure, timeout, or a non-2xx response.
 // `ms` defaults to a short bound suitable for a POST-and-forget gcode
@@ -585,7 +619,7 @@ function pickIface(net) {
 }
 
 module.exports = {
-  baseUrl, fetchTimeout, fetchJSONTimeout, moonrakerPost, sendGcode,
+  baseUrl, fetchTimeout, fetchJSONTimeout, klipperFault, moonrakerPost, sendGcode,
   uploadWithProgress, uploadFile,
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile,
   getPlate, excludeObject,

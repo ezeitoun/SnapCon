@@ -104,11 +104,17 @@ function normalizeU1State(p, st) {
       if (parsed.msg) errorMsg = parsed.msg;
     } catch { errorMsg = ps.message; }
   }
+  // Klippy machine health outranks the job fields, identically to the three
+  // HTTP connectors -- one shared rule, four call sites. A code the printer
+  // itself reported is more specific than the generic Klipper one, so only the
+  // state is overridden in that case.
+  const fault = http.klipperFault(st);
+  const useFault = fault && !errorCode;
   return {
     name: p.name, online: true,
-    state: ps.state || "unknown",
-    message: errorMsg,
-    errorCode,
+    state: fault ? fault.state : (ps.state || "unknown"),
+    message: useFault ? fault.message : errorMsg,
+    errorCode: errorCode || (fault ? fault.errorCode : ""),
     filename: ps.filename || "",
     progress: typeof (st.virtual_sdcard || {}).progress === "number" ? st.virtual_sdcard.progress : (typeof ds.progress === "number" ? ds.progress : 0),
     elapsed: typeof ps.print_duration === "number" ? ps.print_duration : null,
@@ -123,13 +129,15 @@ function normalizeU1State(p, st) {
     heads
   };
 }
-exports._internal = { normalizeU1State, decodeHeads };
 
 // ---- per-printer WebSocket status connection ----
 const OBJECTS = {
   print_task_config: null, print_stats: null, display_status: null, virtual_sdcard: null,
   heater_bed: null, extruder: null, extruder1: null, extruder2: null, extruder3: null,
-  fan: null, gcode_move: null, toolhead: null, exclude_object: null
+  fan: null, gcode_move: null, toolhead: null, exclude_object: null,
+  // Klippy health. Verified live 2026-09-07 that printer.objects.subscribe
+  // returns this in its baseline on a real U1.
+  webhooks: null
 };
 
 const CONNECT_TIMEOUT_MS = 5000;
@@ -243,8 +251,34 @@ function handleMessage(p, c, ev) {
     debugLog(p, "status delta: " + JSON.stringify(msg.params[0]));
     mergeStatusDelta(c.rawState, msg.params[0] || {});
   }
-  // Other notifications (notify_klippy_ready, notify_proc_stat_update, ...)
-  // are received but ignored — this connection is status-only.
+  // Klippy lifecycle. These do NOT decide what the printer is -- they only say
+  // the cached subscription state can no longer be trusted, which drops
+  // isHealthy() and sends probe() to the HTTP base connector for a fresh,
+  // authoritative read that runs through the same klipperFault() rule as every
+  // other Klipper connector. Deliberately not synthesizing an error here: that
+  // would both duplicate the normalization rule and erase the distinction
+  // between a shutdown (Moonraker still answers -> online:true, state:"error")
+  // and Klippy being gone (the query itself fails -> online:false).
+  //
+  // This exists because whether Moonraker pushes a `webhooks` status DELTA at
+  // the instant Klippy dies could not be verified without causing a real
+  // shutdown. If it does, the fault surfaces immediately through the delta; if
+  // it does not, this forces the fallback instead of serving a stale "ready".
+  if (msg.method === "notify_klippy_shutdown" || msg.method === "notify_klippy_disconnected") {
+    log(p, "Klippy reported " + msg.method.replace("notify_klippy_", "") + " — cached status no longer trusted, falling back to HTTP");
+    c.haveBaseline = false;
+    return;
+  }
+  // Moonraker drops object subscriptions across a Klippy restart, so without
+  // this the connector would stay in HTTP fallback until the socket happened
+  // to reconnect for some other reason.
+  if (msg.method === "notify_klippy_ready") {
+    log(p, "Klippy ready — re-subscribing for a fresh baseline");
+    subscribe(p, c);
+    return;
+  }
+  // Everything else (notify_proc_stat_update, ...) is ignored — this
+  // connection is status-only.
 }
 
 function scheduleReconnect(p, c) {
@@ -415,3 +449,6 @@ exports.deleteSyncFile = base.deleteSyncFile;
 exports.getCameraSnapshot = base.getCameraSnapshot; // camera is explicitly out of scope — untouched
 exports.getInventory = base.getInventory;
 exports.discoverAt = base.discoverAt;
+
+// exported for tests only
+exports._internal = { normalizeU1State, decodeHeads, OBJECTS, handleMessage, isHealthy, newConn };

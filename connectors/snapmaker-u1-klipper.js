@@ -89,7 +89,7 @@ function decodeHeads(ptc) {
 }
 
 async function probe(p) {
-  const url = http.baseUrl(p) + "/printer/objects/query?print_task_config&print_stats&display_status&virtual_sdcard&heater_bed&extruder&extruder1&extruder2&extruder3&fan&gcode_move&toolhead&exclude_object";
+  const url = http.baseUrl(p) + "/printer/objects/query?print_task_config&print_stats&display_status&virtual_sdcard&heater_bed&extruder&extruder1&extruder2&extruder3&fan&gcode_move&toolhead&exclude_object&webhooks";
   try {
     const { ok, status, json: j } = await http.fetchJSONTimeout(url, 3500);
     if (!ok) return { name: p.name, online: false, error: "HTTP " + status };
@@ -133,11 +133,21 @@ async function probe(p) {
         if (parsed.msg) errorMsg = parsed.msg;
       } catch { errorMsg = ps.message; }
     }
+    // Klippy machine health outranks everything below. webhooks rides the
+    // same query (no extra request); http.klipperFault() is the one shared
+    // rule -- see its comment for why a shutdown must beat a frozen
+    // print_stats. Stale filename/progress are deliberately left on the
+    // payload as diagnostics; suppressing the active-print UI is the
+    // frontend's job, driven by message/errorCode.
+    const fault = http.klipperFault(st);
+    // A code the printer itself reported is more specific than the generic
+    // Klipper one, so it is never overwritten -- only the state is.
+    const useFault = fault && !errorCode;
     return {
       name: p.name, online: true,
-      state: ps.state || "unknown",
-      message: errorMsg,
-      errorCode,
+      state: fault ? fault.state : (ps.state || "unknown"),
+      message: useFault ? fault.message : errorMsg,
+      errorCode: errorCode || (fault ? fault.errorCode : ""),
       filename: ps.filename || "",
       progress: typeof (st.virtual_sdcard || {}).progress === "number" ? st.virtual_sdcard.progress : (typeof ds.progress === "number" ? ds.progress : 0),
       elapsed: typeof ps.print_duration === "number" ? ps.print_duration : null,

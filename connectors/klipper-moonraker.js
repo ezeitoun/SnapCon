@@ -27,7 +27,7 @@ exports.capabilities = {
 // decoding (that's a Snapmaker-only print_stats.message convention) — just
 // the plain text Klipper already puts in print_stats.message.
 async function probe(p) {
-  const url = http.baseUrl(p) + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&fan&gcode_move&toolhead&exclude_object";
+  const url = http.baseUrl(p) + "/printer/objects/query?print_stats&display_status&virtual_sdcard&heater_bed&extruder&fan&gcode_move&toolhead&exclude_object&webhooks";
   try {
     const { ok, status, json: j } = await http.fetchJSONTimeout(url, 3500);
     if (!ok) return { name: p.name, online: false, error: "HTTP " + status };
@@ -48,11 +48,18 @@ async function probe(p) {
     const plate = (eo.objects && eo.objects.length)
       ? { total: eo.objects.length, excluded: (eo.excluded_objects || []).length, current: eo.current_object || null }
       : null;
+    // Klippy machine health outranks everything below. webhooks rides the
+    // same query (no extra request); http.klipperFault() is the one shared
+    // rule -- see its comment for why a shutdown must beat a frozen
+    // print_stats. Stale filename/progress are deliberately left on the
+    // payload as diagnostics; suppressing the active-print UI is the
+    // frontend's job, driven by message/errorCode.
+    const fault = http.klipperFault(st);
     return {
       name: p.name, online: true,
-      state: ps.state || "unknown",
-      message: ps.message || "",
-      errorCode: "",
+      state: fault ? fault.state : (ps.state || "unknown"),
+      message: fault ? fault.message : (ps.message || ""),
+      errorCode: fault ? fault.errorCode : "",
       filename: ps.filename || "",
       progress: typeof (st.virtual_sdcard || {}).progress === "number" ? st.virtual_sdcard.progress : (typeof ds.progress === "number" ? ds.progress : 0),
       elapsed: typeof ps.print_duration === "number" ? ps.print_duration : null,
