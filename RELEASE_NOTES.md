@@ -234,3 +234,26 @@ pick a file, choose the printer, and hold the button to confirm.
 - Downloading firmware from Snapmaker still needs their cloud, so SnapCon does not do it — you
   supply the file.
 
+
+### A Crashed Printer No Longer Looks Idle
+Klipper can shut itself down - a failed command, a lost connection to a control board, a
+thermal fault - and when it does it stops printing but keeps reporting whatever the job was
+last doing. SnapCon read that at face value, so a machine that had crashed mid-print showed as
+**Idle**, or carried on showing a progress bar for a print that had already stopped.
+- **The fleet now shows Error, with the printer's own explanation.** Klipper says what actually
+  failed and how to recover it, and that text is shown on the card instead of a generic message.
+  The progress bar, thumbnail and filament lanes are hidden, because none of them are true any
+  more. The file name is kept - it is useful for working out what was lost.
+- **The print queue will not send work to a faulted printer.** Previously a queued job could be
+  dispatched to a machine that was never going to print it, and the queue would then wait
+  indefinitely for a print that had already died. It now flags the job for your attention
+  instead. As part of this, printers in a state SnapCon cannot positively identify as free are
+  no longer treated as available - if in doubt, it waits rather than starting a job.
+- **Firmware updates are blocked while a printer reports an error**, with a message that points
+  at clearing the fault rather than at stopping a print.
+- **Snapmaker U1 status stays honest if its live connection goes stale.** U1s receive status
+  over a persistent connection; if Klipper shuts down or disconnects underneath it, SnapCon now
+  stops trusting the cached values and re-checks the printer directly rather than continuing to
+  display the last thing it heard.
+
+This covers Snapmaker U1, Creality and generic Klipper/Moonraker printers.
