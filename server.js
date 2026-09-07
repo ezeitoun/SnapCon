@@ -621,6 +621,15 @@ async function firmwareDeployBlockedBy(p) {
     if (st && st.online && (st.state === "printing" || st.state === "paused")) {
       return p.name + " is printing — stop the print before updating firmware";
     }
+    // Checked here as well as in the connectors, not instead of them: this is
+    // the last gate before an irreversible write, and its correctness should
+    // not depend on a mapping that lives in another module. Stated separately
+    // from the printing case because "is printing" would be a lie about a
+    // crashed machine and points the operator at the wrong fix -- a Klipper
+    // shutdown needs FIRMWARE_RESTART, not "stop the print".
+    if (st && st.online && st.state === "error") {
+      return p.name + " is reporting an error — clear the fault before updating firmware";
+    }
   } catch { /* unreachable printer: let the deploy itself report the failure */ }
   return null;
 }
@@ -1313,8 +1322,22 @@ function findPrinterIndex(name) {
   return PRINTERS.findIndex(p => normPrinterName(p.name) === norm);
 }
 
+// The states in which SnapCon may START work on a printer -- queue dispatch,
+// the pendingLoad retry, and both /api/notify-load arms all gate on this.
+//
+// An ALLOWLIST on purpose. This used to exclude only "printing"/"paused",
+// which meant every other state counted as idle -- including "error", so a
+// printer whose Klipper had shut down was handed queued jobs. Failing closed
+// also means a state we have not thought about, or one a future connector
+// introduces, cannot silently authorise starting a job.
+//
+// FlashForge's "busy" is deliberately absent even though it counted as idle
+// before: a dispatch predicate should not call an ambiguous state idle merely
+// to preserve previous behavior. Add it only on hardware evidence that it is
+// safe to dispatch into.
+const DISPATCH_IDLE_STATES = new Set(["standby", "idle", "complete", "cancelled"]);
 async function isPrinterIdle(p) {
-  try { const st = await probeCached(p); return st.online && st.state !== "printing" && st.state !== "paused"; }
+  try { const st = await probeCached(p); return !!(st && st.online) && DISPATCH_IDLE_STATES.has(st.state); }
   catch { return false; }
 }
 async function uploadNotifiedFile(idx, pl) {
