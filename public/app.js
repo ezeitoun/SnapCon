@@ -384,6 +384,24 @@ function statusColorText(p){
   return { statusColor:"var(--ok)", statusTxt:t("printer_status.idle") };
 }
 
+// Whether a printer is free to be sent a file right now -- drives the Send
+// modal's default selection and its row dot.
+//
+// Same trap canEject fell into: 'standby' is what the Klipper connectors
+// actually emit, and 'idle' is only the label statusColorText falls back to for
+// display, so the old p.state==='idle' at both call sites was dead on every
+// real fleet -- nothing was ever pre-checked, and an idle printer got the busy
+// dot beside its own "Idle" text. 'idle' is kept for the same defensive reason
+// canEject keeps it.
+//
+// complete/cancelled are deliberately excluded: statusColorText gives those
+// their own label and colour, so they are not "Idle" rows, and the button is
+// "Idle only".
+function isIdle(p){
+  if(!p||!p.online) return false;
+  return p.state==='standby'||p.state==='idle';
+}
+
 // ---- Camera view: live snapshot elements persist ACROSS renders ----
 // renderFleet() rebuilds every card's innerHTML on every metadata poll tick
 // (every `refreshInterval` seconds, deliberately fast — see startFleetRefresh)
@@ -2226,7 +2244,7 @@ function wireUI(){
   $("sendSelectIdle").addEventListener("click",()=>{
     document.querySelectorAll(".send-chk").forEach(c=>{
       const row=FLEET.find(p=>p.id===c.dataset.id);
-      c.checked=!!(row&&row.online&&row.state==="idle");
+      c.checked=isIdle(row);
     });
   });
   $("sendSelectCompatible").addEventListener("click",()=>{
@@ -6114,7 +6132,7 @@ function closeSendModal(){ $('sendmodal').classList.remove('show'); }
 function renderSendList(){
   const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
   $('sendlist').innerHTML=urlFilterFleet(FLEET).map(p=>{
-    const idle=p.online&&p.state==='idle';
+    const idle=isIdle(p);
     const dot=p.online?(idle?'var(--ok)':'var(--busy)'):'var(--idle)';
     const {statusTxt}=statusColorText(p);
     const incompatible=isCompatiblePrinter(detectedBrand,p.brand)===false;
