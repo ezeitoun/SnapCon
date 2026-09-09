@@ -737,14 +737,29 @@ function applySortUI(){
 
 // ---- File list toggle (hidden by default) ----
 let FILES_OPEN = false;
+let FILES_WERE_OPEN = false;
 function applyFilesOpen(){
+  // Closing the file list DROPS the selection rather than remembering it. A
+  // selection that outlives the list is invisible but still live: it kept
+  // driving the per-card colour->head mapping row, which then reads as
+  // belonging to the printer rather than to a file the operator can no longer
+  // see — reported after an eject, where the mapping stayed on the card.
+  //
+  // Guarded on a real open->closed transition: this function also runs at
+  // startup and from the settings flow, and clearJobSelection() renders the
+  // fleet, which must not happen before the fleet has loaded.
+  //
+  // Safe for the card actions because they are gated differently on purpose.
+  // Upload has nothing to upload without a selection and correctly goes
+  // disabled; Print is NOT gated on it and falls back to offering the
+  // printer's own files, which the tooltips already anticipate.
+  if(FILES_WERE_OPEN && !FILES_OPEN && SELECTED) clearJobSelection();
+  FILES_WERE_OPEN = FILES_OPEN;
   document.body.classList.toggle('showfiles', FILES_OPEN);
   const b = $('filesBtn');
   if(b){ b.title = t(FILES_OPEN ? 'global.topbar.files_hide_title' : 'global.topbar.files_show_title'); }
   // "Selected Model" is picked FROM the file list, so it only makes sense to
-  // show while that list is open — closing it hides the summary too, even
-  // though the selection itself is remembered (reopening brings it right
-  // back, no need to reselect). Orca mode already hides this permanently.
+  // show while that list is open. Orca mode already hides this permanently.
   if(!URL_PRINTER_FILTER){
     // Also suppressed while the Queue dashboard is showing — it replaces
     // the Fleet content area these two belong to, so they'd otherwise
@@ -6635,6 +6650,10 @@ async function ejectFile(printerId){
     const r=await fetch('/api/printctl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({printer:printerId,action:'eject'})});
     if(!r.ok){ const j=await r.json().catch(()=>({})); console.error('Eject failed',j.error); }
   }catch(e){ console.error('Eject error',e.message); }
+  // Refresh the card this just changed, the same way every other action does.
+  // Without it the "Loaded" badge and filename sat stale until whichever poll
+  // happened to come round next.
+  loadFleet();
 }
 
 // ---- Camera snapshot ----
