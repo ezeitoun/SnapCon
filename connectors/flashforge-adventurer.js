@@ -189,10 +189,28 @@ const moonrakerOnly = (what, fn) => async (p, ...args) => {
 };
 
 exports.uploadFile = byMode(ff.uploadFile, http.uploadFile);
-exports.pause = byMode(ff.pause, http.pause);
-exports.resume = byMode(ff.resume, http.resume);
-exports.cancel = byMode(ff.cancel, http.cancel);
-exports.eject = byMode(ff.eject, http.eject);
+// Ordinary print-control commands get an explicit bound, not moonrakerPost's
+// 8s fast-command default. /printer/gcode/script BLOCKS until the script
+// finishes, and CANCEL_PRINT runs the printer's whole end-of-print routine --
+// park the toolhead, cut heaters, retract -- which routinely runs past 8s. The
+// command lands and completes; SnapCon just gave up waiting and reported
+// "did not respond within 8000ms" for a cancel that had actually worked.
+// Reported live on a U1; measured on a SPARKX i7 where Moonraker accepted
+// CANCEL_PRINT at 00:57:05 and Klipper executed it at 00:57:51.
+//
+// estop is the deliberate exception and stays on the short default: in a real
+// emergency the operator needs to know FAST that the command is not landing,
+// so they can pull power, rather than have SnapCon wait a minute hoping.
+// Same value and same reasoning as creality-klipper.js, kept local to each
+// connector rather than hoisted into http-utils -- a shared-utility refactor
+// is not something to bundle into a bug fix.
+const CONTROL_TIMEOUT_MS = 60 * 1000;
+// Only the Moonraker branch changes; the native :8898 calls are a different
+// protocol with their own bounds and are untouched.
+exports.pause = byMode(ff.pause, p => http.sendGcode(p, "PAUSE", CONTROL_TIMEOUT_MS));
+exports.resume = byMode(ff.resume, p => http.sendGcode(p, "RESUME", CONTROL_TIMEOUT_MS));
+exports.cancel = byMode(ff.cancel, p => http.sendGcode(p, "CANCEL_PRINT", CONTROL_TIMEOUT_MS));
+exports.eject = byMode(ff.eject, p => http.sendGcode(p, "SDCARD_RESET_FILE", CONTROL_TIMEOUT_MS));
 // E-Stop is the ONE deliberate cross-transport retry. Native estop is a raw TCP
 // sequence, Moonraker's is an HTTP call — unrelated mechanisms — and a stale or
 // mistaken mode must never be what swallows an emergency stop. Bounded: two
@@ -205,7 +223,7 @@ exports.estop = async p => {
   try { return await first(firstP); }
   catch (e) { try { return await second(secondP); } catch { throw e; } }
 };
-exports.bedTemp = byMode(ff.bedTemp, http.bedTemp);
+exports.bedTemp = byMode(ff.bedTemp, (p, t) => http.sendGcode(p, "M140 S" + Math.round(t), CONTROL_TIMEOUT_MS));
 
 exports.listFiles = byMode(ff.listFiles, http.listFiles);
 exports.getThumbnail = byMode(ff.getThumbnail, http.getThumbnail);
