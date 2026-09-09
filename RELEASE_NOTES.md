@@ -257,3 +257,21 @@ last doing. SnapCon read that at face value, so a machine that had crashed mid-p
   display the last thing it heard.
 
 This covers Snapmaker U1, Creality and generic Klipper/Moonraker printers.
+
+### Printing a File Already on the Printer No Longer Freezes the Button
+Starting a file that is already stored on a printer used to hold the browser until the printer had
+finished everything it does before a print - on a Creality machine that includes a full bed-levelling
+pass, which can run for several minutes. The button sat on "Starting print..." throughout, and on
+slower machines it could give up with a timeout for a print that had in fact started perfectly well.
+- **The button now reports what the printer is actually doing** - mapping filament, then starting -
+  instead of freezing on one message.
+- **A failure that happens after the print was requested is now shown to you.** Previously, once the
+  request timed out, whatever happened next was invisible.
+- **Success is only reported when the print has really started**, not when the request was accepted.
+- Behaviour that has not changed: the print itself, what gets sent to the printer, the queue, and
+  uploading a new file (which already worked this way).
+
+*For anyone automating SnapCon:* `POST /api/printfile` now returns immediately with a `jobId` and
+the meaning of the response has changed from "the print started" to "the request was accepted".
+Poll `GET /api/print-status?job=<jobId>` for the outcome. Scripts that relied on the old
+synchronous success or error response need updating.
