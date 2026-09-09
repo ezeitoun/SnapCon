@@ -49,7 +49,10 @@ function withProbe(fnSrc, extraSrc, st) {
 }
 
 const IDLE_SRC = () => extractFn("isPrinterIdle");
-const IDLE_SET = () => extractConst("DISPATCH_IDLE_STATES");
+// isPrinterIdle also consults the start-sequence guard (docs/TODO.md 9i), so the
+// sandbox must supply it. Empty here: these tests are about the allowlist, and
+// the guard has its own file (test/startSequenceGuard.test.js).
+const IDLE_SET = () => extractConst("DISPATCH_IDLE_STATES") + "\n" + extractConst("STARTING");
 const idle = st => withProbe(IDLE_SRC(), IDLE_SET(), st).isPrinterIdle({ name: "P", url: "http://x" });
 const blocked = st => withProbe(extractFn("firmwareDeployBlockedBy"), null, st)
   .firmwareDeployBlockedBy({ name: "U1 Black", url: "http://x" });

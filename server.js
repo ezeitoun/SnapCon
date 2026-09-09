@@ -1033,13 +1033,17 @@ app.post("/api/print", requireRegular, async (req, res) => {
       // still needed with no mapping chosen (tools=[]) when the printer has
       // its own preferences (auto-level/flow-calibrate/timelapse) to send
       // before print start.
-      if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) {
-        job.phase = "mapping";
-        await c.applyHeadMapping(p, tools, map, prefs);
-      }
-      if (start) {
-        job.phase = "starting"; await c.startPrintFile(p, name);
-      } else {
+      // Guarded from here: applyHeadMapping is where the long waits live.
+      await withStartSequence(p, async () => {
+        if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) {
+          job.phase = "mapping";
+          await c.applyHeadMapping(p, tools, map, prefs);
+        }
+        if (start) {
+          job.phase = "starting"; await c.startPrintFile(p, name);
+        }
+      });
+      if (!start) {
         // Upload-only click, printer was idle (the busy case queued via
         // pendingLoad above, never reaches here) — the file is sitting on
         // the printer with nothing else loaded or printing, so surface it
@@ -1114,12 +1118,14 @@ app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
 // started when it did not is worse than no trail at all.
 async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needsMapping, job, printerKey }) {
   try {
-    if (needsMapping) {
-      job.phase = "mapping";
-      await c.applyHeadMapping(p, tools, map, prefs);
-    }
-    job.phase = "starting";
-    await c.startPrintFile(p, filename);
+    await withStartSequence(p, async () => {
+      if (needsMapping) {
+        job.phase = "mapping";
+        await c.applyHeadMapping(p, tools, map, prefs);
+      }
+      job.phase = "starting";
+      await c.startPrintFile(p, filename);
+    });
     // Printing it is what "ready to print" was waiting for -- clear the badge.
     if (queuedFile.get(printerKey)?.name === filename) { queuedFile.delete(printerKey); saveQueuedFiles(); }
     ROUTE_STARTED_PRINT.add(p.url);
@@ -1372,7 +1378,40 @@ function findPrinterIndex(name) {
 // to preserve previous behavior. Add it only on hardware evidence that it is
 // safe to dispatch into.
 const DISPATCH_IDLE_STATES = new Set(["standby", "idle", "complete", "cancelled"]);
+
+// Printers with a start sequence in flight (docs/TODO.md item 9i).
+//
+// Between "SnapCon began starting a print" and "the printer reports a job"
+// the machine is physically busy while print_stats still says standby with no
+// filename -- so the allowlist above calls it idle and it looks dispatchable.
+// Reachable during that window: queue dispatch claiming a printer already
+// mid-start from another path, /api/notify-load uploading immediately instead
+// of staging, and the card reading Idle.
+//
+// Keyed on "a start is in progress", not on any brand: the same race exists
+// wherever the start is slow. Creality auto-level runs G29 inside
+// applyHeadMapping bounded at TWELVE minutes, CFS material preparation runs
+// 4-5 minutes, U1 head-mapping macros take seconds. One guard, three
+// durations -- the CFS case is only the one that made it obvious.
+//
+// This means the printer is EXECUTING ITS START SEQUENCE, not merely that
+// SnapCon is processing a print request: the upload phase stays outside, since
+// a printer receiving a file is not yet being driven toward a print.
+//
+// A LEAKED entry is worse than the bug -- the printer becomes permanently
+// undispatchable -- so every path in and out goes through withStartSequence,
+// which releases in a finally.
+const STARTING = new Set();
+async function withStartSequence(p, fn) {
+  STARTING.add(p.id);
+  try { return await fn(); }
+  finally { STARTING.delete(p.id); }
+}
 async function isPrinterIdle(p) {
+  // Checked before the probe on purpose: the printer genuinely reports an
+  // idle-looking state during its own start sequence, so no probe result can
+  // answer this question.
+  if (STARTING.has(p.id)) return false;
   try { const st = await probeCached(p); return !!(st && st.online) && DISPATCH_IDLE_STATES.has(st.state); }
   catch { return false; }
 }
@@ -1479,10 +1518,12 @@ async function attemptQueueDispatch(printerId) {
   try {
     if (!item.alreadyUploaded) await c.uploadFile(p, fp, name, { sent: 0, total: 0 });
     const tools = Object.keys(item.map || {}).map(Number).sort((a, b) => a - b);
-    if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(item.prefs))) {
-      await c.applyHeadMapping(p, tools, item.map, item.prefs);
-    }
-    await c.startPrintFile(p, name);
+    await withStartSequence(p, async () => {
+      if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(item.prefs))) {
+        await c.applyHeadMapping(p, tools, item.map, item.prefs);
+      }
+      await c.startPrintFile(p, name);
+    });
     queueStore.applyObserved(printerId, QueueEngine.onDispatchSuccess, item.id);
     // Same dedup convention /api/print already uses — notifyTick's own
     // newJob detection would otherwise double-log this print's start.

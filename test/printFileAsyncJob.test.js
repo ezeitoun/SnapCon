@@ -61,6 +61,12 @@ function harness({ mapFails = false, startFails = false, hold = false } = {}) {
     auditLog: { log: e => calls.push("audit:" + e.event) }
   };
   vm.createContext(env);
+  // runPrintFileJob wraps its work in the start-sequence guard (9i). Supplied
+  // from server.js rather than stubbed, so the two stay in step.
+  const constAt = serverSrc.indexOf("const STARTING =");
+  vm.runInContext(serverSrc.slice(constAt, serverSrc.indexOf(";", constAt) + 1), env);
+  const guardAt = serverSrc.indexOf("async function withStartSequence(");
+  vm.runInContext(serverSrc.slice(guardAt, serverSrc.indexOf("\n}", guardAt) + 2), env);
   vm.runInContext(extractFn("runPrintFileJob"), env);
 
   const c = {
