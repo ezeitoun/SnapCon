@@ -524,7 +524,12 @@ test("startPrintFile uses a longer timeout than the 8s fast-command default", as
     await flush();
     assert.equal(settled, false, "must not time out at the old 8s default");
 
-    t.mock.timers.tick(55 * 1000); // cross 60s
+    // startPrintFile now probes the printer's CFS state first (5s bound) before
+    // issuing the command, so the command's own 60s window opens at t+5s rather
+    // than t+0 -- see the CFS preparation block in creality-klipper.js. The
+    // assertion being made here is unchanged: the START command is not bound by
+    // the old 8s fast-command default.
+    t.mock.timers.tick(60 * 1000); // cross the command's 60s, measured from the probe's abort
     await flush();
     assert.equal(settled, true);
     assert.equal(rejected, true);

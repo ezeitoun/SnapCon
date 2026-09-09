@@ -346,8 +346,169 @@ function assertSafeGcodeArg(value) {
   if (/["\r\n]/.test(String(value))) throw new Error("Invalid characters in gcode argument");
   return value;
 }
+// ---- CFS material preparation before print start (docs/TODO.md item 9e) ----
+//
+// START_PRINT branches on a one-shot `prepare` flag. With prepare == 0 it
+// calls PRINT_PREPARE_LOAD_MATERIAL FILENAME='<file>', which on a connected,
+// enabled CFS reaches the closed-source BOX_START_PRINT_EXTRUDE_MATERIAL and
+// RE-SELECTS the file. Starting with a bare SDCARD_PRINT_FILE therefore meant
+// that re-selection landed on a job that had already begun and reset it:
+// print_stats.state fell back to standby, virtual_sdcard.file_position reset
+// to 0, print_duration never advanced, and Moonraker closed the history row
+// as `cancelled | 0s`. Confirmed three times on a live SPARKX i7.
+//
+// The macro is not the problem -- the printer's own panel calls it too. The
+// ORDER is. The panel loads material first, so that selection happens while
+// no job exists and is harmless, then sets prepare and only then starts the
+// file, leaving START_PRINT the else-branch (PRINT_PREPARE_CLEAR, which does
+// nothing but reset the flag). Captured live from a panel-started print:
+// exactly two selections, print_duration advancing to 977s, history closing
+// `completed`. This reproduces that contract -- PRINT_PREPARING and
+// PRINT_PREPARED are called by no macro anywhere in the printer's config and
+// exist purely for an external client to drive.
+//
+// Scoped by live firmware state, never by model name: the macro's own
+// condition is `box.enable == 1 and box.state == 'connect'`, so a CFS-less
+// Creality (both Ender-3 V3 Plus units here) takes a different branch that
+// never receives a FILENAME, and keeps the plain single-command start.
+const PREP_TIMING = { pollMs: 750, stateMs: 20 * 1000, homeMs: 5 * 60 * 1000, loadMs: 8 * 60 * 1000, confirmMs: 60 * 1000 };
+
+async function readPrepState(p) {
+  const { ok, status, json } = await http.fetchJSONTimeout(http.baseUrl(p) + "/printer/objects/query?box&gcode_macro%20START_PRINT&print_stats&virtual_sdcard&toolhead", 5000);
+  if (!ok) throw new Error("Moonraker " + status);
+  const st = (json.result && json.result.status) || {};
+  return {
+    box: st.box || {},
+    prepare: Number((st["gcode_macro START_PRINT"] || {}).prepare),
+    ps: st.print_stats || {},
+    vsd: st.virtual_sdcard || {},
+    homed: String((st.toolhead || {}).homed_axes || "")
+  };
+}
+
+// The macro condition, read from the machine rather than assumed per model.
+const cfsPrepRequired = s => Number(s.box.enable) === 1 && String(s.box.state || "").toLowerCase() === "connect";
+
+// Same normalization probe() applies: this firmware genuinely reports standby
+// while the sdcard is active during START_PRINT, so standby alone is not
+// evidence that nothing is running.
+const jobLive = s => s.ps.state === "printing" || s.ps.state === "paused" || (s.ps.state === "standby" && s.vsd.is_active === true);
+const jobDefinitelyIdle = s => s.vsd.is_active === false && s.ps.state !== "printing" && s.ps.state !== "paused";
+
+// Bounded polling of the objects the firmware actually publishes -- never a
+// fixed sleep, because the load takes as long as the material takes.
+async function waitForState(p, predicate, timeoutMs, what) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { const s = await readPrepState(p); if (predicate(s)) return s; }
+    catch { /* transient read failure: keep trying until the deadline */ }
+    if (Date.now() >= deadline) throw new Error(what + " was not confirmed within " + Math.round(timeoutMs / 1000) + "s");
+    await new Promise(r => setTimeout(r, PREP_TIMING.pollMs));
+  }
+}
+
+// Best effort by design: if the printer cannot be reached the flag stays as
+// it is, and the next start's own PRINT_PREPARING re-arms it correctly.
+const clearPrepare = p => http.sendGcode(p, "PRINT_PREPARE_CLEAR", CONTROL_TIMEOUT_MS).catch(() => {});
+
 async function startPrintFile(p, filename) {
-  await http.sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${assertSafeGcodeArg(filename)}"`, CONTROL_TIMEOUT_MS);
+  const safe = assertSafeGcodeArg(filename);
+  let state = null;
+  try { state = await readPrepState(p); }
+  catch { /* cannot tell -- fall through to the start that works today */ }
+
+  // PRINT_PREPARE_LOAD_MATERIAL takes FILENAME='...', the firmware's own
+  // single-quoted form, which an apostrophe would terminate early. Such files
+  // print fine today through the double-quoted SDCARD_PRINT_FILE, so step
+  // aside rather than make a working case worse.
+  if (!state || !cfsPrepRequired(state) || safe.includes("'")) {
+    await http.sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${safe}"`, CONTROL_TIMEOUT_MS);
+    return;
+  }
+
+  // Preparation. A failure here must never reach a print start, and must not
+  // leave the flag armed -- an armed flag makes the NEXT print skip material
+  // loading and start with an empty extruder.
+  let loadBegun = false;
+  try {
+    await http.sendGcode(p, "PRINT_PREPARING", CONTROL_TIMEOUT_MS);
+    await waitForState(p, s => s.prepare === 2, PREP_TIMING.stateMs, "PRINT_PREPARING");
+
+    // Homing is part of preparation on this firmware, not part of the print.
+    // START_PRINT's prepare==0 branch runs CANCEL_HOMEZ_NACCU + G28 as well as
+    // the load; its else-branch runs neither. Setting prepare therefore
+    // disables the homing too, and an unhomed machine faults on its first
+    // move -- `!! key95 Must home axis first`, observed 90s into a print.
+    //
+    // CANCEL_HOMEZ_NACCU first, matching the firmware's own order: it disarms
+    // accuracy-mode Z homing so G28 is plain positional homing. That keeps
+    // this clear of docs/TODO.md item 9d, where Z work ahead of a print that
+    // re-homes itself wrecked the first layer. Deliberately NOT replicating
+    // the rest of that branch: its M140 takes a BED_TEMP the sliced file
+    // passes to START_PRINT and we do not have, and the load was already
+    // observed to work without the heating or the nozzle clean.
+    //
+    // Verified on homed_axes rather than on the command being accepted --
+    // "we sent G28" is exactly the assertion a mock satisfies while the
+    // machine stays unhomed.
+    await http.sendGcode(p, "CANCEL_HOMEZ_NACCU", CONTROL_TIMEOUT_MS);
+    await http.sendGcode(p, "G28", PREP_TIMING.homeMs);
+    await waitForState(p, s => s.homed.length > 0, PREP_TIMING.stateMs, "homing");
+
+    loadBegun = true;
+    await http.sendGcode(p, `PRINT_PREPARE_LOAD_MATERIAL FILENAME='${safe}'`, PREP_TIMING.loadMs);
+    await waitForState(p, s => s.vsd.file_path === safe || String(s.vsd.file_path || "").endsWith(safe), PREP_TIMING.stateMs, "material load");
+
+    // Establish the Z reference, exactly as the branch does after loading.
+    // homed_axes only says the axes are REFERENCED; it does not say Z is at
+    // the right zero. Coarse G28 is not this machine's Z reference --
+    // NEXT_HOMEZ_NACCU + G28 Z is, and it is what the panel was observed
+    // probing (bst_z=0.017) before its own start. Omitting it produced a
+    // print that reported state=printing with file_position climbing past
+    // 140k for 190 seconds while the nozzle was in the air throughout.
+    //
+    // Direct evidence it belongs here: the 9d run that gave a good first
+    // layer took START_PRINT's prepare==0 branch, which ENDS with these two
+    // commands. Setting prepare bypasses them, so preparation must supply
+    // them. This is NOT 9d's G29 -- that is bed-mesh calibration laid down
+    // ahead of a print that re-homes Z underneath it. Setting Z zero and
+    // calibrating a mesh are different operations; conflating them is what
+    // removed this step and cost a print.
+    await http.sendGcode(p, "NOZ_CLEAR", PREP_TIMING.homeMs);
+    await http.sendGcode(p, "NEXT_HOMEZ_NACCU", CONTROL_TIMEOUT_MS);
+    await http.sendGcode(p, "G28 Z", PREP_TIMING.homeMs);
+    await waitForState(p, s => s.homed.includes("z"), PREP_TIMING.stateMs, "Z homing");
+
+    await http.sendGcode(p, "PRINT_PREPARED", CONTROL_TIMEOUT_MS);
+    await waitForState(p, s => s.prepare === 1, PREP_TIMING.stateMs, "PRINT_PREPARED");
+  } catch (e) {
+    await clearPrepare(p);
+    // Clearing the flag is logical cleanup only. It says nothing about
+    // filament the closed-source box module may already have cut or fed, so
+    // once the load has begun this is explicitly not a safe automatic retry.
+    throw new Error(loadBegun
+      ? `${p.name}: filament preparation failed (${e.message}). The CFS may already have cut or fed material -- check the lane and the extruder before retrying.`
+      : `${p.name}: print preparation failed (${e.message}).`);
+  }
+
+  // The ambiguous zone. A failed or timed-out gcode POST is NOT evidence the
+  // command did not run: measured live, Moonraker accepted a CANCEL_PRINT at
+  // 00:57:05 and Klipper executed it at 00:57:51, long after the caller gave
+  // up at 20s. So decide from observed state, not from which call threw.
+  try {
+    await http.sendGcode(p, `SDCARD_PRINT_FILE FILENAME="${safe}"`, CONTROL_TIMEOUT_MS);
+  } catch (e) {
+    let after = null;
+    try { after = await readPrepState(p); } catch { after = null; }
+    if (after && jobLive(after)) return;              // it landed; START_PRINT owns the flag now
+    if (after && jobDefinitelyIdle(after)) {
+      await clearPrepare(p);
+      throw new Error(`${p.name}: print start failed (${e.message}).`);
+    }
+    // Unknown. Cleaning up blind could tear down a print that did start.
+    throw new Error(`${p.name}: print start failed (${e.message}) and the printer's state could not be read, so it is unknown whether the print began. Check the printer before retrying.`);
+  }
+  await waitForState(p, jobLive, PREP_TIMING.confirmMs, "print start");
 }
 exports.startPrintFile = startPrintFile;
 exports.pause = p => http.sendGcode(p, "PAUSE", CONTROL_TIMEOUT_MS);
@@ -694,7 +855,7 @@ exports.getCameraSnapshot = getCameraSnapshot;
 // macro variables and factory_printer.cfg's header comment, both far more
 // expensive to fetch for every candidate IP in a subnet scan, so they're
 // left as a manual follow-up rather than baked into discovery).
-exports._internal = { decodeCfsHeads, fetchCfsStatus, decodeEmbeddedThumbnail, getTotalLayers, LAYER_COUNT_CACHE, MESH_RECOVERY_POLL_INTERVAL_MS, MESH_RECOVERY_TIMEOUT_MS };
+exports._internal = { decodeCfsHeads, fetchCfsStatus, decodeEmbeddedThumbnail, getTotalLayers, LAYER_COUNT_CACHE, MESH_RECOVERY_POLL_INTERVAL_MS, MESH_RECOVERY_TIMEOUT_MS, PREP_TIMING, cfsPrepRequired, jobLive, jobDefinitelyIdle };
 
 async function discoverAt(base) {
   const { ok, json } = await http.fetchJSONTimeout(`${base}/printer/info`, 900);
