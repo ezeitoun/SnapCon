@@ -275,3 +275,29 @@ slower machines it could give up with a timeout for a print that had in fact sta
 the meaning of the response has changed from "the print started" to "the request was accepted".
 Poll `GET /api/print-status?job=<jobId>` for the outcome. Scripts that relied on the old
 synchronous success or error response need updating.
+
+### Creality Prints With a CFS Now Report Themselves Correctly
+On a Creality printer with a CFS attached, a print started from SnapCon used to lose track of
+itself moments after starting. The printer kept printing, but SnapCon - and the printer's own
+records - stopped following it.
+- **Elapsed and remaining times now work.** They previously sat at zero for the whole print, and
+  the card fell back to showing the printer as idle while it was clearly running.
+- **The print appears in the printer's own history**, and finishes there as completed with its real
+  duration and filament usage. Before, every SnapCon-started print left a record claiming it had
+  been cancelled after zero seconds.
+- **Queue Management can follow these printers.** It confirms a job by watching the printer report
+  that it is printing, which never happened, so a queued job could not be tracked to completion.
+- **Starting with an empty extruder works.** SnapCon now loads the chosen filament lane before
+  starting, the same way the printer's own screen does, instead of the print failing seconds in
+  with a filament-runout error.
+
+The cause was ordering, not a missing feature: the printer reloads material as part of starting a
+print, and doing that after the job had already begun reset the job. SnapCon now prepares the
+machine first - homing, loading the mapped lane, setting the Z reference - and starts the print
+only once that is done, which is exactly what the printer's own touchscreen does.
+
+Only affects Creality printers with a CFS fitted and connected. Machines without one, including the
+Ender-3 V3 Plus, start prints exactly as before.
+
+Known limitation: the printer's touchscreen still does not show a SnapCon-started print while it is
+running, though it does show when one finishes.
