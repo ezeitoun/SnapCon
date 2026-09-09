@@ -5601,6 +5601,10 @@ function queuedFileBannerHtml(p){
   if(qf.status==='error') return `<div class="queued-banner err">${esc(t("fleet.queued.stage_failed_banner",{name:qf.name,error:qf.error||''}))}</div>`;
   return '';
 }
+// /api/printfile is job-based: the HTTP response means "start job accepted",
+// NOT "printing". Head mapping and G29 happen after it returns, so the
+// outcome only arrives via pollJob -- treating the 200 as success would
+// report a print started that may still fail minutes later.
 async function printQueuedFile(printerId, filename, prefs){
   const st=$("pst-"+printerId);
   if(st){ st.className="pstatus work"; st.textContent=t("fleet.queued.starting_print_status"); }
@@ -5608,8 +5612,11 @@ async function printQueuedFile(printerId, filename, prefs){
   try{
     const r=await postJSON("/api/printfile",{printer:printerId,filename,map:{},prefs});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
-    if(st){ st.className="pstatus ok"; st.textContent=t("fleet.queued.printing_status",{filename}); }
-    ok=true;
+    ok=await pollJob(d.jobId, st, true, d.mapped||0, null, null, prefs, printerId);
+    // pollJob writes its own generic completion text. This path had its own
+    // wording before and keeps it: this is a synchronous -> asynchronous
+    // conversion, not a change to what the operator reads.
+    if(ok&&st){ st.className="pstatus ok"; st.textContent=t("fleet.queued.printing_status",{filename}); }
   }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
   loadFleet();
   return ok;
@@ -6057,6 +6064,16 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId)
           overrideActive=true;
           renderFleet({incremental:true});
         }
+      }
+      else if(d.phase==="preparing"){
+        // Reserved for the CFS material-preparation stage (docs/TODO.md 9e).
+        // Nothing emits this phase yet -- rendering it here now just means the
+        // shared poller is ready when the connector starts reporting it, and
+        // costs one branch. No 9e behaviour is implemented anywhere.
+        const prepTxt=t("printer_status.preparing");
+        if(st){ st.className="pstatus work"; st.textContent=prepTxt; } setBtnFill(btn,100);
+        if(extraUI) setRowUI(extraUI, 100, "work", prepTxt);
+        setOverride("preparing",{statusColor:"var(--busy)",statusTxt:prepTxt});
       }
       else if(d.phase==="starting"){
         clearOverride();
@@ -6600,8 +6617,13 @@ async function doPrintFile(){
   try{
     const r=await postJSON("/api/printfile",{printer:PFILE_PRINTER,filename:PFILE_SELECTED,map:ALLOW_MAPPING?PFILE_MAP:{},prefs:PFILE_PREFS});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
-    st.textContent=t("fleet.modal.pfile.print_started");
-    setTimeout(()=>{ closePrinterFiles(); loadFleet(); },900);
+    // Same job-based contract as printQueuedFile: the modal must not close on
+    // the 200, or it would hide a mapping/start failure that lands seconds or
+    // minutes later. btn is deliberately null -- pollJob's button fill would
+    // fight this modal's own disabled-button handling.
+    const ok=await pollJob(d.jobId, st, true, d.mapped||0, null, null, PFILE_PREFS, PFILE_PRINTER);
+    if(ok) setTimeout(()=>{ closePrinterFiles(); loadFleet(); },900);
+    else $("pfilego").disabled=false;
   }catch(e){ st.textContent=e.message; $("pfilego").disabled=false; }
 }
 

@@ -1096,7 +1096,42 @@ app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/printfile", requireRegular, async (req, res) => {
+// The slow half of /api/printfile, run detached so the request can return a
+// job id immediately. applyHeadMapping can take up to twelve minutes on
+// Creality (G29), and any gcode command can additionally sit queued behind a
+// blocking macro -- measured at ~46s for a CANCEL_PRINT stuck behind
+// START_PRINT -- so awaiting this on the request thread meant the browser
+// timed out on prints that had actually started.
+//
+// Named rather than an inline IIFE (unlike /api/print's, which predates this)
+// so the phase progression and the success bookkeeping are testable without
+// an express harness, which this project does not have.
+//
+// The bookkeeping stays inside the success path on purpose: clearing the
+// "Loaded" badge, ROUTE_STARTED_PRINT (which suppresses notifyTick's
+// duplicate print-started notification) and the audit row must fire exactly
+// once, and never for a job that failed -- an audit trail claiming a print
+// started when it did not is worse than no trail at all.
+async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needsMapping, job, printerKey }) {
+  try {
+    if (needsMapping) {
+      job.phase = "mapping";
+      await c.applyHeadMapping(p, tools, map, prefs);
+    }
+    job.phase = "starting";
+    await c.startPrintFile(p, filename);
+    // Printing it is what "ready to print" was waiting for -- clear the badge.
+    if (queuedFile.get(printerKey)?.name === filename) { queuedFile.delete(printerKey); saveQueuedFiles(); }
+    ROUTE_STARTED_PRINT.add(p.url);
+    auditLog.log({ category: "job", event: "print-started", ...actor, printerId: p.id, printerName: p.name, detail: { file: filename } });
+    job.result = { printer: p.name, filename, mapped: tools.length };
+    job.phase = "done"; job.done = true;
+  } catch (e) {
+    job.error = e.message; job.done = true; job.phase = "error";
+  }
+}
+
+app.post("/api/printfile", requireRegular, (req, res) => {
   const { printer, filename, map, prefs } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
@@ -1110,20 +1145,21 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
     tools = Object.keys(map).map(Number).sort((a, b) => a - b);
   }
   const c = getConnector(p.connector);
-  try {
-    // Still needed with no mapping chosen (tools=[]) when the printer has its
-    // own preferences (auto-level/flow-calibrate/timelapse) to send before
-    // print start.
-    if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) await c.applyHeadMapping(p, tools, map, prefs);
-    await c.startPrintFile(p, filename);
-    // Printing it is what "ready to print" was waiting for — clear the badge.
-    if (queuedFile.get(printer)?.name === filename) { queuedFile.delete(printer); saveQueuedFiles(); }
-    ROUTE_STARTED_PRINT.add(p.url);
-    auditLog.log({ category: "job", event: "print-started", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file: filename } });
-    res.json({ ok: true, printer: p.name, filename, mapped: tools.length });
-  } catch (e) {
-    res.status(502).json({ error: e.message });
-  }
+  // Still needed with no mapping chosen (tools=[]) when the printer has its
+  // own preferences (auto-level/flow-calibrate/timelapse) to send before
+  // print start.
+  const needsMapping = !!c.applyHeadMapping && (tools.length > 0 || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs));
+
+  // Everything above is cheap and synchronous, so those rejections stay
+  // outright HTTP errors. Everything below can block on physical printer
+  // work, so it moves onto the same JOBS machinery /api/print already uses:
+  // this response now means "start job accepted", NOT "printing" -- clients
+  // poll /api/print-status for the outcome.
+  const jobId = newJobId();
+  const job = { phase: needsMapping ? "mapping" : "starting", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now() };
+  JOBS.set(jobId, job);
+  res.json({ ok: true, jobId, printer: p.name, filename, mapped: tools.length });
+  runPrintFileJob({ p, c, filename, tools, map, prefs, actor: actorFromReq(req), needsMapping, job, printerKey: printer });
 });
 
 // ---- Print control: pause / resume / cancel (standard Klipper macros) ----
