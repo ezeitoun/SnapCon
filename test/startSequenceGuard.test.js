@@ -122,6 +122,52 @@ test("the entry is cleared on an early return from inside the sequence", async (
   assert.equal(env.startingSet.has(p.id), false);
 });
 
+// THE SAME PRINTER, TWICE, OVERLAPPING. There is no invariant preventing this:
+//   /api/print gates on isPrinterIdle only when NOT starting -- the starting
+//     case, which is the one that enters the guard, has no gate at all
+//   /api/printfile has no idle gate whatsoever
+//   queue dispatch gates on isPrinterIdle + the atomic claimNextForDispatch,
+//     which serialises queue-against-queue and nothing else
+// So two rapid Print clicks, or a Print racing a queue dispatch, both enter.
+// With a plain Set the first completion deletes the entry and un-guards a start
+// that is still running.
+test("one start completing does not un-guard another still running on the same printer", async () => {
+  const env = sandbox(IDLE_PROBE);
+  const p = { id: "p20", name: "i7" };
+  let releaseFirst;
+  const first = new Promise(r => { releaseFirst = r; });
+  let releaseSecond;
+  const second = new Promise(r => { releaseSecond = r; });
+
+  const a = env.withStartSequence(p, () => first);
+  const b = env.withStartSequence(p, () => second);
+  assert.equal(await env.isPrinterIdle(p), false, "both in flight");
+
+  releaseFirst();
+  await a;
+  assert.equal(await env.isPrinterIdle(p), false,
+    "the second start is still running — releasing here would let a job be dispatched onto it");
+
+  releaseSecond();
+  await b;
+  assert.equal(await env.isPrinterIdle(p), true, "released only once every start has finished");
+  assert.equal(env.startingSet.size, 0, "and nothing is left behind");
+});
+
+test("a failing start does not un-guard a concurrent healthy one", async () => {
+  const env = sandbox(IDLE_PROBE);
+  const p = { id: "p20", name: "i7" };
+  let releaseGood;
+  const good = new Promise(r => { releaseGood = r; });
+  const bad = env.withStartSequence(p, async () => { throw new Error("G29 failed"); });
+  const ok = env.withStartSequence(p, () => good);
+  await assert.rejects(() => bad);
+  assert.equal(await env.isPrinterIdle(p), false, "the healthy start is still in flight");
+  releaseGood();
+  await ok;
+  assert.equal(env.startingSet.size, 0);
+});
+
 test("two printers starting at once do not release each other", async () => {
   const env = sandbox(IDLE_PROBE);
   const a = { id: "a", name: "A" }, b = { id: "b", name: "B" };

@@ -1401,11 +1401,24 @@ const DISPATCH_IDLE_STATES = new Set(["standby", "idle", "complete", "cancelled"
 // A LEAKED entry is worse than the bug -- the printer becomes permanently
 // undispatchable -- so every path in and out goes through withStartSequence,
 // which releases in a finally.
-const STARTING = new Set();
+//
+// REFERENCE COUNTED, not a plain Set, because nothing serialises two starts
+// of the SAME printer. Traced: /api/print gates on isPrinterIdle only when
+// NOT starting, so the starting case has no gate; /api/printfile has no idle
+// gate at all; and queue dispatch's isPrinterIdle + atomic
+// claimNextForDispatch serialise queue-against-queue and nothing else. Two
+// rapid Print clicks, or a Print racing a queue dispatch, therefore both
+// enter here -- and with a Set the first completion would delete the entry
+// and un-guard a start still in progress, which is precisely the window this
+// exists to close.
+const STARTING = new Map();   // printer id -> starts currently in flight
 async function withStartSequence(p, fn) {
-  STARTING.add(p.id);
+  STARTING.set(p.id, (STARTING.get(p.id) || 0) + 1);
   try { return await fn(); }
-  finally { STARTING.delete(p.id); }
+  finally {
+    const left = (STARTING.get(p.id) || 1) - 1;
+    if (left > 0) STARTING.set(p.id, left); else STARTING.delete(p.id);
+  }
 }
 async function isPrinterIdle(p) {
   // Checked before the probe on purpose: the printer genuinely reports an
