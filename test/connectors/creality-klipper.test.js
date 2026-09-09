@@ -208,9 +208,12 @@ test("getCameraSnapshot fetches the stored cameraUrl and returns {contentType, b
 // own gcode_macro.cfg — a full leveling routine (home, clear old mesh,
 // nozzle-clear, re-home, probe, save), not a bare BED_MESH_CALIBRATE
 // composed here from primitives.
-test("getCapabilities: autoLevel is always true, independent of filamentMode", () => {
-  assert.equal(conn.getCapabilities({}).autoLevel, true);
-  assert.equal(conn.getCapabilities({ filamentMode: "cfs" }).autoLevel, true);
+// autoLevel is reported FALSE now: SnapCon must not run G29 ahead of a print
+// on this printer family, because Z is re-homed afterwards and the mesh is
+// invalidated (docs/TODO.md item 9d). G29 itself still works and is kept.
+test("getCapabilities: autoLevel is false, independent of filamentMode", () => {
+  assert.equal(conn.getCapabilities({}).autoLevel, false);
+  assert.equal(conn.getCapabilities({ filamentMode: "cfs" }).autoLevel, false);
 });
 
 // applyHeadMapping now also queries bed_mesh once, before sending G29, as a
@@ -232,25 +235,27 @@ function mockMeshAndScript(scriptHandler) {
   };
 }
 
-test("applyHeadMapping sends G29 when the per-job pref requests auto-level", async () => {
+test("a per-job auto-level pref no longer sends G29", async () => {
   let scriptUrl = null;
   const realFetch = global.fetch;
   global.fetch = mockMeshAndScript((u) => { scriptUrl = u; return { ok: true, status: 200, text: async () => "" }; });
   try {
     await conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [], {}, { autoLevel: true });
   } finally { global.fetch = realFetch; }
-  assert.ok(scriptUrl, "G29 must have been sent");
-  assert.equal(decodeURIComponent(new URL(scriptUrl).searchParams.get("script")), "G29");
+  assert.equal(scriptUrl, null,
+    "the printer's own print-start flow owns the Z reference — a mesh built here is thrown away");
 });
 
-test("applyHeadMapping falls back to the printer's own default when the job sends no explicit pref", async () => {
+// Hiding the control is not enough on its own: configs written before this
+// change still carry autoLevel:true and applyHeadMapping reads p.autoLevel.
+test("a stale saved autoLevel on the printer no longer triggers G29 either", async () => {
   let scriptCallCount = 0;
   const realFetch = global.fetch;
   global.fetch = mockMeshAndScript(() => { scriptCallCount++; return { ok: true, status: 200, text: async () => "" }; });
   try {
     await conn.applyHeadMapping({ url: "http://127.0.0.1:1", autoLevel: true }, [], {}, {});
   } finally { global.fetch = realFetch; }
-  assert.equal(scriptCallCount, 1, "printer-level default must still trigger G29 when the job itself specifies nothing");
+  assert.equal(scriptCallCount, 0, "an old saved setting must not still level ahead of a print");
 });
 
 test("applyHeadMapping: an explicit false pref overrides a printer default of true (never silently levels anyway)", async () => {
@@ -294,7 +299,7 @@ test("applyHeadMapping sends nothing at all when auto-level isn't requested anyw
 // extra `await http.sendGcode(...)` layer beyond moonrakerPost itself).
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-test("applyHeadMapping (G29) uses a generous ~12-minute timeout, not the 8s fast-command default", async (t) => {
+test("sendG29WithRecovery uses a generous ~12-minute timeout, not the 8s fast-command default", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let settled = false, rejected = false;
   const realFetch = global.fetch;
@@ -314,7 +319,7 @@ test("applyHeadMapping (G29) uses a generous ~12-minute timeout, not the 8s fast
       });
     });
   };
-  const pending = conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [], {}, { autoLevel: true });
+  const pending = conn._internal.sendG29WithRecovery({ url: "http://127.0.0.1:1", name: "K1C" });
   pending.then(() => { settled = true; }, () => { settled = true; rejected = true; });
   pending.catch(() => {}); // avoid an unhandled-rejection warning while intentionally left pending below
 
@@ -354,7 +359,7 @@ test("applyHeadMapping (G29) uses a generous ~12-minute timeout, not the 8s fast
 // constants.
 const { MESH_RECOVERY_POLL_INTERVAL_MS, MESH_RECOVERY_TIMEOUT_MS } = conn._internal;
 
-test("applyHeadMapping (G29): on a connection drop, waits for reconnect and confirms a changed bed mesh — never resends G29", async (t) => {
+test("sendG29WithRecovery: on a connection drop, waits for reconnect and confirms a changed bed mesh — never resends G29", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const realFetch = global.fetch;
   let meshQueryCount = 0, scriptCallCount = 0;
@@ -372,7 +377,7 @@ test("applyHeadMapping (G29): on a connection drop, waits for reconnect and conf
     throw new Error("fetch failed");
   };
   try {
-    const pending = conn.applyHeadMapping({ url: "http://127.0.0.1:1", name: "K1C" }, [], {}, { autoLevel: true });
+    const pending = conn._internal.sendG29WithRecovery({ url: "http://127.0.0.1:1", name: "K1C" });
     let resolved = false, rejected = false;
     pending.then(() => { resolved = true; }, () => { rejected = true; });
 
@@ -398,7 +403,7 @@ test("applyHeadMapping (G29): on a connection drop, waits for reconnect and conf
 // registered as "changed" and declared success while the printer was still
 // actively probing — this must NOT happen: an empty/unpopulated matrix has
 // to be treated the same as "no answer yet", not as a legitimate new value.
-test("applyHeadMapping (G29): an empty/in-progress bed_mesh reading during recovery does NOT count as a fresh mesh", async (t) => {
+test("sendG29WithRecovery: an empty/in-progress bed_mesh reading during recovery does NOT count as a fresh mesh", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const realFetch = global.fetch;
   let meshQueryCount = 0, scriptCallCount = 0;
@@ -418,7 +423,7 @@ test("applyHeadMapping (G29): an empty/in-progress bed_mesh reading during recov
     throw new Error("fetch failed");
   };
   try {
-    const pending = conn.applyHeadMapping({ url: "http://127.0.0.1:1", name: "K1C" }, [], {}, { autoLevel: true });
+    const pending = conn._internal.sendG29WithRecovery({ url: "http://127.0.0.1:1", name: "K1C" });
     let resolved = false;
     pending.then(() => { resolved = true; });
 
@@ -437,7 +442,7 @@ test("applyHeadMapping (G29): an empty/in-progress bed_mesh reading during recov
   }
 });
 
-test("applyHeadMapping (G29): if the mesh never changes, gives up after the recovery window and throws — never resends G29", async (t) => {
+test("sendG29WithRecovery: if the mesh never changes, gives up after the recovery window and throws — never resends G29", async (t) => {
   // waitForFreshMesh bounds itself with Date.now(), not an accumulated
   // setTimeout duration — "Date" must also be mocked, or the real wall
   // clock (barely moving during a fast test) never reaches the deadline no
@@ -455,7 +460,7 @@ test("applyHeadMapping (G29): if the mesh never changes, gives up after the reco
     throw new Error("fetch failed");
   };
   try {
-    const pending = conn.applyHeadMapping({ url: "http://127.0.0.1:1", name: "K1C" }, [], {}, { autoLevel: true });
+    const pending = conn._internal.sendG29WithRecovery({ url: "http://127.0.0.1:1", name: "K1C" });
     let error = null;
     pending.catch(e => { error = e; });
 
@@ -473,13 +478,13 @@ test("applyHeadMapping (G29): if the mesh never changes, gives up after the reco
   }
 });
 
-test("applyHeadMapping (G29) does NOT wait/recover on a real Moonraker rejection (non-2xx response) — only a connection drop triggers recovery", async () => {
+test("sendG29WithRecovery does NOT wait/recover on a real Moonraker rejection (non-2xx response) — only a connection drop triggers recovery", async () => {
   let scriptCallCount = 0;
   const realFetch = global.fetch;
   global.fetch = mockMeshAndScript(() => { scriptCallCount++; return { ok: false, status: 400, text: async () => "bad request" }; });
   try {
     await assert.rejects(
-      conn.applyHeadMapping({ url: "http://127.0.0.1:1", name: "K1C" }, [], {}, { autoLevel: true }),
+      conn._internal.sendG29WithRecovery({ url: "http://127.0.0.1:1", name: "K1C" }),
       /Moonraker 400/
     );
     assert.equal(scriptCallCount, 1, "a real rejection from Moonraker/Klipper must fail immediately — no recovery wait would fix it");

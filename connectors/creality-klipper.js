@@ -33,11 +33,21 @@ exports.brand = "Creality";
 exports.address = { scheme: "http", defaultPort: 7125, portEditable: true, required: true };
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true,
-  // G29 (see applyHeadMapping below) is real, registered, and confirmed
-  // live on K1, K1 Max, Ender-3 V3 KE, and a real Ender-3 V3 Plus — a full
-  // leveling routine (home, clear old mesh, nozzle-clear, re-home, probe,
-  // save), not a bare BED_MESH_CALIBRATE composed here by guesswork.
-  autoLevel: true,
+  // FALSE on purpose, and not because G29 is broken. G29 is real, registered
+  // and confirmed live on K1, K1 Max, Ender-3 V3 KE and a real Ender-3 V3 Plus
+  // — a full leveling routine (home, clear old mesh, nozzle-clear, re-home,
+  // probe, save), not a bare BED_MESH_CALIBRATE composed here by guesswork.
+  //
+  // What is wrong is running it as a PRE-PRINT step, because this printer
+  // family re-homes Z afterwards and invalidates the mesh and Z reference G29
+  // just established — see applyHeadMapping below for the full trace. The
+  // printer's own print-start flow owns the Z reference for the print, so the
+  // setting is not offered rather than being offered and quietly ignored.
+  //
+  // Deliberately NOT copied to snapmaker-u1-klipper: the U1's autoLevel sends
+  // SET_PRINT_PREFERENCES BED_LEVEL=1, a firmware PREFERENCE the printer acts
+  // on at the correct point, which is a different mechanism and unaffected.
+  autoLevel: false,
   unloadFilament: false, firmwareInfo: true, inventory: false, discovery: true, health: true, fileSync: true,
   // Confirmed live against a real Ender-3 V3 Plus: it serves its own
   // proprietary web UI (title "Creality", not actually Fluidd/Mainsail) on
@@ -520,26 +530,41 @@ exports.bedTemp = (p, t) => http.sendGcode(p, "M140 S" + Math.round(t), CONTROL_
 
 // Named "applyHeadMapping" only because that's the pre-print-preferences
 // hook server.js calls for every connector before starting a print (see its
-// `if (c.applyHeadMapping && ...)` gating) — tools/map are always empty here
-// since this connector has no confirmed way to apply a head/slot assignment
-// (the K2 CFS gap noted above); the only real preference is auto-level.
-// `/printer/gcode/script` blocks until the macro fully finishes (standard
-// Moonraker behavior, not a fire-and-forget queue), so this genuinely waits
-// out the full leveling pass before the caller proceeds to upload/start the
-// print — matching the intent of the checkbox: a leveled bed BEFORE this
-// print, not a leveling pass racing it.
+// `if (c.applyHeadMapping && ...)` gating). It no longer does anything for
+// this connector: it used to run a pre-print G29, and no longer does — see
+// the block inside for why (docs/TODO.md item 9d).
 async function applyHeadMapping(p, tools, map, prefs = {}) {
-  const autoLevel = prefs.autoLevel !== undefined ? !!prefs.autoLevel : !!p.autoLevel;
-  // Generous explicit bound (not the default 8s fast-command timeout). A
-  // real K1C's own klippy.log showed a live PRTOUCH full-bed G29 pass still
-  // probing past the originally-documented "~1-3 minutes" — an abort here
-  // does NOT stop the physical macro (Klipper has no idea the HTTP client
-  // gave up), so a too-short bound doesn't just show a slow-but-harmless
-  // error: it silently orphans the print, since the caller (server.js)
-  // never reaches startPrintFile once this rejects, even though the printer
-  // goes on to finish leveling successfully a few minutes later on its own.
-  // 12 minutes gives real headroom above what's been observed live.
-  if (autoLevel) await sendG29WithRecovery(p);
+  // NO PRE-PRINT G29 (docs/TODO.md item 9d). This used to run
+  // sendG29WithRecovery() whenever autoLevel was set, and that was wrong: on
+  // this printer family Z is re-homed AFTER it, which throws away the mesh and
+  // Z reference G29 had just established.
+  //
+  //   non-CFS: START_PRINT's `prepare == 0` branch runs CANCEL_HOMEZ_NACCU,
+  //            G28, the material load, NOZ_CLEAR, NEXT_HOMEZ_NACCU and G28 Z
+  //   CFS:     startPrintFile's own preparation runs G28, and later G28 Z
+  //
+  // Confirmed live: auto-level ON gave bad Z; OFF gave a good first layer,
+  // with START_PRINT setting a tight reference itself (bst_z=0.017, spread
+  // ~0.015mm). So the printer's print-start flow owns the Z reference and
+  // SnapCon must not inject a mesh calibration ahead of it.
+  //
+  // Reordering G29 to AFTER the preparation was considered and rejected: it
+  // would help only CFS machines, would leave every non-CFS Creality still
+  // re-homed by START_PRINT, and would mean probing with a hot freshly-loaded
+  // nozzle plus a heater cool/reheat cycle (G29 ends M140 S0/M104 S0) that has
+  // never been tested. Forcing non-CFS printers into the prepared branch to
+  // dodge that would change how they load material, which is a far larger
+  // change with no evidence behind it.
+  //
+  // p.autoLevel is therefore ignored here even when a config written before
+  // this change still carries it — hiding the control is not the same as not
+  // executing the command. capabilities.autoLevel is false to match.
+  //
+  // sendG29WithRecovery() below is intentionally KEPT. G29 works, and its
+  // recovery logic (a real K1C repeatedly drops its Moonraker connection
+  // mid-G29) is hard-won; it remains available for a future standalone
+  // "level the bed now" action, which is a maintenance operation rather than
+  // a pre-print one.
 }
 
 // A real K1C's own connection to Moonraker has been observed, live and
@@ -855,7 +880,10 @@ exports.getCameraSnapshot = getCameraSnapshot;
 // macro variables and factory_printer.cfg's header comment, both far more
 // expensive to fetch for every candidate IP in a subnet scan, so they're
 // left as a manual follow-up rather than baked into discovery).
-exports._internal = { decodeCfsHeads, fetchCfsStatus, decodeEmbeddedThumbnail, getTotalLayers, LAYER_COUNT_CACHE, MESH_RECOVERY_POLL_INTERVAL_MS, MESH_RECOVERY_TIMEOUT_MS, PREP_TIMING, cfsPrepRequired, jobLive, jobDefinitelyIdle };
+exports._internal = { decodeCfsHeads, fetchCfsStatus, decodeEmbeddedThumbnail, getTotalLayers, LAYER_COUNT_CACHE, MESH_RECOVERY_POLL_INTERVAL_MS, MESH_RECOVERY_TIMEOUT_MS, PREP_TIMING, cfsPrepRequired, jobLive, jobDefinitelyIdle,
+  // Retained and still covered: no longer reachable through applyHeadMapping,
+  // so its tests drive it directly (docs/TODO.md item 9d).
+  sendG29WithRecovery };
 
 async function discoverAt(base) {
   const { ok, json } = await http.fetchJSONTimeout(`${base}/printer/info`, 900);

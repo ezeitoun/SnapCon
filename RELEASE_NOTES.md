@@ -301,3 +301,21 @@ Ender-3 V3 Plus, start prints exactly as before.
 
 Known limitation: the printer's touchscreen still does not show a SnapCon-started print while it is
 running, though it does show when one finishes.
+
+### Creality Bed Leveling Is Left to the Printer
+SnapCon no longer runs a bed-leveling pass before starting a print on a Creality machine, and the
+auto-level option is no longer offered for them.
+
+Leveling itself was never broken - the problem was when SnapCon ran it. These printers home the Z
+axis again as part of their own print-start routine, which discards the measurement that had just
+been taken. Turning auto-level on therefore made the first layer worse, not better, and prints came
+out with the nozzle too low or too high.
+
+Left alone, the printer sets its own Z reference during start-up and does it well - measured at
+0.017mm on a test machine. So that job now belongs to the printer.
+
+If an older saved configuration still has auto-level switched on for a Creality printer, it is
+ignored rather than quietly acted on.
+
+Snapmaker U1 printers are unaffected and keep their own auto-level, which works differently: it
+tells the firmware to level at the right moment rather than leveling ahead of the print.
