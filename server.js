@@ -1517,6 +1517,12 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
   if (!method) return res.status(400).json({ error: "Bad action" });
   try {
     await method.call(c, p);
+    // Eject means "this printer is no longer holding a job for me". The
+    // connector call clears Klipper's loaded file; the staged entry behind the
+    // "Loaded" badge is SnapCon's own and was previously cleared ONLY by
+    // actually printing the file, so a staged job could not be dismissed at
+    // all. Clearing it here is what makes the button mean what it says.
+    if (action === "eject" && queuedFile.has(printer)) { queuedFile.delete(printer); saveQueuedFiles(); }
     auditLog.log({ category: "job", event: "printctl-" + action, ...actorFromReq(req), printerId: p.id, printerName: p.name });
     res.json({ ok: true, action });
   } catch (e) {

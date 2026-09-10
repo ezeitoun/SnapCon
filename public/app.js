@@ -394,6 +394,21 @@ function statusColorText(p){
   return { statusColor:"var(--ok)", statusTxt:t("printer_status.idle") };
 }
 
+// Whether the card offers Eject -- "this printer is no longer holding a job for
+// me". True when Klipper has a file loaded OR SnapCon has one staged, in a
+// state where the printer is not mid-job.
+//
+// 'standby' is the string Klipper connectors actually emit; a live 20-printer
+// fleet reported only {standby, paused, complete, printing}. The old condition
+// required 'idle', which NO connector produces -- it is only statusColorText's
+// display fallback -- so Eject appeared solely via 'complete'/'cancelled' and
+// was missing on a printer sitting at standby with a file loaded. 'idle' is
+// kept anyway: flashforge-utils.js normalises standby->idle in one path.
+//
+// p.queuedFile is SnapCon's own staged file (the "Loaded" badge). It is cleared
+// only when the file is finally printed, so without this it could not be
+// dismissed at all. Only a 'ready' staged file counts -- one still uploading is
+// not yet a job the printer is holding.
 // A connector reports estop:false when the printer ACKNOWLEDGES an emergency
 // stop and never performs one — confirmed live on FlashForge native firmware,
 // where ~M112 returns "ok" and the machine keeps printing. The button stays
@@ -408,6 +423,13 @@ function estopUnsupported(p){
   return !!(p && p.capabilities && p.capabilities.estop === false);
 }
 
+function canEject(p){
+  if(!p) return false;
+  const st=p.state;
+  if(st==='printing'||st==='paused') return false;
+  if(!(st==='idle'||st==='standby'||st==='complete'||st==='cancelled')) return false;
+  return !!(p.filename||(p.queuedFile&&p.queuedFile.status==='ready'));
+}
 
 // Whether a printer is free to be sent a file right now -- drives the Send
 // modal's default selection and its row dot.
@@ -5122,7 +5144,7 @@ function buildCardHtml(p, need, dragEnabled){
       }
     }
     card.innerHTML=`
-      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${(p.state==='idle'||p.state==='complete'||p.state==='cancelled')&&p.filename?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title"))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${canEject(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title"))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
       ${VIEW_MODE==='camera'?(!p.online
           ? `<div class="cam-shot-placeholder"><span>${esc(t("printer_status.offline"))}</span></div>`
@@ -5668,10 +5690,10 @@ function queuedFileBannerHtml(p){
   if(qf.status==='error') return `<div class="queued-banner err">${esc(t("fleet.queued.stage_failed_banner",{name:qf.name,error:qf.error||''}))}</div>`;
   return '';
 }
-// /api/printfile is job-based: the HTTP response means "start job accepted",
-// NOT "printing". Head mapping and G29 happen after it returns, so the
-// outcome only arrives via pollJob -- treating the 200 as success would
-// report a print started that may still fail minutes later.
+// /api/printfile is job-based (docs/TODO.md item 9a): the HTTP response means
+// "start job accepted", NOT "printing". Head mapping and G29 happen after it
+// returns, so the outcome only arrives via pollJob -- treating the 200 as
+// success would report a print started that may still fail minutes later.
 async function printQueuedFile(printerId, filename, prefs){
   const st=$("pst-"+printerId);
   if(st){ st.className="pstatus work"; st.textContent=t("fleet.queued.starting_print_status"); }
