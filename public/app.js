@@ -2133,6 +2133,7 @@ function wireUI(){
 
   document.addEventListener("click", ()=>{
     $("sortMenu").classList.remove("open"); $("fileSortMenu").classList.remove("open");
+    if($("fwSortMenu")) $("fwSortMenu").classList.remove("open");
     document.querySelectorAll(".prow-menu.open").forEach(m=>m.classList.remove("open"));
   });
 
