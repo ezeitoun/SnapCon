@@ -310,7 +310,7 @@ async function getFileMetadata(p, file) {
       used: (typeof wt === "number") ? wt > 0 : !!(hex || type)
     });
   }
-  let isFS = false, fsFork = null, tailText = "";
+  let isFS = false, fsFork = null, tailText = "", tailPalette = null;
   const encodedPath = file.split("/").map(encodeURIComponent).join("/");
   try {
     const ctrl = new AbortController();
@@ -322,11 +322,27 @@ async function getFileMetadata(p, file) {
         tailText = await r.text();
         const fsResult = parseGcodeMap(tailText, { scanBody: false });
         isFS = fsResult.isFS; fsFork = fsResult.fsFork;
+        tailPalette = fsResult.palette;
       }
     } finally { clearTimeout(tid); }
   } catch {}
 
   let estimatedTime = m.estimated_time || null;
+  // Some Moonraker builds return a metadata record with no filament data at
+  // all -- confirmed live on a Creality SPARKX i7, whose entire record was
+  // {filename, first_layer_height, gcode_*_byte, job_id, modified,
+  // object_height, print_start_time, size, slicer, uuid} for a genuinely
+  // 4-colour file. That left the palette empty and the colour picker showed a
+  // single unnamed slot, so the file's colours could not be assigned to lanes.
+  //
+  // The tail fetched just above already contains the slicer config block, and
+  // parseGcodeMap already builds a full palette from it -- previously only
+  // isFS/fsFork were taken and that palette was discarded. Reusing it costs no
+  // extra request. Only ever a fallback: a printer that reports its own
+  // palette keeps it, since the printer is authoritative about its own file.
+  if (!palette.some(s => s.used) && tailPalette && tailPalette.some(s => s.used)) {
+    palette.splice(0, palette.length, ...tailPalette);
+  }
   const havePalette = palette.some(s => s.used);
   if (!estimatedTime || !havePalette) {
     let fb = parseFallbackStats(tailText); // OrcaSlicer/BambuStudio dialect — already have the bytes, no extra request
@@ -360,7 +376,11 @@ async function getFileMetadata(p, file) {
 // probeCached — no reason to probe twice).
 async function queryFirmwareInfo(p, st) {
   if (!st.online) return { name: p.name, online: false, skipped: true, reason: st.error || "offline", reasonCode: "offline", detail: st.error || "" };
-  if (!["standby", "complete", "cancelled"].includes(st.state)) {
+  // "maintenance" is a SnapCon-side flag, not a printer state: the machine is
+  // reachable and idle, deliberately taken out of production. That makes it a
+  // sensible printer to read firmware from and — see the deploy route — to
+  // update. The states that genuinely block are the ones where it is moving.
+  if (!["standby", "complete", "cancelled", "maintenance"].includes(st.state)) {
     return { name: p.name, online: true, skipped: true, reason: "busy (" + st.state + ")", reasonCode: "busy", state: st.state };
   }
   const base = baseUrl(p);

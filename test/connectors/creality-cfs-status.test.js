@@ -28,7 +28,7 @@ const BOXS_INFO = {
     { id: 0, state: 0, type: 1, materials: [
       { id: 0, vendor: "Generic", type: "PLA", name: "Generic PLA", color: "#0ffffff", selected: 0, state: 1 }
     ] },
-    { id: 1, state: 1, type: 0, sn: "80000140059S226GQLO", materials: [
+    { id: 1, state: 1, type: 0, temp: 0, humidity: 0, sn: "80000140059S226GQLO", materials: [
       { id: 0, vendor: "Generic", type: "PLA", name: "Generic PLA", color: "#0565656", selected: 0, state: 1 },
       { id: 1, vendor: "Generic", type: "PLA", name: "Generic PLA", color: "#031d251", selected: 0, state: 1 },
       { id: 2, vendor: "Generic", type: "PLA", name: "Generic PLA", color: "#0ff6e1a", selected: 0, state: 1 },
@@ -92,11 +92,11 @@ test("boxsInfo is found even though status frames arrive before it", async () =>
   } finally { fake.restore(); }
 });
 
-test("all five slots decode into heads", async () => {
+test("the CFS's four slots decode into heads, without the placeholder box", async () => {
   const fake = installFakeSocket(LIVE_SEQUENCE);
   try {
     const { heads } = decodeCfsHeads(await fetchCfsStatus(P));
-    assert.equal(heads.length, 5, "two boxes, five slots");
+    assert.equal(heads.length, 4, "the four-slot CFS, not the placeholder as well");
     assert.ok(heads.every(h => h.loaded), "every enumerated slot is loaded");
     assert.ok(heads.every(h => h.material === "PLA"));
   } finally { fake.restore(); }
@@ -181,7 +181,7 @@ test("malformed frames before boxsInfo do not abort the request", async () => {
   try {
     const bi = await fetchCfsStatus(P);
     assert.ok(bi, "a malformed frame must not abort the request");
-    assert.equal(decodeCfsHeads(bi).heads.length, 5);
+    assert.equal(decodeCfsHeads(bi).heads.length, 4);
   } finally { fake.restore(); }
 });
 
@@ -209,4 +209,129 @@ test("cleanup happens exactly once even while frames keep streaming", async () =
     assert.equal(fake.state.closes, 1, "closed exactly once despite continued traffic");
     assert.equal(fake.state.created, 1);
   } finally { fake.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// Colour decoding.
+//
+// Creality reports SEVEN hex digits. The decoder originally kept the first six,
+// which is wrong: the leading digit is a prefix and the colour is the last six.
+// Established by reading four slots off a live CFS and comparing against the
+// colours shown on the printer, all four agreeing:
+//
+//   raw #01743ed -> #1743ED  rgb(23,67,237)     operator: blue
+//   raw #031d251 -> #31D251  rgb(49,210,81)     operator: green
+//   raw #0ff6e1a -> #FF6E1A  rgb(255,110,26)    operator: orange
+//   raw #0ffffff -> #FFFFFF  rgb(255,255,255)   operator: white
+//
+// The old first-six reading gave #01743E, #031D25, #0FF6E1, #0FFFFF — dark
+// teal, near-black, mint and cyan. Wrong on every one.
+// ---------------------------------------------------------------------------
+
+const slot = color => ({ id: 0, vendor: "Generic", type: "PLA", name: "Generic PLA", color, selected: 0, state: 1 });
+const decodeColors = colors =>
+  decodeCfsHeads({ materialBoxs: [{ id: 1, state: 1, type: 0, sn: "SN-TEST", materials: colors.map(slot) }] }).heads.map(h => h.hex);
+
+test("a seven-digit colour decodes to its last six digits, matching the printer", () => {
+  assert.deepEqual(
+    decodeColors(["#01743ed", "#031d251", "#0ff6e1a", "#0ffffff"]),
+    ["#1743ED", "#31D251", "#FF6E1A", "#FFFFFF"]
+  );
+});
+
+test("the old first-six reading is not what we produce", () => {
+  // Guards against a regression back to the original behaviour.
+  const [blue] = decodeColors(["#01743ed"]);
+  assert.notEqual(blue, "#01743E", "must not keep the leading prefix digit");
+  assert.equal(blue, "#1743ED");
+});
+
+test("a plain six-digit colour is unchanged", () => {
+  assert.deepEqual(decodeColors(["#FF0000", "00FF00"]), ["#FF0000", "#00FF00"]);
+});
+
+test("a colour too short to be RGB yields null rather than a guess", () => {
+  assert.deepEqual(decodeColors(["#abc", "", "xyz"]), [null, null, null]);
+});
+
+test("an empty slot still reports no colour", () => {
+  const heads = decodeCfsHeads({ materialBoxs: [{ id: 1, state: 1, type: 0, sn: "SN-TEST", materials: [{ id: 0 }] }] }).heads;
+  assert.equal(heads.length, 1);
+  assert.equal(heads[0].loaded, false);
+  assert.equal(heads[0].hex, null);
+});
+
+// ---------------------------------------------------------------------------
+// Which boxes are real CFS units.
+//
+// The printer reports a non-hardware placeholder alongside the actual CFS —
+// the direct/single-colour feed path. Flattening every entry produced five
+// lanes for a four-slot CFS AND shifted every slot by one, so `activeExt`
+// pointed at the wrong lane.
+//
+// Three independent observations identify it, all from a live SPARKX i7:
+//   1. structure — the placeholder is {id, state, type} only: no serial, no
+//      temp, no humidity. The real unit reports all three.
+//   2. the printer's own summary — same_material listed four entries, every
+//      one boxId:1, omitting the placeholder entirely.
+//   3. behaviour — changing physical CFS spool #1 moved T2 on the fleet card,
+//      proving T1 was not a CFS slot.
+//
+// A physical unit has a serial number; the virtual path has no hardware
+// identity at all. That is the discriminator used here. `state` was rejected
+// (it plausibly means "in use", so an idle-but-attached CFS could vanish) and
+// so was `type` (semantics unknown, only two values ever observed).
+// ---------------------------------------------------------------------------
+
+const PLACEHOLDER_BOX = { id: 0, state: 0, type: 1, materials: [slot("#0ffffff")] };
+const REAL_CFS_BOX = {
+  id: 1, state: 1, type: 0, temp: 0, humidity: 0, sn: "80000140059S226GQLO",
+  materials: ["#01743ed", "#031d251", "#0ff6e1a", "#0ffffff"].map(slot)
+};
+
+test("the non-hardware placeholder box is not rendered as a CFS lane", () => {
+  const { heads } = decodeCfsHeads({ materialBoxs: [PLACEHOLDER_BOX, REAL_CFS_BOX] });
+  assert.equal(heads.length, 4, "a four-slot CFS must produce four lanes, not five");
+});
+
+test("CFS slots keep their real order — no off-by-one from the placeholder", () => {
+  // Changing physical spool #1 moved T2 before this fix; slot 1 must now be T1.
+  const { heads } = decodeCfsHeads({ materialBoxs: [PLACEHOLDER_BOX, REAL_CFS_BOX] });
+  assert.deepEqual(heads.map(h => h.hex), ["#1743ED", "#31D251", "#FF6E1A", "#FFFFFF"]);
+});
+
+test("activeExt indexes the CFS slot, not a placeholder-shifted position", () => {
+  const box = { ...REAL_CFS_BOX, materials: REAL_CFS_BOX.materials.map((m, i) => ({ ...m, selected: i === 0 ? 1 : 0 })) };
+  const { activeExt } = decodeCfsHeads({ materialBoxs: [PLACEHOLDER_BOX, box] });
+  assert.equal(activeExt, 0, "the first CFS slot is index 0, not 1");
+});
+
+test("multiple chained CFS units are all kept", () => {
+  // Creality supports chaining units; each real one reports its own serial.
+  const second = { ...REAL_CFS_BOX, id: 2, sn: "80000140059S226GQLP" };
+  const { heads } = decodeCfsHeads({ materialBoxs: [PLACEHOLDER_BOX, REAL_CFS_BOX, second] });
+  assert.equal(heads.length, 8, "two four-slot units are eight lanes");
+});
+
+test("with nothing to distinguish, every box is kept rather than hidden", () => {
+  // The filter is deliberately RELATIVE. When no box carries hardware identity
+  // there is nothing to tell apart, so all are kept — the rule can never hide
+  // real slots on a printer that reports less than this one does. A lone
+  // placeholder (CFS unplugged) therefore still shows its single lane, which is
+  // the conservative outcome: surfacing a spool that exists beats hiding slots
+  // that do.
+  const { heads } = decodeCfsHeads({ materialBoxs: [PLACEHOLDER_BOX] });
+  assert.equal(heads.length, 1, "nothing marks this as a placeholder on its own");
+});
+
+test("a CFS Nano is recognised as hardware — it reports no real drying data", () => {
+  // The Nano has no drying, and reports temp/humidity as 0 rather than omitting
+  // them; its serial carries it regardless. Both shapes must register.
+  const nanoWithZeros = { id: 1, state: 1, type: 0, temp: 0, humidity: 0, sn: "NANO-1", materials: [slot("#01743ed")] };
+  const nanoNoDryingFields = { id: 1, state: 1, type: 0, sn: "NANO-1", materials: [slot("#01743ed")] };
+  for (const box of [nanoWithZeros, nanoNoDryingFields]) {
+    const { heads } = decodeCfsHeads({ materialBoxs: [PLACEHOLDER_BOX, box] });
+    assert.equal(heads.length, 1, "the Nano's slot is kept and the placeholder dropped");
+    assert.equal(heads[0].hex, "#1743ED");
+  }
 });

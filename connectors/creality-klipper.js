@@ -79,7 +79,9 @@ exports.capabilities = {
 function getCapabilities(p) {
   if (!p) return exports.capabilities;
   const extra = {};
-  if (p.filamentMode === "cfs") extra.filamentHeads = true;
+  // headMapping rides on the same CFS switch: lanes only exist to map when a
+  // CFS is configured, and the fleet-card picker is gated on this flag.
+  if (p.filamentMode === "cfs") { extra.filamentHeads = true; extra.headMapping = true; }
   if (p.cameraUrl) { extra.camera = true; extra.cameraSnapshot = true; }
   else if (p.cameraWebrtc) { extra.camera = true; extra.cameraWebrtc = true; }
   return Object.keys(extra).length ? { ...exports.capabilities, ...extra } : exports.capabilities;
@@ -113,6 +115,31 @@ async function probe(p) {
     const plate = (eo.objects && eo.objects.length)
       ? { total: eo.objects.length, excluded: (eo.excluded_objects || []).length, current: eo.current_object || null }
       : null;
+    // While the gcode file's own START_PRINT macro runs, this printer reports
+    // print_stats.state "standby" even though virtual_sdcard.is_active is true
+    // -- the file IS loaded and being read, the printer just has not flipped its
+    // own state yet. Observed three times on a healthy, freshly power-cycled
+    // SPARKX i7, lasting from print start until the first layer (minutes, since
+    // START_PRINT heats, homes and loads CFS filament before extruding).
+    //
+    // Reporting that as Idle is not just a wrong badge: firmwareDeployBlockedBy()
+    // (server.js) refuses to flash only a "printing"/"paused" printer, so a
+    // machine mid-START_PRINT read as safe to flash, and QueueEngine confirms a
+    // dispatched job started by looking for state === "printing".
+    //
+    // Narrow on purpose: only "standby" is second-guessed, and only when the
+    // sdcard is actually active. Klipper reports paused/complete/cancelled/error
+    // explicitly and those are always taken at face value.
+    //
+    // NOT covered by this, deliberately: the window where the printer's own
+    // touchscreen prepares a print (heating/homing/loading) BEFORE any file is
+    // loaded. There is_active is FALSE, so this condition cannot see it, and the
+    // card reads Idle for minutes. Catching that needs idle_timeout.state, which
+    // reads "Printing" for ANY gcode execution (a manual G28 would light the card
+    // up) and so needs further qualifying -- see docs/TODO.md item 9i.
+    const rawState = ps.state || "unknown";
+    const sdActive = (st.virtual_sdcard || {}).is_active === true;
+    const state = (rawState === "standby" && sdActive) ? "printing" : rawState;
     // Klippy machine health outranks everything below. webhooks rides the
     // same query (no extra request); http.klipperFault() is the one shared
     // rule -- see its comment for why a shutdown must beat a frozen
@@ -122,7 +149,7 @@ async function probe(p) {
     const fault = http.klipperFault(st);
     const result = {
       name: p.name, online: true,
-      state: fault ? fault.state : (ps.state || "unknown"),
+      state: fault ? fault.state : state,
       message: fault ? fault.message : (ps.message || ""),
       errorCode: fault ? fault.errorCode : "",
       filename: ps.filename || "",
@@ -258,12 +285,13 @@ async function getTotalLayers(p, filename) {
 //        same_material:[...]}}
 // This is status/display only: which slot is loaded and its color/material,
 // same shape probe() already returns for other multi-head connectors
-// (afcLanesHtml/auto-match read `heads`/`activeExt`). The print-time
-// mechanism that maps a sliced file's T<n> tool changes to a specific
-// physical box+slot could NOT be confirmed from any public source — it's
-// not in K2_Series_Klipper's gcode_macro.cfg, and box_wrapper's own logic is
-// a closed-source .so — so nothing here selects a slot or writes to a box;
-// that remains unimplemented pending a confirmed source for it.
+// (afcLanesHtml/auto-match read `heads`/`activeExt`). The print-time mechanism
+// that maps a sliced file's T<n> tool changes to a specific physical box+slot
+// is not in K2_Series_Klipper's gcode_macro.cfg, and box_wrapper's logic is a
+// closed-source .so -- but it was captured from a live SPARKX i7 by reading
+// klippy.log while the printer's own touchscreen assigned lanes. It is
+// BOX_MODIFY_TN, applied in applyHeadMapping below. This function stays
+// status/display only and never writes to a box.
 function fetchCfsStatus(p) {
   return new Promise(resolve => {
     if (typeof WebSocket === "undefined") return resolve(null); // Node <21: skip silently
@@ -306,14 +334,43 @@ function fetchCfsStatus(p) {
 function decodeCfsHeads(boxsInfo) {
   const heads = [];
   let activeExt = null;
-  const boxes = (boxsInfo && boxsInfo.materialBoxs) || [];
+  // The printer reports a non-hardware placeholder alongside a real CFS — the
+  // direct/single-colour feed path — and rendering it produced five lanes for a
+  // four-slot CFS AND shifted every slot by one, so activeExt pointed at the
+  // wrong lane. Three independent observations on a live SPARKX i7 identify it:
+  //   - structure: the placeholder is {id, state, type} only; the real unit
+  //     also reports sn, temp and humidity.
+  //   - the printer's own summary: same_material listed four entries, every one
+  //     boxId:1, omitting the placeholder entirely.
+  //   - behaviour: changing physical CFS spool #1 moved T2 on the fleet card,
+  //     proving T1 was not a CFS slot.
+  //
+  // So a box with a serial, temperature or humidity is physical hardware, and
+  // one with none of them is not. The filter is applied RELATIVELY: only when
+  // the payload actually distinguishes the two. If no box carries any hardware
+  // identity there is nothing to tell apart, and every box is kept — that way
+  // this can never hide real slots on a printer that simply reports less than
+  // this one does. `type` was rejected as the discriminator: its semantics are
+  // unknown, only two values have ever been observed, and a CFS variant
+  // reporting type 1 would silently vanish.
+  const allBoxes = (boxsInfo && boxsInfo.materialBoxs) || [];
+  const isHardware = b => !!(b && (b.sn || b.temp !== undefined || b.humidity !== undefined));
+  const boxes = allBoxes.some(isHardware) ? allBoxes.filter(isHardware) : allBoxes;
   for (const box of boxes) {
     for (const m of (box.materials || [])) {
       const idx = heads.length;
       const loaded = !!(m && (m.vendor || m.name || m.color));
+      // Creality reports SEVEN hex digits and the colour is the LAST six — the
+      // leading digit is a prefix. Verified against a live CFS by reading four
+      // slots and comparing with the colours shown on the printer:
+      // #01743ed -> #1743ED blue, #031d251 -> #31D251 green,
+      // #0ff6e1a -> #FF6E1A orange, #0ffffff -> #FFFFFF white. Keeping the
+      // FIRST six instead gave dark teal, near-black, mint and cyan — every
+      // slot wrong. Anchoring at the end also leaves a plain 6-digit value
+      // untouched, so both forms decode correctly.
       let hex = null;
       if (loaded && m.color) {
-        const c = /^#?([0-9a-fA-F]{6})/.exec(String(m.color));
+        const c = /([0-9a-fA-F]{6})$/.exec(String(m.color));
         if (c) hex = "#" + c[1].toUpperCase();
       }
       if (loaded && m.selected === 1) activeExt = idx;
@@ -530,10 +587,59 @@ exports.bedTemp = (p, t) => http.sendGcode(p, "M140 S" + Math.round(t), CONTROL_
 
 // Named "applyHeadMapping" only because that's the pre-print-preferences
 // hook server.js calls for every connector before starting a print (see its
-// `if (c.applyHeadMapping && ...)` gating). It no longer does anything for
-// this connector: it used to run a pre-print G29, and no longer does — see
-// the block inside for why (docs/TODO.md item 9d).
+// `if (c.applyHeadMapping && ...)` gating). For this connector it now does
+// exactly one thing: assign CFS lanes when the caller mapped any.
+//
+// It used to ALSO run a pre-print G29, and no longer does — see the block at
+// the end of the function for why (docs/TODO.md item 9d).
 async function applyHeadMapping(p, tools, map, prefs = {}) {
+  // ---- CFS lane assignment ----
+  // Captured from a live SPARKX i7 + CFS Nano: while the printer's own
+  // touchscreen assigned filaments to lanes, klippy.log recorded its client
+  // (c440x v1.1.5.8) sending, over Klipper's gcode/script webhook -- the same
+  // method Moonraker's /printer/gcode/script exposes:
+  //     BOX_ENABLE_CFS_PRINT ENABLE=1
+  //     BOX_MODIFY_TN T1A=T1C T1B=T1A T1C=T1B T1D=T1D
+  // Neither is listed by /printer/gcode/help: the closed-source [box] module
+  // registers commands without description text, so that list is a floor on
+  // what exists, not a ceiling (stock macros likewise call BOX_CONFLICT_CHECK,
+  // BOX_GET_RFID and DO_T, none of which it reports).
+  //
+  // Verified end to end on the hardware: writing a non-identity table and
+  // reading box.map back confirmed the write and the argument form; and with
+  // T1A=T1D armed, a print started via SDCARD_PRINT_FILE -- this connector's
+  // own print-start path, not the touchscreen's PRINT_PREPARE_LOAD_MATERIAL --
+  // fed physical lane D and left lane A untouched.
+  //
+  // KEY is the gcode tool, VALUE is the physical lane, notated T<box><A-D> at
+  // four slots per box. The complete table for every referenced box is sent,
+  // identity-filling lanes the user did not remap, exactly as the printer's own
+  // UI does. Sent only when a mapping was actually chosen: an ordinary print
+  // must never silently flip the machine's CFS setting.
+  if (tools && tools.length) {
+    const lane = i => "T" + (Math.floor(i / 4) + 1) + "ABCD"[i % 4];
+    const assigned = new Map();
+    let boxes = 1;
+    for (const t of tools) {
+      const to = map ? map[t] : undefined;
+      if (to === undefined || to === null) continue;
+      const from = Number(t), dest = Number(to);
+      if (!Number.isInteger(from) || !Number.isInteger(dest) || from < 0 || dest < 0) continue;
+      assigned.set(lane(from), lane(dest));
+      boxes = Math.max(boxes, Math.floor(from / 4) + 1, Math.floor(dest / 4) + 1);
+    }
+    if (assigned.size) {
+      const table = [];
+      for (let i = 0; i < boxes * 4; i++) {
+        const from = lane(i);
+        table.push(from + "=" + (assigned.get(from) || from));
+      }
+      // A lookup-table write -- it returned instantly in live testing, so the
+      // ordinary control bound applies, not G29's leveling-length one.
+      await http.sendGcode(p, "BOX_ENABLE_CFS_PRINT ENABLE=1", CONTROL_TIMEOUT_MS);
+      await http.sendGcode(p, "BOX_MODIFY_TN " + table.join(" "), CONTROL_TIMEOUT_MS);
+    }
+  }
   // NO PRE-PRINT G29 (docs/TODO.md item 9d). This used to run
   // sendG29WithRecovery() whenever autoLevel was set, and that was wrong: on
   // this printer family Z is re-homed AFTER it, which throws away the mesh and

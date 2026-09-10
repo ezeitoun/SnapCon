@@ -125,6 +125,14 @@ test("flow-calibrate and timelapse prefs are unchanged — Creality never used t
   assert.deepEqual(r.scripts, [], "this connector has never sent anything for those two");
 });
 
+test("CFS lane mapping is untouched", async () => {
+  const r = recorder();
+  await withRec(r, () => creality.applyHeadMapping({ ...P, autoLevel: true }, [0], { 0: 3 }, {}));
+  assert.deepEqual(names(r), ["BOX_ENABLE_CFS_PRINT", "BOX_MODIFY_TN"],
+    "mapping still goes out, and still without a G29 after it");
+  assert.match(r.scripts[1], /T1A=T1D/);
+});
+
 // ---- 9e must be byte-identical ----
 
 test("the CFS preparation sequence is unchanged", async () => {

@@ -227,6 +227,88 @@ test("getFileMetadata: falls back to the tail-text Orca dialect when Moonraker r
   assert.equal(result.palette[0].used, true);
 });
 
+// Regression: a real Creality SPARKX i7's Moonraker returns an almost empty
+// metadata record -- confirmed live, the whole result was
+//   {filename, first_layer_height, gcode_end_byte, gcode_start_byte, job_id,
+//    modified, object_height, print_start_time, size, slicer, uuid}
+// with no filament_colour, filament_type, filament_weight or estimated_time at
+// all. That left `palette` empty for a genuinely 4-colour file, so the Quick
+// Print / print-file colour picker fell back to its single unnamed "T1" row and
+// the user could not assign the file's four colours to CFS lanes.
+//
+// The bytes needed were already in hand: getFileMetadata downloads the last
+// 51200 bytes to detect the FlashForge fork, and parseGcodeMap already parses a
+// full palette out of them -- only isFS/fsFork were being kept and the palette
+// thrown away. So this reuses what was already fetched and already parsed; it
+// costs no extra request.
+//
+// Fixture is the real file's own config block (Beardie, OrcaSlicer 2.4.2), and
+// reproduces its live palette exactly.
+const ORCA_TAIL_4COLOUR = [
+  "; filament_colour = #897A5C;#000000;#FFFFFF;#FF0000",
+  "; filament_type = PLA;PLA;PLA;PLA",
+  "; filament_vendor = Creality;Creality;Creality;Creality",
+  "; filament used [g] = 114.47, 5.48, 6.17, 6.15",
+  "; estimated printing time (normal mode) = 7h 34m 47s",
+  "; CONFIG_BLOCK_END"
+].join("\n");
+
+test("getFileMetadata: recovers the full palette from the tail when Moonraker's metadata record has no filament data", async () => {
+  const result = await withMockFetch(
+    async (url) => {
+      if (String(url).includes("/server/files/metadata")) {
+        // exactly the shape a real i7's Moonraker returns: no filament_* keys
+        return { ok: true, status: 200, json: async () => ({ result: {
+          filename: "a.gcode", size: 55975434, slicer: "OrcaSlicer",
+          gcode_start_byte: 26099, gcode_end_byte: 52587782
+        } }) };
+      }
+      return { ok: true, status: 200, text: async () => ORCA_TAIL_4COLOUR };
+    },
+    () => http.getFileMetadata(p, "a.gcode")
+  );
+  const used = result.palette.filter(s => s.used);
+  assert.equal(used.length, 4,
+    "a 4-colour file must offer 4 rows to map, not one unnamed slot: " + JSON.stringify(result.palette));
+  assert.deepEqual(used.map(s => s.hex), ["#897A5C", "#000000", "#FFFFFF", "#FF0000"]);
+  assert.deepEqual(used.map(s => s.type), ["PLA", "PLA", "PLA", "PLA"]);
+  assert.equal(used[0].wt, "114.47", "per-colour weights come across too");
+});
+
+test("getFileMetadata: Moonraker's own palette still wins over the tail when Moonraker reports one", async () => {
+  const result = await withMockFetch(
+    async (url) => {
+      if (String(url).includes("/server/files/metadata")) {
+        return { ok: true, status: 200, json: async () => ({ result: {
+          estimated_time: 500, filament_colour: "#0000FF", filament_type: "PETG", filament_weight: [20]
+        } }) };
+      }
+      // a tail that disagrees -- it must NOT be preferred
+      return { ok: true, status: 200, text: async () => ORCA_TAIL_4COLOUR };
+    },
+    () => http.getFileMetadata(p, "a.gcode")
+  );
+  const used = result.palette.filter(s => s.used);
+  assert.equal(used.length, 1, "the printer's own metadata is authoritative when it exists");
+  assert.equal(used[0].hex, "#0000FF");
+  assert.equal(used[0].type, "PETG");
+});
+
+test("getFileMetadata: a tail carrying no per-colour data still yields the single-slot weight fallback", async () => {
+  const result = await withMockFetch(
+    async (url) => {
+      if (String(url).includes("/server/files/metadata")) {
+        return { ok: true, status: 200, json: async () => ({ result: { slicer: "Unknown", gcode_start_byte: 0 } }) };
+      }
+      return { ok: true, status: 200, text: async () => "; total filament used [g] = 42.50\n" };
+    },
+    () => http.getFileMetadata(p, "a.gcode")
+  );
+  assert.equal(result.palette.length, 1, "no per-colour data means one stand-in row, unchanged behaviour");
+  assert.equal(result.palette[0].wt, "42.5");
+});
+
+
 test("getFileMetadata: falls back to a header-window fetch for the Cura dialect when the tail scan finds nothing", async () => {
   const calls = [];
   const result = await withMockFetch(

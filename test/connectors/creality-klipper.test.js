@@ -24,10 +24,11 @@ test("getCapabilities: does not mutate the shared static capabilities object", (
   assert.equal(conn.capabilities.filamentHeads, false);
 });
 
-test("getCapabilities: no headMapping capability regardless of filamentMode (print-start slot-selection mechanism is unconfirmed)", () => {
-  assert.equal(conn.getCapabilities({}).headMapping, undefined);
-  assert.equal(conn.getCapabilities({ filamentMode: "cfs" }).headMapping, undefined);
-});
+// SUPERSEDED: this used to assert headMapping was never declared, because the
+// print-start slot-selection mechanism was unconfirmed. It has since been
+// captured from the printer's own touchscreen and verified end to end against a
+// live SPARKX i7 -- see "CFS lane mapping (applyHeadMapping)" below, which now
+// covers both the CFS and non-CFS cases this test did.
 
 test("decodeCfsHeads: a single CFS box with a mix of loaded/empty slots", () => {
   const boxsInfo = {
@@ -246,9 +247,9 @@ test("a per-job auto-level pref no longer sends G29", async () => {
     "the printer's own print-start flow owns the Z reference — a mesh built here is thrown away");
 });
 
-// Hiding the control is not enough on its own: configs written before this
-// change still carry autoLevel:true and applyHeadMapping reads p.autoLevel.
 test("a stale saved autoLevel on the printer no longer triggers G29 either", async () => {
+  // Hiding the control is not enough on its own: configs written before this
+  // change still carry autoLevel:true and applyHeadMapping reads p.autoLevel.
   let scriptCallCount = 0;
   const realFetch = global.fetch;
   global.fetch = mockMeshAndScript(() => { scriptCallCount++; return { ok: true, status: 200, text: async () => "" }; });
@@ -277,6 +278,113 @@ test("applyHeadMapping sends nothing at all when auto-level isn't requested anyw
   } finally { global.fetch = realFetch; }
   assert.equal(called, false);
 });
+
+// ---- CFS lane mapping (applyHeadMapping) ----
+//
+// Mechanism captured from a live SPARKX i7 + CFS Nano by reading klippy.log
+// while the printer's own touchscreen assigned filaments to lanes. The
+// touchscreen client (c440x v1.1.5.8) sent, over Klipper's gcode/script
+// webhook -- the same method Moonraker's /printer/gcode/script exposes:
+//     BOX_ENABLE_CFS_PRINT ENABLE=1
+//     BOX_MODIFY_TN T1A=T1C T1B=T1A T1C=T1B T1D=T1D
+// Neither command appears in /printer/gcode/help: the closed-source [box]
+// module registers commands without description text, so that list is a floor
+// on what exists, not a ceiling (BOX_CONFLICT_CHECK, BOX_GET_RFID and DO_T are
+// likewise called by stock macros while absent from it).
+//
+// Verified end to end against the hardware:
+//   - writing a non-identity table and reading box.map back confirmed both the
+//     write and the argument form (identity -> crossed -> identity).
+//   - with T1A=T1D armed, a print started through SDCARD_PRINT_FILE (SnapCon's
+//     own print-start path, NOT the touchscreen's PRINT_PREPARE_LOAD_MATERIAL)
+//     fed physical lane D, leaving lane A untouched. So the mapping is honoured
+//     on the path this connector actually uses.
+//
+// Direction: KEY is the gcode tool, VALUE is the physical lane. Lane notation
+// is T<box><A-D>, one box per four slots, up to the firmware's 16-entry table.
+// The touchscreen sends the COMPLETE table for the box, including unchanged
+// identity entries, so that is what is sent here.
+const lastScript = (calls) => decodeURIComponent(new URL(calls[calls.length - 1]).searchParams.get("script"));
+const allScripts = (calls) => calls.map(u => decodeURIComponent(new URL(u).searchParams.get("script")));
+
+test("getCapabilities: headMapping is declared only when the printer is configured for CFS", () => {
+  assert.equal(conn.getCapabilities({}).headMapping, undefined,
+    "a single-filament Creality has no lanes to map -- the picker must stay hidden");
+  assert.equal(conn.getCapabilities({ filamentMode: "single" }).headMapping, undefined);
+  assert.equal(conn.getCapabilities({ filamentMode: "cfs" }).headMapping, true);
+});
+
+test("applyHeadMapping sends BOX_MODIFY_TN with the complete box table, identity-filling unmapped lanes", async () => {
+  const realFetch = global.fetch;
+  let calls = [];
+  global.fetch = mockMeshAndScript((u, n) => { calls.push(u); return { ok: true, status: 200, text: async () => "" }; });
+  try {
+    await conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [0], { 0: 3 }, {});
+  } finally { global.fetch = realFetch; }
+  const scripts = allScripts(calls);
+  const modify = scripts.find(s => s.startsWith("BOX_MODIFY_TN"));
+  assert.ok(modify, "a mapped tool must produce BOX_MODIFY_TN, got: " + JSON.stringify(scripts));
+  assert.equal(modify, "BOX_MODIFY_TN T1A=T1D T1B=T1B T1C=T1C T1D=T1D",
+    "the full four-lane table is sent, matching what the printer's own UI sends");
+});
+
+test("applyHeadMapping enables CFS printing before writing the map", async () => {
+  const realFetch = global.fetch;
+  let calls = [];
+  global.fetch = mockMeshAndScript((u) => { calls.push(u); return { ok: true, status: 200, text: async () => "" }; });
+  try {
+    await conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [0, 1], { 0: 1, 1: 0 }, {});
+  } finally { global.fetch = realFetch; }
+  const scripts = allScripts(calls);
+  const iEnable = scripts.findIndex(s => s.includes("BOX_ENABLE_CFS_PRINT"));
+  const iMap = scripts.findIndex(s => s.startsWith("BOX_MODIFY_TN"));
+  assert.ok(iEnable >= 0, "BOX_ENABLE_CFS_PRINT must be sent: " + JSON.stringify(scripts));
+  assert.ok(iMap >= 0, "BOX_MODIFY_TN must be sent: " + JSON.stringify(scripts));
+  assert.ok(iEnable < iMap, "enable must precede the map, matching the observed touchscreen order");
+  assert.equal(scripts[iEnable], "BOX_ENABLE_CFS_PRINT ENABLE=1");
+});
+
+test("applyHeadMapping never enables CFS or writes a map when no tools were mapped", async () => {
+  const realFetch = global.fetch;
+  let calls = [];
+  global.fetch = mockMeshAndScript((u) => { calls.push(u); return { ok: true, status: 200, text: async () => "" }; });
+  try {
+    await conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [], {}, { autoLevel: true });
+  } finally { global.fetch = realFetch; }
+  const scripts = allScripts(calls);
+  assert.equal(scripts.filter(s => s.includes("BOX_")).length, 0,
+    "an unmapped print must not flip the printer's CFS setting: " + JSON.stringify(scripts));
+  assert.equal(scripts.includes("G29"), false, "and must not level ahead of the print either");
+});
+
+test("applyHeadMapping still writes the map, and sends no G29 after it", async () => {
+  const realFetch = global.fetch;
+  let calls = [];
+  global.fetch = mockMeshAndScript((u) => { calls.push(u); return { ok: true, status: 200, text: async () => "" }; });
+  try {
+    await conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [0], { 0: 1 }, { autoLevel: true });
+  } finally { global.fetch = realFetch; }
+  const scripts = allScripts(calls);
+  const iMap = scripts.findIndex(s => s.startsWith("BOX_MODIFY_TN"));
+  assert.ok(iMap >= 0, "the lane map must still be written: " + JSON.stringify(scripts));
+  assert.equal(scripts.includes("G29"), false,
+    "leveling no longer follows the map — the print-start flow owns the Z reference");
+});
+
+test("applyHeadMapping maps lanes beyond the first box using T<box><A-D> notation", async () => {
+  const realFetch = global.fetch;
+  let calls = [];
+  global.fetch = mockMeshAndScript((u) => { calls.push(u); return { ok: true, status: 200, text: async () => "" }; });
+  try {
+    // tool 0 -> lane index 4, which is the SECOND box's first slot (T2A)
+    await conn.applyHeadMapping({ url: "http://127.0.0.1:1" }, [0], { 0: 4 }, {});
+  } finally { global.fetch = realFetch; }
+  const modify = allScripts(calls).find(s => s.startsWith("BOX_MODIFY_TN"));
+  assert.ok(modify.startsWith("BOX_MODIFY_TN T1A=T2A "), "lane 4 is T2A, not T1E: " + modify);
+  assert.ok(modify.includes("T2A=T2A") === false || modify.includes("T2B=T2B"),
+    "both boxes' tables must be present once a second box is referenced: " + modify);
+});
+
 
 // CODE_AUDIT.md P1-2: G29 genuinely blocks for the full leveling pass (see
 // this connector's own comment above applyHeadMapping) — it must NOT
@@ -929,6 +1037,81 @@ test("probe: still falls back to virtual_sdcard.progress when display_status isn
   );
   assert.equal(result.progress, 0.42);
 });
+
+// ---- Regression: card reads Idle during the file's own START_PRINT ----
+//
+// Confirmed on a healthy, freshly power-cycled SPARKX i7 (three separate
+// prints): while the gcode file's START_PRINT macro runs, the printer reports
+//     print_stats.state        = "standby"
+//     virtual_sdcard.is_active = true      <-- the file IS loaded and being read
+// It has simply not flipped its own state yet. On this printer START_PRINT
+// heats, homes and loads CFS filament before the first extrusion, so the window
+// lasts minutes -- SnapCon showed the card as Idle for all of it.
+//
+// That is not cosmetic: firmwareDeployBlockedBy() (server.js) only refuses to
+// flash a printer whose state is "printing"/"paused", so a machine mid-
+// START_PRINT read as safe to flash; and QueueEngine's dispatch verification
+// looks for state === "printing" to confirm a dispatched job actually started.
+//
+// HISTORY, so this is not re-litigated: this override was first written from
+// readings taken while the same printer was in a degraded state (Klipper had
+// shut down mid-print with an internal G1 error and been restarted several
+// times). In that state print_duration and display_status.progress also read 0,
+// which led to a wrong conclusion that this firmware "does not populate
+// print_stats". It does -- after a power cycle all of those fields work
+// normally. The standby+is_active window is the part that survived
+// re-verification on healthy hardware, and is the only thing this covers.
+//
+// The override is deliberately narrow: it fires ONLY when the printer itself
+// said "standby" AND the sdcard is active. Klipper reports
+// "paused"/"complete"/"cancelled"/"error" explicitly and none of those may ever
+// be second-guessed. It also does NOT cover the panel's own prepare window,
+// where is_active is false -- see docs/TODO.md item 9i.
+const stateProbe = (print_stats, virtual_sdcard) => withMockFetchThumb(
+  async (url) => {
+    if (String(url).includes("/printer/objects/query")) {
+      return { ok: true, status: 200, json: async () => ({ result: { status: {
+        print_stats, ...(virtual_sdcard ? { virtual_sdcard } : {})
+      } } }) };
+    }
+    return { ok: true, status: 200, text: async () => "G28\n" };
+  },
+  () => conn.probe({ url: "http://127.0.0.1:1", name: "Test" })
+);
+
+test('probe: reports "printing" when the printer says standby but virtual_sdcard is active (START_PRINT window)', async () => {
+  const r = await stateProbe(
+    { state: "standby", filename: "Beardie.gcode", print_duration: 0, info: {} },
+    { is_active: true, progress: 0.001 }
+  );
+  assert.equal(r.state, "printing",
+    "a job inside START_PRINT must not read as idle -- it gates firmware deploy and queue dispatch confirmation");
+});
+
+test("probe: a genuinely idle printer stays idle (standby with no active sdcard)", async () => {
+  const r = await stateProbe(
+    { state: "standby", filename: "", print_duration: 0, info: {} },
+    { is_active: false, progress: 0 }
+  );
+  assert.equal(r.state, "standby", "an idle printer must never be inflated to printing");
+});
+
+test("probe: standby stays standby when the printer reports no virtual_sdcard at all", async () => {
+  const r = await stateProbe({ state: "standby", filename: "", info: {} }, null);
+  assert.equal(r.state, "standby", "absence of virtual_sdcard is not evidence of printing");
+});
+
+for (const explicit of ["paused", "complete", "cancelled", "error", "printing"]) {
+  test('probe: never second-guesses an explicit print_stats.state of "' + explicit + '" from is_active', async () => {
+    const r = await stateProbe(
+      { state: explicit, filename: "job.gcode", info: {} },
+      { is_active: true, progress: 0.5 }
+    );
+    assert.equal(r.state, explicit,
+      "Klipper reports this state explicitly; is_active must not override it");
+  });
+}
+
 
 test("probe: estimates layer from progress × total when Klipper's own print_stats.info is null (real Creality Print behavior)", async () => {
   conn._internal.LAYER_COUNT_CACHE.clear();
