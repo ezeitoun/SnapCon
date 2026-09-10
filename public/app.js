@@ -2432,9 +2432,73 @@ function matchesColorFamily(heads, family){
     if(family==='white') return lig>0.8;
     if(family==='black') return lig<0.15;
     if(family==='grey'||family==='gray') return sat<0.15&&lig>0.15&&lig<0.8;
-    if(!ranges) return false;
+      if(!ranges) return false;
+      // Achromatic colours carry hue 0 by convention, and the red family
+      // spans [0,15] -- so without this guard every white, black and grey
+      // spool matched a search for "red". A hue family only means anything
+      // for a colour saturated and mid-toned enough to have a real hue; the
+      // thresholds are the same ones the white/black/grey branches above use,
+      // so the two sets stay complementary instead of overlapping.
+      if(sat<0.15||lig<0.15||lig>0.8) return false;
     return (Array.isArray(ranges[0])?ranges:[ ranges]).some(r=>hue>=r[0]&&hue<=r[1]);
   });
+}
+// matchesColorFamily above knows white/black/grey/gray, but they are not keys
+// in COLOR_FAMILIES -- so a `q in COLOR_FAMILIES` gate left that code
+// unreachable and "white" only ever did a text match. This is the real set.
+function isColorFamilyName(n){
+  return (n in COLOR_FAMILIES)||n==='white'||n==='black'||n==='grey'||n==='gray';
+}
+
+// "@red,blue,white" -> ["red","blue","white"]; anything else -> null.
+function parseColorSetQuery(q){
+  if(!q||q[0]!=='@') return null;
+  const names=q.slice(1).split(',').map(s=>s.trim()).filter(Boolean);
+  return names.length?names:null;
+}
+
+// Every requested colour must be satisfied by a DISTINCT loaded head -- the
+// question being asked is "can this printer run my N-colour file", so one red
+// spool must not satisfy two red slots. Greedy assignment can strand a colour
+// (handing a violet head to "blue" first, then having nothing left for
+// "violet"), so this backtracks. Fleets have at most a handful of heads, so the
+// search space is trivial.
+function matchesAllColorFamilies(heads, names){
+  const loaded=(heads||[]).filter(h=>h&&h.hex);
+  if(names.length>loaded.length) return false;
+  const taken=new Array(loaded.length).fill(false);
+  const assign=i=>{
+    if(i>=names.length) return true;
+    for(let j=0;j<loaded.length;j++){
+      if(taken[j]||!matchesColorFamily([loaded[j]],names[i])) continue;
+      taken[j]=true;
+      if(assign(i+1)) return true;
+      taken[j]=false;
+    }
+    return false;
+  };
+  return assign(0);
+}
+
+// The fleet search box's whole predicate, in one place so it can be tested.
+// `q` is already trimmed and lowercased by the caller.
+//
+// Colour is ADDITIVE, not exclusive: searching "blue" must return both the
+// printer named Blue and the printers loaded with blue filament. It used to
+// return only the latter, which hid a printer whose own name was the query.
+function matchesFleetQuery(p, q){
+  if(!q) return true;
+  const pct=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
+  if(pct){
+    if(!p.online||p.progress==null) return false;
+    const v=p.progress*100, n=parseFloat(pct[2]), op=pct[1];
+    return op==='>'?v>n:op==='>='?v>=n:op==='<'?v<n:v<=n;
+  }
+  const set=parseColorSetQuery(q);
+  if(set) return set.every(isColorFamilyName)&&matchesAllColorFamilies(p.heads,set);
+  if(isColorFamilyName(q)&&matchesColorFamily(p.heads,q)) return true;
+  const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
+  return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
 }
 function needsDarkText(hex){
   if(!hex) return false;
@@ -5359,19 +5423,8 @@ function renderFleet({incremental}={}){
   // Reachable-but-in-maintenance shouldn't read as "online" here — it can't
   // take a job right now, which is what this count is meant to signal.
   all.forEach(p=>{ if(p.online&&p.state!=="maintenance") online++; });
-  const pctMatch=q.match(/^([<>]=?)\s*(\d+)\s*%?$/);
-  const isColor=q in COLOR_FAMILIES;
   const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
-    : !q ? all : all.filter(p=>{
-    if(pctMatch){
-      if(!p.online||p.progress==null) return false;
-      const pct=p.progress*100, val=parseFloat(pctMatch[2]), op=pctMatch[1];
-      return op==='>'?pct>val:op==='>='?pct>=val:op==='<'?pct<val:pct<=val;
-    }
-    if(isColor) return matchesColorFamily(p.heads, q);
-    const statusTxt=p.online?(p.state==='printing'?'printing':p.state==='paused'?'paused':p.state==='error'?'error':p.state==='complete'?'complete':p.state==='cancelled'?'cancelled':'idle'):'offline';
-    return [p.brand||"",p.name||"",p.state||"",statusTxt].join(" ").toLowerCase().includes(q);
-  });
+    : !q ? all : all.filter(p=>matchesFleetQuery(p,q));
   // Status tabs + tag filter are shared by camera/list view only — tab
   // counts/tag options are computed from `fleet` (respects the search box
   // above) before this stage narrows further, so switching views never
