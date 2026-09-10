@@ -388,6 +388,52 @@ ignored rather than quietly acted on.
 Snapmaker U1 printers are unaffected and keep their own auto-level, which works differently: it
 tells the firmware to level at the right moment rather than leveling ahead of the print.
 
+### Discord Notifications, and Webhooks for Everything Else
+SnapCon can now post to Discord. Print started, paused, failed, finished, or hit a progress
+milestone — it arrives in your channel as a tidy embed, colour-coded by event, with the camera
+snapshot attached. Paste a webhook URL from your Discord channel settings and that is it.
+
+There is also a generic JSON mode for anything that is not Discord — n8n, Home Assistant, Node-RED,
+or a script of your own — posting the printer, event, message, progress and filename.
+
+It sits alongside the existing ntfy and Telegram options and fires on the same events, so nothing
+needs configuring twice.
+
+A Discord webhook URL is effectively a password for that channel, so SnapCon stores it the way it
+stores your Telegram bot token — it never comes back to the browser — and strips it out of error
+messages and logs so it cannot leak into a log file if your endpoint returns something unexpected.
+Requests do not follow redirects, for the same reason. Local addresses are allowed on purpose, so
+pointing this at a Home Assistant box on your own network works.
+
+### E-Stop No Longer Claims Success on FlashForge
+On FlashForge printers running stock firmware, E-Stop reported that it had worked while the printer
+carried on printing. The firmware accepts the stop command, answers "ok", and does nothing — so
+SnapCon believed it. Confirmed three separate ways on a real 5M Pro.
+
+The button is now shown disabled on those printers, with an explanation, rather than offering an
+emergency stop that does not stop anything. **Cancel still works normally** and remains the way to
+stop a print. Printers running ZMOD or Forge-X keep a real emergency stop, because Klipper provides
+one.
+
+This also fixed something less visible: SnapCon tries the other connection type if the first fails,
+and a false success meant that fallback was never reached — so a modded printer that had been
+misidentified had its emergency stop silently swallowed.
+
+### Smaller Fixes
+- **A FlashForge camera that is switched off now says so**, instead of reporting a connection error
+  that reads like the printer has fallen off the network.
+- **FlashForge fan speed was under-reported by 2.55x** — a fan running at 100% displayed as 39%.
+- **Creality printers with a CFS can have filament lanes mapped** from SnapCon, and a multi-colour
+  file whose metadata carries no palette no longer leaves the colour picker empty.
+- **Eject is offered whenever a printer is holding a job**, including a file SnapCon staged but has
+  not printed yet — previously that could not be cleared at all.
+- **Searching the fleet for a colour no longer hides the printer named after it.** Searching "blue"
+  returned every printer with blue filament except the one called U1 Blue.
+- **Cards show what SnapCon is doing** while it uploads a file and runs pre-print macros, instead of
+  reading Idle for what can be minutes on a Creality.
+- **Print starts are logged phase by phase**, so a print that stalls can be told apart after the
+  fact — was it the upload, the head mapping, or the start itself.
+
 ### Security Fixes
 Five issues found during a review of SnapCon's own code. All are fixed in this release, and
 upgrading is recommended for anyone running SnapCon where more than one person can reach it.
