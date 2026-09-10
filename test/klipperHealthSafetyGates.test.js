@@ -52,7 +52,10 @@ const IDLE_SRC = () => extractFn("isPrinterIdle");
 // isPrinterIdle also consults the start-sequence guard (docs/TODO.md 9i), so the
 // sandbox must supply it. Empty here: these tests are about the allowlist, and
 // the guard has its own file (test/startSequenceGuard.test.js).
-const IDLE_SET = () => extractConst("DISPATCH_IDLE_STATES") + "\n" + extractConst("STARTING");
+const IDLE_SET = () => extractConst("DISPATCH_IDLE_STATES") + "\n" + extractConst("STARTING")
+  // It also consults the firmware-deploy guard now; always false here for the
+  // same reason (see test/firmwareTargetingAndRejects.test.js).
+  + "\nfunction firmwareUpdating(){ return false; }";
 const idle = st => withProbe(IDLE_SRC(), IDLE_SET(), st).isPrinterIdle({ name: "P", url: "http://x" });
 const blocked = st => withProbe(extractFn("firmwareDeployBlockedBy"), null, st)
   .firmwareDeployBlockedBy({ name: "U1 Black", url: "http://x" });

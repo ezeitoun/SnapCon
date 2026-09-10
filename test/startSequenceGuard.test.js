@@ -50,6 +50,11 @@ function sandbox(probeResult) {
   vm.createContext(env);
   vm.runInContext(extractConst("STARTING"), env);
   vm.runInContext(extractConst("DISPATCH_IDLE_STATES"), env);
+  // isPrinterIdle also consults the firmware-deploy guard, so the sandbox must
+  // supply it. Always false here: these tests are about the start-sequence
+  // guard, and the firmware interaction has its own file
+  // (test/firmwareTargetingAndRejects.test.js).
+  vm.runInContext("function firmwareUpdating(){ return false; }", env);
   vm.runInContext(extract("isPrinterIdle", "async"), env);
   vm.runInContext(extract("withStartSequence", "async"), env);
   // A `const` declared inside a vm context is NOT a property of the sandbox
@@ -202,6 +207,11 @@ test("a probe failure still fails closed, guard or no guard", async () => {
   vm.createContext(env);
   vm.runInContext(extractConst("STARTING"), env);
   vm.runInContext(extractConst("DISPATCH_IDLE_STATES"), env);
+  // isPrinterIdle also consults the firmware-deploy guard, so the sandbox must
+  // supply it. Always false here: these tests are about the start-sequence
+  // guard, and the firmware interaction has its own file
+  // (test/firmwareTargetingAndRejects.test.js).
+  vm.runInContext("function firmwareUpdating(){ return false; }", env);
   vm.runInContext(extract("isPrinterIdle", "async"), env);
   assert.equal(await env.isPrinterIdle({ id: "x" }), false);
 });

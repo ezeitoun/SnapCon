@@ -1771,6 +1771,14 @@ async function isPrinterIdle(p) {
   // idle-looking state during its own start sequence, so no probe result can
   // answer this question.
   if (STARTING.has(p.id)) return false;
+  // Same reasoning, different operation: during a firmware upload or verify the
+  // printer is genuinely online and reporting standby, so the probe cannot tell
+  // that it is busy. Dispatching a print here does not endanger the machine —
+  // updateFromFile's beforeFlash gate catches it and aborts with nothing
+  // written — but it destroys the deploy and surfaces as a firmware failure the
+  // operator did not cause. The pre-flash gate stays as the last safety net;
+  // this stops the collision happening in the first place.
+  if (firmwareUpdating(p)) return false;
   try { const st = await probeCached(p); return !!(st && st.online) && DISPATCH_IDLE_STATES.has(st.state); }
   catch { return false; }
 }
