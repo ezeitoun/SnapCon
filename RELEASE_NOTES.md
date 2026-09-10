@@ -181,6 +181,48 @@ addresses, tokens, serial numbers, queue pool assignments and group access are a
 the new connector passes every control action straight through to the original, so the worst case
 for a migrated printer is exactly the behaviour it had before. The old connector remains available
 in the picker as "SnapMaker U1 (Old)".
+### Creality Printers Are Now Properly Supported
+Creality's newer machines run Klipper, so SnapCon could always *connect* to one — but Creality layer
+their own print-start macros, filament system and camera on top, and until those are handled a
+Creality looks connected while quietly getting things wrong. That work is done.
+
+**What you get:** correct status, progress and temperatures — including during the start macros,
+where cards used to read "Idle" mid-job — plus full print control, cancelling individual objects
+mid-print, the Health page, log/camera/G-code sync, network discovery, firmware versions, and a link
+to the printer's own web interface.
+
+**With a CFS fitted**, prints now track from start to finish. They used to lose track of themselves
+moments after starting: elapsed and remaining stuck at zero, the card falling back to idle while the
+machine was clearly running, and the printer's own history recording every SnapCon-started job as
+cancelled after zero seconds — which also meant Queue Management could not follow these printers at
+all. The cause was ordering: the printer reloads material as part of starting, and doing that after
+the job had begun reset it. SnapCon now prepares the machine first — homing, loading the chosen lane,
+setting the Z reference — exactly as the printer's own touchscreen does. You can map which lane feeds
+which colour from SnapCon, and starting with an empty extruder works instead of failing seconds in
+with a runout error.
+
+**Bed levelling is left to the printer, deliberately.** SnapCon no longer runs a levelling pass before
+a Creality print and no longer offers the option. Levelling was never broken — the problem was when
+SnapCon ran it. These machines re-home the Z axis during their own start routine, discarding the
+measurement just taken, so turning auto-level on made first layers worse rather than better. Left
+alone the printer sets its own reference, measured at 0.017mm on a test machine. An older saved
+configuration with auto-level switched on is ignored rather than quietly acted on. Snapmaker U1
+printers are unaffected and keep their own auto-level, which works differently.
+
+**Camera:** machines whose camera is reachable only over WebRTC, such as the SPARKX i7, now show a
+live feed and can take snapshots. Local network only, and those printers cannot attach a camera image
+to notifications.
+
+**Tested on** a SPARKX i7 with a CFS Nano and two Ender-3 V3 Plus units, including real prints —
+several were deliberately sacrificed to get the CFS start sequence right. The rest of the Klipper
+range (K1, K1C, K1 SE, K1 Max, K2, Hi, Ender-3 V3 KE) speaks the same protocol and should work; we
+would like to hear from you if you run one. Older Creality machines that do not run Klipper are not
+supported — there is no API to talk to.
+
+Two known limits: the printer's touchscreen still does not show a SnapCon-started print while it is
+running, though it does show when one finishes; and Creality does not report loaded filament
+per-toolhead, so spool colours are not shown on the card the way they are for a Snapmaker U1.
+
 ### Multi-Language Support (English + Spanish)
 SnapCon's interface can now be used in English or Spanish, with the whole app — Fleet, Health,
 Maintenance, Settings, Queue Management, and the login screen itself — fully translated.
@@ -343,50 +385,6 @@ slower machines it could give up with a timeout for a print that had in fact sta
 the meaning of the response has changed from "the print started" to "the request was accepted".
 Poll `GET /api/print-status?job=<jobId>` for the outcome. Scripts that relied on the old
 synchronous success or error response need updating.
-
-### Creality Prints With a CFS Now Report Themselves Correctly
-On a Creality printer with a CFS attached, a print started from SnapCon used to lose track of
-itself moments after starting. The printer kept printing, but SnapCon - and the printer's own
-records - stopped following it.
-- **Elapsed and remaining times now work.** They previously sat at zero for the whole print, and
-  the card fell back to showing the printer as idle while it was clearly running.
-- **The print appears in the printer's own history**, and finishes there as completed with its real
-  duration and filament usage. Before, every SnapCon-started print left a record claiming it had
-  been cancelled after zero seconds.
-- **Queue Management can follow these printers.** It confirms a job by watching the printer report
-  that it is printing, which never happened, so a queued job could not be tracked to completion.
-- **Starting with an empty extruder works.** SnapCon now loads the chosen filament lane before
-  starting, the same way the printer's own screen does, instead of the print failing seconds in
-  with a filament-runout error.
-
-The cause was ordering, not a missing feature: the printer reloads material as part of starting a
-print, and doing that after the job had already begun reset the job. SnapCon now prepares the
-machine first - homing, loading the mapped lane, setting the Z reference - and starts the print
-only once that is done, which is exactly what the printer's own touchscreen does.
-
-Only affects Creality printers with a CFS fitted and connected. Machines without one, including the
-Ender-3 V3 Plus, start prints exactly as before.
-
-Known limitation: the printer's touchscreen still does not show a SnapCon-started print while it is
-running, though it does show when one finishes.
-
-### Creality Bed Leveling Is Left to the Printer
-SnapCon no longer runs a bed-leveling pass before starting a print on a Creality machine, and the
-auto-level option is no longer offered for them.
-
-Leveling itself was never broken - the problem was when SnapCon ran it. These printers home the Z
-axis again as part of their own print-start routine, which discards the measurement that had just
-been taken. Turning auto-level on therefore made the first layer worse, not better, and prints came
-out with the nozzle too low or too high.
-
-Left alone, the printer sets its own Z reference during start-up and does it well - measured at
-0.017mm on a test machine. So that job now belongs to the printer.
-
-If an older saved configuration still has auto-level switched on for a Creality printer, it is
-ignored rather than quietly acted on.
-
-Snapmaker U1 printers are unaffected and keep their own auto-level, which works differently: it
-tells the firmware to level at the right moment rather than leveling ahead of the print.
 
 ### Discord Notifications, and Webhooks for Everything Else
 SnapCon can now post to Discord. Print started, paused, failed, finished, or hit a progress
