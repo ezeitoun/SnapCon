@@ -1,8 +1,14 @@
 // connectors/flashforge-adventurer.js — FlashForge Adventurer 5M / 5M Pro.
-// Single nozzle, no material station. Built from community-documented API
-// (github.com/Parallel-7/flashforge-api-docs) — NOT yet verified against
-// real hardware; treat as a first pass to be checked against an actual 5M
-// Pro before relying on it for unattended prints.
+// Single nozzle, no material station. Originally built from the
+// community-documented API (github.com/Parallel-7/flashforge-api-docs), and
+// since VERIFIED against a real 5M Pro — auth, /detail, state mapping, temps,
+// file list, thumbnails (BMP), metadata degradation, camera and the fan field
+// all confirmed live (firmware 3.1.5, re-confirmed on 5.1.7).
+//
+// Two things the documented schema got wrong on real hardware, both fixed and
+// both worth knowing before trusting the docs over the machine: the cooling-fan
+// field is coolingFanSpeed (not the documented coolingFanLeftSpeed), and
+// errorCode is genuinely reported rather than absent.
 //
 // Config this connector expects on the printer object: `url` (e.g.
 // http://192.168.1.50:8898 — FlashForge's HTTP API port, NOT Moonraker's),

@@ -99,22 +99,33 @@ function faultCode(d) {
 
 // A real 5M Pro reports `coolingFanSpeed`; `coolingFanLeftSpeed` — the name
 // taken from the documented example payload — does not appear anywhere in its
-// /detail (confirmed by dumping all 52 fields off firmware 3.1.5), which is
-// why fanPct was always null on real hardware. Both names are tried,
-// preferring the confirmed one, because this function is shared with
-// flashforge-ad5x.js and no AD5X was available to check which name that model
-// uses — so this can only add a reading, never take one away.
+// /detail (confirmed by dumping all 52 fields off firmware 3.1.5, and again on
+// 5.1.7), which is why fanPct was always null on real hardware.
 //
-// STILL UNVERIFIED: the 0-255 PWM scale. The documented example value (128)
-// implies PWM, but a live idle printer reads 0, so this can only be settled
-// while a print is actually running. If the field turns out to be a 0-100
-// percentage instead, this under-reports by 2.55x.
+// The two names are deliberately read on DIFFERENT scales, because the
+// evidence for each is different:
+//
+//   coolingFanSpeed is a PERCENTAGE (0-100). Settled live on 2026-09-09 by
+//   comparing what the file commands against what the printer reports, rather
+//   than by reading the panel (the 5M Pro's screen shows that the fan runs but
+//   not at what percentage). boat_pla_14m3s.gcode contains only M106 S0 (x7)
+//   and M106 S255 (x802) — no intermediate values — and while printing inside
+//   an S255 full-speed region the printer reported 100, dropping to 0 on
+//   pause. Under a PWM reading full speed would have reported 255.
+//   The previous /255 therefore under-reported by 2.55x, showing 39% for a fan
+//   that was actually at 100%.
+//
+//   coolingFanLeftSpeed keeps the 0-255 PWM reading, because it has never been
+//   seen on real hardware at all: its only source is the documented example
+//   payload, whose value (128) implies PWM. This function is shared with
+//   flashforge-ad5x.js and no AD5X was available to check, so that fallback
+//   inherits nothing from evidence gathered under a different field name.
 function fanPercent(d) {
-  const raw = (typeof d.coolingFanSpeed === "number") ? d.coolingFanSpeed
-    : (typeof d.coolingFanLeftSpeed === "number") ? d.coolingFanLeftSpeed
-      : null;
-  if (raw === null) return null;
-  return Math.max(0, Math.min(100, Math.round(raw / 255 * 100)));
+  if (typeof d.coolingFanSpeed === "number")
+    return Math.max(0, Math.min(100, Math.round(d.coolingFanSpeed)));
+  if (typeof d.coolingFanLeftSpeed === "number")
+    return Math.max(0, Math.min(100, Math.round(d.coolingFanLeftSpeed / 255 * 100)));
+  return null;
 }
 
 // d = the raw /detail object. Shared by both connectors — AD5X's probe()
@@ -136,11 +147,23 @@ function decodeCommonStatus(p, d) {
     filename: d.printFileName || "",
     progress,
     elapsed: typeof d.printDuration === "number" ? d.printDuration : null,
-    filamentUsed: null, // not present in the documented /detail schema
+    // Deliberately null, but NOT because the field is missing: /detail does
+    // carry cumulativeFilament — that is the printer's lifetime total, not
+    // "used by this job", and there is no honest per-job source to derive it
+    // from. Absence of data is valid state (CLAUDE.md section 2); a lifetime
+    // counter shown as job usage would be a fabricated reading.
+    filamentUsed: null,
     bed: (typeof d.platTemp === "number") ? { temp: Math.round(d.platTemp), target: Math.round(d.platTargetTemp || 0) } : null,
     hotend: hotendSrc ? { temp: Math.round(hotendSrc.t), target: Math.round(hotendSrc.tt || 0) } : null,
     layer: (typeof d.printLayer === "number") ? { current: d.printLayer, total: d.targetPrintLayer || 0 } : null,
-    speed: null, // not present in the documented /detail schema
+    // Also deliberately null rather than absent. SnapCon's speed is a factor
+    // PERCENTAGE (klipper-moonraker.js derives it from
+    // gcode_move.speed_factor * 100), so the matching field here is
+    // printSpeedAdjust — NOT currentPrintSpeed, which is mm/s and would be a
+    // different quantity under the same name. Both read 0 on an idle printer,
+    // so which one behaves as a percentage is pending a live print
+    // (docs/TODO.md section 5).
+    speed: null,
     fanPct: fanPercent(d),
     activeExt: null,
     plate: null // FlashForge's API has no documented exclude_object equivalent
@@ -424,6 +447,28 @@ function uploadFile(p, fp, name, job) {
 // silently hung up while a browser tab is still open on the stream) — all
 // the more reason to grab one frame and disconnect right away rather than
 // leaving a connection open.
+// A camera switched off in the printer's own settings means nothing is
+// listening on :8080, so the snapshot dies with a bare "connect ECONNREFUSED
+// <ip>:8080" — which reads as "the printer fell off the network" when the
+// printer is online and perfectly healthy.
+//
+// /detail tells the two apart cleanly: cameraStreamUrl is "" when the camera is
+// off and the full URL when it is on (confirmed both ways on a real 5M Pro,
+// firmware 5.1.7). Consulted ONLY here on the failure path, so a working
+// snapshot still costs exactly one request.
+//
+// It must never MASK a real fault. If /detail says the camera is on, or /detail
+// itself cannot be reached, the original error is returned untouched — a failed
+// diagnostic is not evidence, and sending an operator to "enable the camera"
+// when the camera is already enabled is worse than the raw error.
+async function cameraOffOrOriginal(p, err) {
+  if (!err || err.code !== "ECONNREFUSED") return err;
+  let d;
+  try { d = await ffDetail(p); } catch { return err; }
+  if (!d || typeof d.cameraStreamUrl !== "string" || d.cameraStreamUrl !== "") return err;
+  return new Error("Camera is turned off on the printer — enable it in the printer's settings");
+}
+
 async function getCameraSnapshot(p) {
   const host = new URL(baseUrl(p)).hostname;
   const streamUrl = `http://${host}:8080/?action=stream`;
@@ -457,6 +502,8 @@ async function getCameraSnapshot(p) {
       req.on("timeout", () => { req.destroy(); done(reject, new Error("Camera stream timed out — is another viewer already connected?")); });
       req.on("error", e => done(reject, e));
     });
+  } catch (e) {
+    throw await cameraOffOrOriginal(p, e);
   } finally {
     ffControl(p, "streamCtrl_cmd", { action: "close" }).catch(() => {});
   }
@@ -471,5 +518,4 @@ module.exports = {
   baseUrl, fetchTimeout, ffPost, ffDetail, ffControl, STATE_MAP, decodeCommonStatus,
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile, issuePrintAndConfirm,
   listFiles, getThumbnail, getFileMetadata, uploadFile, getCameraSnapshot
-
 };
