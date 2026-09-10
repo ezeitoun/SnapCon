@@ -58,7 +58,7 @@
 "use strict";
 
 const { createHash } = require("node:crypto");
-const { openAsBlob } = require("node:fs");
+const zlib = require("node:zlib");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -211,7 +211,15 @@ exports.getFreeBytes = getFreeBytes;
 // is not acceptable. No timeout is imposed: the upload legitimately takes
 // minutes on a slow network, and aborting halfway leaves a truncated image in
 // a place someone might later flash.
-async function uploadFirmware(p, localPath, { root = DEFAULT_ROOT } = {}) {
+// onProgress(sent, total) fires per chunk while the image is going up.
+//
+// Streams through http-utils' uploadWithProgress — the same uploader every
+// print already uses — rather than fetch + openAsBlob. Both stream, but
+// Node's fetch exposes no upload-progress hook at all, and a ~250 MB transfer
+// with nothing moving on screen is indistinguishable from a hang. No timeout
+// is imposed either way: the upload legitimately takes minutes, and aborting
+// halfway leaves a truncated image somewhere someone might later flash.
+async function uploadFirmware(p, localPath, { root = DEFAULT_ROOT, subdir = "", onProgress = null } = {}) {
   const name = path.basename(localPath);
   const stat = await fs.stat(localPath);
 
@@ -222,17 +230,29 @@ async function uploadFirmware(p, localPath, { root = DEFAULT_ROOT } = {}) {
       `need roughly ${((stat.size * 2) / 1e9).toFixed(2)} GB to store and unpack the image`);
   }
 
-  const form = new FormData();
-  form.append("root", root);
-  form.append("path", "");
-  form.append("file", await openAsBlob(localPath), name);
-
-  const res = await fetch(http.baseUrl(p) + "/server/files/upload",
-                          { method: "POST", body: form });
-  if (!res.ok) {
-    throw new Error(`Upload failed (HTTP ${res.status}): ${(await res.text()).slice(0, 300)}`);
+  // uploadWithProgress writes sent/total onto this object as bytes move; the
+  // accessor turns those writes into onProgress calls without http-utils
+  // needing to know a caller wants them.
+  //
+  // UNITS: `total` is the whole multipart REQUEST BODY, not the bare file —
+  // that is what is actually being transferred. The framing adds ~166 bytes,
+  // so on a ~250 MB image the figure shown to a user is the file size to
+  // every digit they can read.
+  const meter = {
+    total: 0, _sent: 0,
+    get sent() { return this._sent; },
+    set sent(v) { this._sent = v; if (onProgress) onProgress(v, this.total); },
+  };
+  let body;
+  try {
+    body = await http.uploadWithProgress(http.baseUrl(p), localPath, name, meter);
+  } catch (e) {
+    throw new Error("Upload failed: " + e.message);
   }
-  const item = ((await res.json()).result || {}).item || {};
+  let parsed;
+  try { parsed = JSON.parse(body); }
+  catch { throw new Error("Upload returned a response that is not JSON: " + String(body).slice(0, 300)); }
+  const item = (parsed.result || {}).item || {};
   const roots = await getRoots(p);
   if (!roots[root]) throw new Error(`Printer has no '${root}' root`);
 
@@ -244,14 +264,147 @@ async function uploadFirmware(p, localPath, { root = DEFAULT_ROOT } = {}) {
 }
 exports.uploadFirmware = uploadFirmware;
 
-// Read the uploaded copy back and compare MD5 against the local file.
+// --- verification ---------------------------------------------------------
 //
-// Do not skip this. A truncated or corrupted image that still passes a size
-// check is the realistic way this bricks a printer, and the check costs one
-// download over the LAN.
-async function verifyFirmware(p, localPath, { root = DEFAULT_ROOT, remoteName } = {}) {
-  const name = remoteName || path.basename(localPath);
+// Something must confirm the printer holds the bytes we meant to send: a
+// truncated image that still looks plausible is the realistic way this bricks
+// a machine. The printer exposes no hash endpoint, so there are three ways to
+// get that confirmation, in descending order of preference:
+//
+//   "crc"    Have the PRINTER compute it. POST /server/files/zip with
+//            store_only:true archives with ZIP_STORED — no compression, but
+//            the zip format stores a CRC-32 per entry that the printer
+//            computes while copying. The central directory holding it sits at
+//            the end of the archive, and Moonraker serves files through
+//            Tornado's StaticFileHandler, which honors HTTP Range. So we read
+//            about a kilobyte instead of a quarter gigabyte. Costs the printer
+//            one read+write pass and temporary disk equal to the image.
+//
+//   "sample" No server-side work: compare a handful of Range-fetched windows
+//            (head, tail, evenly spaced middles) against the local file. A few
+//            MB over the wire. Catches truncation and torn writes; will not
+//            catch a single flipped byte between windows.
+//
+//   "md5"    Download the whole thing and hash it. Certain, and by far the
+//            most bytes. Kept for when you want no cleverness in the path.
+//
+// All three check length first, because a short file is the failure that
+// actually happens.
 
+function fileUrl(p, root, name) {
+  return `${http.baseUrl(p)}/server/files/${root}/${encodeURIComponent(name)}`;
+}
+
+// onProgress(read, total) — in "crc" mode the network carries only a few KB,
+// so THIS local pass over the image is the part that takes real time and is
+// the only honest thing to show a progress bar for.
+async function localCrc32(localPath, { onProgress = null } = {}) {
+  let crc = 0, size = 0;
+  const total = (await fs.stat(localPath)).size;
+  const fh = await fs.open(localPath, "r");
+  try {
+    for await (const chunk of fh.createReadStream()) {
+      crc = zlib.crc32(chunk, crc);
+      size += chunk.length;
+      if (onProgress) onProgress(size, total);
+    }
+  } finally { await fh.close(); }
+  return { crc, size };
+}
+
+async function fetchRange(p, root, name, start, end) {
+  const res = await fetch(fileUrl(p, root, name), {
+    headers: { Range: `bytes=${start}-${end}` },
+  });
+  if (res.status !== 206) {
+    throw new Error(`Printer did not honor a Range request (HTTP ${res.status})`);
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+// Parse CRC-32 and uncompressed size out of a stored zip's central directory.
+function parseZipCentralDirectory(cdBuf) {
+  if (cdBuf.readUInt32LE(0) !== 0x02014b50) {
+    throw new Error("Unexpected zip central directory signature");
+  }
+  return { crc: cdBuf.readUInt32LE(16), size: cdBuf.readUInt32LE(24) };
+}
+
+// Ask the printer to CRC the file for us. Returns { crc, size }.
+async function remoteCrc32(p, name, { root = DEFAULT_ROOT } = {}) {
+  const zipName = `verify-${Date.now()}.zip`;
+  const res = await fetch(`${http.baseUrl(p)}/server/files/zip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dest: `${root}/${zipName}`,
+      items: [`${root}/${name}`],
+      store_only: true,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Printer could not archive the file (HTTP ${res.status})`);
+  }
+  await res.json();
+
+  try {
+    // The EOCD is within the last 64KB unless there is a huge zip comment.
+    const head = await fetch(fileUrl(p, root, zipName), { headers: { Range: "bytes=0-0" } });
+    const total = Number((head.headers.get("content-range") || "").split("/")[1]);
+    if (!Number.isFinite(total)) throw new Error("Printer did not report the archive size");
+    const tailStart = Math.max(0, total - 65536);
+    const tail = await fetchRange(p, root, zipName, tailStart, total - 1);
+
+    const eocd = tail.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    if (eocd < 0) throw new Error("Could not find the zip end-of-central-directory");
+    const cdSize = tail.readUInt32LE(eocd + 12);
+    const cdOffset = tail.readUInt32LE(eocd + 16);
+    if (cdOffset === 0xffffffff) {
+      throw new Error("zip64 archive — file too large for this check");
+    }
+    const cdBuf = await fetchRange(p, root, zipName, cdOffset, cdOffset + cdSize - 1);
+    return parseZipCentralDirectory(cdBuf);
+  } finally {
+    // Never leave a quarter-gigabyte scratch archive on the printer.
+    await deleteRemote(p, zipName, { root }).catch(() => {});
+  }
+}
+exports.remoteCrc32 = remoteCrc32;
+
+async function remoteSize(p, name, { root = DEFAULT_ROOT } = {}) {
+  const res = await fetch(fileUrl(p, root, name), { headers: { Range: "bytes=0-0" } });
+  if (res.status !== 206) throw new Error(`Could not stat the uploaded file (HTTP ${res.status})`);
+  const total = Number((res.headers.get("content-range") || "").split("/")[1]);
+  if (!Number.isFinite(total)) throw new Error("Printer did not report the file size");
+  return total;
+}
+exports.remoteSize = remoteSize;
+
+async function verifyBySampling(p, localPath, { root, name, windows = 5, windowBytes = 1 << 20 }) {
+  const stat = await fs.stat(localPath);
+  const size = await remoteSize(p, name, { root });
+  if (size !== stat.size) {
+    return { ok: false, mode: "sample", reason: "size", localSize: stat.size, remoteSize: size };
+  }
+  const fh = await fs.open(localPath, "r");
+  try {
+    for (let i = 0; i < windows; i++) {
+      const start = windows === 1 ? 0
+        : Math.min(size - 1, Math.floor((size - windowBytes) * (i / (windows - 1))));
+      const from = Math.max(0, start);
+      const to = Math.min(size - 1, from + windowBytes - 1);
+      const remote = await fetchRange(p, root, name, from, to);
+      const local = Buffer.alloc(to - from + 1);
+      await fh.read(local, 0, local.length, from);
+      if (!local.equals(remote)) {
+        return { ok: false, mode: "sample", reason: "content", offset: from };
+      }
+    }
+  } finally { await fh.close(); }
+  return { ok: true, mode: "sample", localSize: stat.size, remoteSize: size, windows };
+}
+
+async function verifyByMd5(p, localPath, { root, name, onProgress = null }) {
   const localHash = createHash("md5");
   let localSize = 0;
   const fh = await fs.open(localPath, "r");
@@ -262,20 +415,59 @@ async function verifyFirmware(p, localPath, { root = DEFAULT_ROOT, remoteName } 
     }
   } finally { await fh.close(); }
 
-  const url = `${http.baseUrl(p)}/server/files/${root}/${encodeURIComponent(name)}`;
-  const res = await fetch(url);
+  const res = await fetch(fileUrl(p, root, name));
   if (!res.ok) throw new Error(`Could not read the uploaded file back (HTTP ${res.status})`);
-
   const remoteHash = createHash("md5");
-  let remoteSize = 0;
+  let rSize = 0;
   for await (const chunk of res.body) {
-    remoteSize += chunk.length;
+    rSize += chunk.length;
     remoteHash.update(chunk);
+    // md5 mode pulls the whole image back, so the read-back is what moves —
+    // localSize is the denominator, since a differing remote size is exactly
+    // what this check exists to catch.
+    if (onProgress) onProgress(rSize, localSize);
   }
 
   const local = localHash.digest("hex");
   const remote = remoteHash.digest("hex");
-  return { ok: local === remote && localSize === remoteSize, local, remote, localSize, remoteSize };
+  return { ok: local === remote && localSize === rSize, mode: "md5",
+           local, remote, localSize, remoteSize: rSize };
+}
+
+// mode: "crc" (default) | "sample" | "md5" | "none"
+// "crc" falls back to "sample" if the printer's zip endpoint is unavailable —
+// an older firmware should degrade to a weaker check, never to no check.
+//
+// "none" is the exception, and it is never reached by accident: nothing
+// defaults to it, no fallback lands on it, and the only way to select it is a
+// caller passing it explicitly. See updateFromFile, which skips this function
+// entirely rather than having it return a fake pass.
+async function verifyFirmware(p, localPath, {
+  root = DEFAULT_ROOT, remoteName, mode = "crc", onProgress = null,
+} = {}) {
+  const name = remoteName || path.basename(localPath);
+
+  if (mode === "md5") return verifyByMd5(p, localPath, { root, name, onProgress });
+  if (mode === "sample") return verifyBySampling(p, localPath, { root, name });
+
+  const local = await localCrc32(localPath, { onProgress });
+  let remote;
+  try {
+    remote = await remoteCrc32(p, name, { root });
+  } catch (e) {
+    const fallback = await verifyBySampling(p, localPath, { root, name });
+    fallback.fellBackFrom = "crc";
+    fallback.crcError = e.message;
+    return fallback;
+  }
+  return {
+    ok: local.crc === remote.crc && local.size === remote.size,
+    mode: "crc",
+    local: local.crc >>> 0,
+    remote: remote.crc >>> 0,
+    localSize: local.size,
+    remoteSize: remote.size,
+  };
 }
 exports.verifyFirmware = verifyFirmware;
 
@@ -286,6 +478,30 @@ async function deleteRemote(p, name, { root = DEFAULT_ROOT } = {}) {
   return true;
 }
 exports.deleteRemote = deleteRemote;
+
+// List everything actually sitting in a root, including non-gcode files.
+//
+// Two different listings, and the difference matters here:
+//   /server/files/list?root=gcodes   filters to VALID_GCODE_EXTS
+//                                    ['.gcode','.g','.gco','.ufp'] — a .bin is
+//                                    invisible to it, which is why an uploaded
+//                                    firmware image never pollutes the print
+//                                    file manager, and also why a leftover one
+//                                    is invisible to the user.
+//   /server/files/directory?path=... does not filter — everything shows.
+//
+// Use this to sweep for images orphaned by an interrupted update. Nothing else
+// in SnapCon will ever surface them.
+async function listImages(p, { root = DEFAULT_ROOT, subdir = "", match = /\.bin$/i } = {}) {
+  const target = subdir ? `${root}/${subdir}` : root;
+  const { ok, status, json } = await http.fetchJSONTimeout(
+    `${http.baseUrl(p)}/server/files/directory?path=${encodeURIComponent(target)}`, 10000);
+  if (!ok) throw new Error(`Could not list ${target} (HTTP ${status})`);
+  return (json.result.files || [])
+    .filter(f => match.test(f.filename))
+    .map(f => ({ name: f.filename, size: f.size, modified: f.modified }));
+}
+exports.listImages = listImages;
 
 // ---------------------------------------------------------------------------
 // Flashing
@@ -383,35 +599,52 @@ exports.watchUpgrade = watchUpgrade;
 // until it answers.
 async function updateFromFile(p, localPath, {
   root = DEFAULT_ROOT,
+  verify = "crc",
   keepImage = false,
   watchSeconds = 900,
   onStep = () => {},
+  // Byte progress for the two phases that move a quarter-gigabyte:
+  // onProgress(phase, sent, total) where phase is "upload" or "verify".
+  onProgress = null,
   // Awaited gate at the last point before anything irreversible happens.
   // onStep cannot serve this purpose: its calls are synchronous and their
   // return values discarded, so a rejected promise from one would be
   // dropped and the flash would proceed anyway. Throwing from here aborts
-  // with nothing written; the uploaded image is left on the printer.
+  // with nothing written; the uploaded image is left on the printer, inert.
   beforeFlash = null,
 } = {}) {
   const before = await getDeviceInfo(p);
   onStep({ step: "device", info: before });
 
   onStep({ step: "upload", localPath });
-  const up = await uploadFirmware(p, localPath, { root });
+  const up = await uploadFirmware(p, localPath, {
+    root, onProgress: onProgress && ((sent, total) => onProgress("upload", sent, total)) });
   onStep({ step: "uploaded", ...up });
 
-  onStep({ step: "verify" });
-  const v = await verifyFirmware(p, localPath, { root, remoteName: up.name });
-  if (!v.ok) {
-    if (!keepImage) await deleteRemote(p, up.name, { root }).catch(() => {});
-    throw new Error(
-      `Uploaded image does not match the local file (local ${v.local}, ` +
-      `printer ${v.remote}) — nothing was flashed`);
+  // "none" skips the check outright rather than calling verifyFirmware and
+  // having it hand back a pass it did not earn — a function that answers
+  // "ok: true" without looking is the kind of thing a later reader trusts.
+  let v = { mode: "none" };
+  if (verify === "none") {
+    onStep({ step: "verify-skipped" });
+  } else {
+    onStep({ step: "verify", mode: verify });
+    v = await verifyFirmware(p, localPath, {
+      root, remoteName: up.name, mode: verify,
+      onProgress: onProgress && ((sent, total) => onProgress("verify", sent, total)) });
+    if (!v.ok) {
+      if (!keepImage) await deleteRemote(p, up.name, { root }).catch(() => {});
+      throw new Error(
+        `Uploaded image does not match the local file (${v.mode} check: local ` +
+        `${v.local ?? v.localSize}, printer ${v.remote ?? v.remoteSize}` +
+        `${v.reason ? ", differs by " + v.reason : ""}) — nothing was flashed`);
+    }
+    onStep({ step: "verified", mode: v.mode, local: v.local, fellBackFrom: v.fellBackFrom });
   }
-  onStep({ step: "verified", md5: v.local });
 
   // Last exit. Upload and verification are done and cost minutes — long
-  // enough for the printer to have started a job since this began.
+  // enough for the printer to have started a job since this began. Flashing
+  // then destroys that job and leaves the machine mid-write.
   if (beforeFlash) await beforeFlash();
 
   onStep({ step: "flash", remotePath: up.remotePath });
@@ -434,7 +667,7 @@ async function updateFromFile(p, localPath, {
   // while it may still be reading the file would be reckless.
   if (!keepImage && after) await deleteRemote(p, up.name, { root }).catch(() => {});
 
-  return { before, after, outcome, image: up };
+  return { before, after, outcome, image: up, verify: v.mode, fellBackFrom: v.fellBackFrom || null };
 }
 exports.updateFromFile = updateFromFile;
 
@@ -463,7 +696,7 @@ if (require.main === module) {
         onStep: s => {
           if (s.step === "device")   console.log("current:", s.info.fullversion);
           if (s.step === "uploaded") console.log("uploaded:", s.remotePath, `(${s.size} bytes)`);
-          if (s.step === "verified") console.log("verified md5:", s.md5);
+          if (s.step === "verified") console.log(`verified (${s.mode}):`, s.local);
           if (s.step === "flash")    console.log("flashing — do not cut power");
           if (s.step === "progress") console.log("  ", JSON.stringify(s.state || s.kind));
         },

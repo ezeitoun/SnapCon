@@ -460,22 +460,68 @@
       </div>
 
       <div class="set-panel" id="tab-firmware" style="display:none">
-        <div class="setcard">
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <button class="btn ghost" id="fwGet" data-i18n="settings.firmware.get_button">Get Firmware</button>
-            <button class="btn ghost" id="fwSelect" data-i18n="settings.firmware.select_button">Select Firmware</button>
-            <select class="field" id="fwPrinter" style="max-width:200px;flex:none" data-i18n-aria-label="settings.firmware.target_label" aria-label="Printer to update"></select>
-            <button class="btn danger" id="fwDeploy" data-i18n="settings.firmware.deploy_button">Deploy Firmware</button>
-            <span class="hint" data-i18n="settings.firmware.idle_only_hint">reads idle printers only</span>
-            <span class="pstatus" aria-live="polite" id="fwStatus"></span>
+
+        <!-- 1. The image being deployed. States the TARGET version, which the
+             old layout never showed anywhere. Collapses to a summary line once
+             something is chosen; the printer list renders either way. -->
+        <div class="setcard fwimage" id="fwImageCard">
+          <div class="fwimage-main">
+            <div class="fwimage-text" id="fwImageText"></div>
+            <div class="fwimage-actions">
+              <button class="btn ghost" id="fwSelect" data-i18n="settings.firmware.select_button">Choose image</button>
+              <button class="btn ghost" id="fwGet" data-i18n="settings.firmware.get_button">Refresh versions</button>
+            </div>
           </div>
-          <div id="fwResults" style="margin-top:14px"></div>
+          <div class="fwimage-opts">
+            <label class="switch-row" for="fwSkipCurrent">
+              <input type="checkbox" role="switch" id="fwSkipCurrent" class="switch-input" checked>
+              <span class="switch-text"><span class="switch-label" data-i18n="settings.firmware.skip_current_label">Skip printers already on this version</span><span class="switch-desc" data-i18n="settings.firmware.skip_current_desc">Avoids re-sending a quarter-gigabyte image to a printer that already runs it.</span></span>
+            </label>
+            <label class="switch-row" for="fwVerify">
+              <input type="checkbox" role="switch" id="fwVerify" class="switch-input" checked>
+              <span class="switch-text"><span class="switch-label" data-i18n="settings.firmware.verify_label">Verify the upload before flashing</span><span class="switch-desc" data-i18n="settings.firmware.verify_desc">Off flashes whatever arrived, unchecked — a corrupted image can leave a printer unbootable.</span></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="setcard" style="margin-top:10px">
+          <!-- 2. Version distribution: answers "what state is my fleet in"
+               without reading every row. -->
+          <div class="fwchips" id="fwChips" data-i18n-aria-label="settings.firmware.summary_aria" aria-label="Firmware versions across the fleet" style="display:none"></div>
+
+          <!-- 7. Toolbar -->
+          <div class="fwtools" id="fwTools" style="display:none">
+            <input class="field" id="fwSearch" type="search" data-i18n-placeholder="settings.firmware.search_placeholder" placeholder="Search name, model or version…" data-i18n-aria-label="settings.firmware.search_aria" aria-label="Search printers" autocomplete="off">
+            <select class="field" id="fwConnector" data-i18n-aria-label="settings.firmware.filter_aria" aria-label="Filter by connector"></select>
+            <div class="sort-wrap">
+              <button class="gear" id="fwSortBtn" title="Sort printers" data-i18n-aria-label="settings.firmware.sort_title" aria-label="Sort printers"><img src="/sort.svg" class="topbar-icon" alt=""></button>
+              <div class="sort-menu" id="fwSortMenu">
+                <button class="sort-opt" data-fwsort="default"><span class="sort-check" id="fwsc-default"></span><span data-i18n="settings.firmware.sort_default">Default order</span></button>
+                <button class="sort-opt" data-fwsort="name"><span class="sort-check" id="fwsc-name"></span><span data-i18n="settings.firmware.sort_name">By name</span></button>
+                <button class="sort-opt" data-fwsort="status"><span class="sort-check" id="fwsc-status"></span><span data-i18n="settings.firmware.sort_status">By status</span></button>
+                <button class="sort-opt" data-fwsort="version"><span class="sort-check" id="fwsc-version"></span><span data-i18n="settings.firmware.sort_version">By firmware version</span></button>
+              </div>
+            </div>
+            <span class="settings-help" id="fwSelInfo"></span>
+          </div>
+
+          <!-- 3. Grouped by outcome. Built by renderFirmwareList(). -->
+          <div id="fwResults"></div>
+          <div class="browse-empty" id="fwNoMatches" style="display:none" data-i18n="settings.firmware.no_matches">No printers match this search</div>
+          <span class="pstatus" aria-live="polite" id="fwStatus"></span>
+        </div>
+
+        <!-- 6. Footer: batch progress, a safe stop, and the scoped action. -->
+        <div class="fwfooter" id="fwFooter">
+          <span class="fwfooter-progress" id="fwFooterProgress"></span>
+          <button class="btn ghost" id="fwStop" style="display:none" data-i18n="settings.firmware.footer_stop">Stop after current</button>
+          <button class="btn danger" id="fwDeploy" disabled data-i18n-title="settings.firmware.deploy_no_file" title="Choose a firmware image first">Deploy Firmware</button>
         </div>
       </div>
-
       <div class="set-panel" id="tab-users" style="display:none">
         <div class="setcard">
           <label class="switch-row" for="setUsersEnabled"><input type="checkbox" role="switch" id="setUsersEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.users.enable_label">Enable user access management</span><span class="switch-desc" data-i18n="settings.users.enable_desc">Require login to use SnapCon; gates everything else on this tab</span></span></label>
+
           <div class="bootstrap-admin" id="bootstrapAdmin" style="display:none">
             <div class="hint" style="margin-bottom:8px" data-i18n="settings.users.bootstrap_hint">Create the first Admin account — it must use a password, not an emailed code.</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">

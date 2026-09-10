@@ -88,16 +88,36 @@ test("Notifications retrofit: shared save/dirty-bar status text and test-error c
 });
 
 test("the settings.firmware.* section exists with plural pairs and no stray fragments (Phase 5 regression anchor)", () => {
-  ["get_button", "select_button", "deploy_button", "idle_only_hint", "reading",
+  ["get_button", "select_button", "reading",
+    "skip_current_label", "skip_current_desc", "verify_label", "verify_desc",
+    "search_placeholder", "filter_all_connectors", "sort_default", "sort_version",
+    "image_none_title", "group_needs_update", "group_up_to_date", "group_not_supported",
+    "st_queued", "st_uploading", "st_rebooting", "st_updated", "st_failed", "st_retry",
+    "footer_stop", "footer_progress",
     "status_offline_detail", "status_skipped_not_supported", "status_skipped_busy", "mcu_majority"]
     .forEach(k => assert.ok(`settings.firmware.${k}` in enFlat, `settings.firmware.${k} must exist`));
   assert.ok("settings.firmware.read_summary_one" in enFlat);
   assert.ok("settings.firmware.read_summary_other" in enFlat);
   assert.ok("settings.firmware.mcu_single_one" in enFlat);
   assert.ok("settings.firmware.mcu_single_other" in enFlat);
+  // The Deploy button and its hold-to-confirm gate both name the scope of
+  // the action ("Deploy Firmware to 3 Printers"), so both are tn() pairs.
+  ["deploy_n", "confirm_title", "confirm_hold_n"].forEach(k => {
+    assert.ok(`settings.firmware.${k}_one` in enFlat, `settings.firmware.${k}_one must exist`);
+    assert.ok(`settings.firmware.${k}_other` in enFlat, `settings.firmware.${k}_other must exist`);
+    assert.ok(enFlat[`settings.firmware.${k}_other`].includes("{n}"), `${k}_other must name the count`);
+  });
+  // Byte progress is rendered by the caller (fmtFileSize) and passed in —
+  // never formatted inside the translated string.
+  ["row_upload", "row_verify"].forEach(k => {
+    assert.ok(enFlat[`settings.firmware.${k}`].includes("{sent}"));
+    assert.ok(enFlat[`settings.firmware.${k}`].includes("{total}"));
+  });
   // Base plural keys must NOT exist directly — only tn() consumers, never t().
   assert.equal("settings.firmware.read_summary" in enFlat, false);
   assert.equal("settings.firmware.mcu_single" in enFlat, false);
+  assert.equal("settings.firmware.deploy_n" in enFlat, false);
+  assert.equal("settings.firmware.confirm_hold_n" in enFlat, false);
   // r.state (a raw connector state identifier like "printing") and r.detail
   // (raw connector diagnostic text) must stay untranslated params, never
   // baked into the translated string itself.

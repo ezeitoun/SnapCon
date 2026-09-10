@@ -43,9 +43,22 @@ exports.capabilities = {
   // hardware alone. Other brands are not missing a feature here — they
   // expose no equivalent network flashing API for SnapCon to drive.
   firmwareDeploy: true,
+  // A U1 update flashes the mainboard and all four toolhead MCUs together,
+  // so every board really does report the same version — verified across a
+  // 15-printer fleet on four different releases (1.4.0 through 1.6.0): one
+  // distinct MCU version per printer, every time. That is what makes a board
+  // that disagrees worth flagging: it means one missed an update.
+  //
+  // It is a CAPABILITY rather than a brand check because the assumption is
+  // false elsewhere: a Creality machine reports its mainboard, nozzle, bed
+  // and host as independently-built components with different versions and
+  // build dates, and highlighting those as outliers is a false alarm. A
+  // connector that does not declare this simply gets its components listed.
+  uniformMcuVersions: true,
   // Per-print options sent via SET_PRINT_PREFERENCES (see applyHeadMapping) —
   // real, registered U1 firmware parameters (print_task_config.py), not a
   // guess: BED_LEVEL/FLOW_CALIBRATE/TIME_LAPSE_CAMERA are each an optional
+
   // 0/1 int stored into that print's task config and acted on at print start.
   flowCalibration: true, timelapse: true,
   // print_task_config.py's SET_PRINT_PREFERENCES also takes a real

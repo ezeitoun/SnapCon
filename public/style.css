@@ -632,15 +632,141 @@
   .set-tab{font:inherit; font-size:13px; color:var(--ink-dim); background:transparent; border:none; border-bottom:2px solid transparent; padding:8px 14px; cursor:pointer;}
   .set-tab:hover{color:var(--ink);}
   .set-tab.active{color:var(--ink); font-weight:600; border-bottom-color:var(--accent);}
-  .fwrow{display:flex; align-items:flex-start; gap:10px; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:8px; padding:8px 11px; margin-bottom:6px;}
-  .fwrow:has(.checkbox-input:checked){background:color-mix(in srgb,var(--accent) 10%,var(--panel-2)); border-color:color-mix(in srgb,var(--accent) 30%,var(--line-soft));}
-  .fwrow input{margin-top:3px; flex:none;}
-  .fwline1{display:block; font-size:12.5px; color:var(--ink); cursor:pointer;}
-  .fwline1 b{margin-right:8px;}
-  .fwline1 span{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim);}
-  .fwline2{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); margin-top:3px;}
-  .fwskip{font-family:var(--mono); font-size:11px; color:var(--ink-faint); margin-top:2px;}
+  /* ---- Firmware tab ------------------------------------------------
+     The list is grouped by outcome, so the question "which printers need
+     updating" is answered by a header rather than by reading 21 version
+     strings. Row columns are fixed so names, versions and status line up
+     down the page instead of drifting with content width. */
+  .fwimage{display:flex; flex-direction:column; gap:12px;}
+  .fwimage-main{display:flex; align-items:flex-start; gap:14px; flex-wrap:wrap;}
+  .fwimage-text{flex:1; min-width:200px;}
+  .fwimage-actions{display:flex; gap:8px; flex:none;}
+  .fwimage-opts{display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line-soft); padding-top:11px;}
+  .fwimage-name{font-size:13px; color:var(--ink); font-weight:600;}
+  .fwimage-meta{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim); margin-top:3px;}
+  .fwimage-meta b{color:var(--accent); font-weight:600;}
+  .fwimage-help{font-size:12px; color:var(--ink-faint); line-height:1.5; margin-top:3px;}
+  .fwimage-warn{font-size:12px; color:var(--warn); line-height:1.5; margin-top:5px;}
+
+  /* Version distribution across the fleet. */
+  .fwchips{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:11px;}
+  .fwchip{display:inline-flex; align-items:baseline; gap:6px; font-family:var(--mono); font-size:11px;
+    padding:3px 9px; border-radius:999px; background:var(--panel-2); border:1px solid var(--line-soft); color:var(--ink-dim);}
+  .fwchip b{color:var(--ink); font-weight:700;}
+  /* The version being deployed, so the fleet's distance from it is obvious. */
+  .fwchip.target{background:color-mix(in srgb,var(--accent) 14%,var(--panel-2)); border-color:color-mix(in srgb,var(--accent) 40%,var(--line-soft)); color:var(--ink);}
+  .fwchip.muted{opacity:.7;}
+
+  .fwtools{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:11px;}
+  .fwtools #fwSearch{flex:1; min-width:150px; max-width:260px;}
+  .fwtools #fwConnector{flex:none; max-width:200px;}
+  .fwtools .settings-help{margin-left:auto;}
+
+  /* ---- groups ---- */
+  .fwgroup{margin-bottom:10px;}
+  .fwgroup-head{display:grid; grid-template-columns:18px 1fr auto; gap:11px; align-items:center;
+    padding:7px 11px; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:8px;}
+  .fwgroup-title{font-size:12.5px; color:var(--ink); font-weight:600;}
+  .fwgroup-title .fwgroup-count{color:var(--ink-faint); font-weight:400; margin-left:7px;}
+  .fwgroup-right{display:flex; align-items:center; gap:11px; font-size:11.5px; color:var(--ink-dim);}
+  .fwgroup-toggle{background:transparent; border:none; color:var(--ink-dim); font:inherit; font-size:11.5px;
+    cursor:pointer; padding:2px 6px; border-radius:6px; white-space:nowrap;}
+  .fwgroup-toggle:hover{background:var(--panel); color:var(--ink);}
+  .fwgroup-body{margin-top:5px;}
+  .fwgroup.collapsed .fwgroup-body{display:none;}
+
+  /* ---- cards ----
+     A single-line row put the printer name at the far left of the viewport
+     and its version at the far right, so on a wide screen the two things you
+     have to read together were as far apart as they could be. A card keeps
+     them within one eye span, and the border carries the state so the grid
+     is scannable without reading any of it. */
+  .fwgrid{display:grid; grid-template-columns:repeat(auto-fill,minmax(196px,1fr)); gap:9px;}
+  /* The checkbox column indents the name, so everything below it has to be
+     indented by the same amount or the version and the bar start 24px to the
+     left of the name they belong to. Defined once here and used by both the
+     header grid and the indent, so the two cannot drift apart. */
+  .fwcard{--fw-check:16px; --fw-gutter:8px;
+    display:flex; flex-direction:column; gap:7px; padding:9px; border-radius:9px;
+    background:var(--panel-2); border:1px solid var(--line-soft); min-width:0;
+    transition:border-color .15s ease, background-color .15s ease, opacity .15s ease;}
+  .fwcard-head{display:grid; grid-template-columns:var(--fw-check) 1fr; gap:var(--fw-gutter); align-items:start;}
+  .fwcard > .fwver, .fwcard > .fwstat{padding-left:calc(var(--fw-check) + var(--fw-gutter));}
+  .fwcard-head input{margin:0;}
+  .fwcard-id{display:flex; flex-direction:column; gap:1px; cursor:pointer; min-width:0;}
+  .fwcard-vendor{font-size:8.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); line-height:1.3;}
+  .fwcard-name{font-size:13px; font-weight:600; color:var(--ink); line-height:1.25;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .fwcard-name .fwwarn{color:var(--warn); margin-left:5px; cursor:help;}
+  .fwver{font-family:var(--mono); font-size:11px; color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .fwver .fwver-to{color:var(--ink); font-weight:700;}
+  .fwver.current{color:var(--ok); font-weight:700;}
+  .fwskip{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);}
+  /* State on the border, so a glance across the grid reads as a picture. */
+  .fwcard.sel{border-color:var(--accent); background:color-mix(in srgb,var(--accent) 9%,var(--panel-2));}
+  .fwcard.busy{border-color:var(--accent);}
+  .fwcard.rebooting{border-color:var(--warn);}
+  .fwcard.done{border-color:var(--ok);}
+  .fwcard.failed{border-color:var(--bad);}
+  /* Nothing to do here — present, readable, and out of the way. */
+  .fwcard.dim{opacity:.5;}
+  /* Gated like every other hover in this file: on a touch device :hover
+     sticks after a tap, so an ungated rule leaves one card un-dimmed until
+     something else is tapped. */
+  @media (hover:hover) and (pointer:fine){
+    .fwcard.dim:hover{opacity:1;}
+  }
+  /* An ineligible printer stays visible: dimmed, never hidden, with a title
+     on its checkbox saying why it cannot be picked. */
+  .fwcard.ineligible .fwcard-id{cursor:default;}
+
+  /* ---- one status slot per row ---- */
+  .fwstat{min-width:0;}
+  .fwstat-label{font-size:11px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .fwstat-label.warn{color:var(--warn);}
+  .fwstat .prog-track{height:4px; margin-top:5px;}
+  .fwstat-chip{display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
+    background:var(--panel); border:1px solid var(--line-soft); color:var(--ink-dim); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; max-width:100%;}
+  .fwstat-chip.accent{color:var(--accent); border-color:color-mix(in srgb,var(--accent) 35%,var(--line-soft));}
+  .fwstat-chip.ok{color:var(--ok); border-color:color-mix(in srgb,var(--ok) 35%,var(--line-soft));}
+  .fwstat-chip.warn{color:var(--warn); border-color:color-mix(in srgb,var(--warn) 40%,var(--line-soft));}
+  .fwstat-chip.err{color:var(--bad); border-color:color-mix(in srgb,var(--bad) 40%,var(--line-soft));}
+  .fwstat-bytes{font-family:var(--mono); font-size:10.5px; color:var(--ink-dim); margin-top:3px;}
+  .fwstat-reason{font-size:10.5px; color:var(--bad); margin-top:3px; line-height:1.35;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
+  .fwstat .prog-track{width:100%; margin-top:4px;}
+  .fwstat-retry{background:transparent; border:none; color:var(--accent); font:inherit; font-size:10.5px;
+    cursor:pointer; padding:1px 0; text-decoration:underline; margin-top:2px;}
   .fwdiff{color:var(--warn); font-weight:700;}
+
+  /* ---- footer ---- */
+  .fwfooter{display:flex; align-items:center; gap:11px; margin-top:12px; padding-top:11px;
+    border-top:1px solid var(--line-soft);}
+  .fwfooter-progress{flex:1; font-size:12px; color:var(--ink-dim);}
+  .fwfooter-progress .err{color:var(--bad);}
+
+  /* Writing the image and rebooting move no bytes SnapCon can see, so the bar
+     sits full-width with nothing to animate — and .prog-fill.amber sets
+     animation:none, which froze it solid through the longest and least
+     reversible part of the operation. A frozen bar reads as "stuck", which is
+     exactly when someone reaches for the power switch. The sweep says
+     "working" without claiming a percentage nothing reports; it rides an
+     ::after so the fill underneath is untouched, and animates transform only
+     so it stays on the compositor. */
+  .prog-fill.working{overflow:hidden;}
+  .prog-fill.working::after{content:""; position:absolute; top:0; bottom:0; left:0; width:40%;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.55),transparent);
+    animation:fwsweep 1.8s linear infinite;}
+  @keyframes fwsweep{from{transform:translateX(-100%)} to{transform:translateX(250%)}}
+
+  @media (max-width:720px){
+    /* One card per row rather than squeezing two into a phone width. */
+    .fwgrid{grid-template-columns:1fr;}
+  }
+  /* An ineligible printer stays visible and readable — it is dimmed, not hidden,
+     and its checkbox carries a title saying why it cannot be picked. */
+  .fwrow.ineligible{opacity:.6;}
   .ntf-body{display:flex; flex-direction:column; margin-top:0;}
   .ntf-body.disabled{opacity:.4; pointer-events:none;}
   .ntf-chip-row{display:flex; flex-wrap:wrap; gap:6px;}
@@ -1655,9 +1781,13 @@
     .splash img{animation:none;}
     .jobloading .jlfill{animation:none;}
     .prog-fill{animation:none;}
+    /* The firmware sweep too — the row's elapsed clock still ticks, so the
+       "something is happening" signal survives without the movement. */
+    .prog-fill.working::after{animation:none; opacity:.3;}
     .skel-line{animation:none;}
     .ra-spinner{animation:none;}
     /* Hold-to-confirm's fill sweep is a direct hold-progress indicator, not
+
        ambient motion — but the spec for it explicitly asks to drop it in
        favor of the countdown text alone under reduced motion, so hide it
        defensively even though app.js also skips writing its width. */

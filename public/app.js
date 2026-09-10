@@ -370,6 +370,16 @@ const STATUS_OVERRIDE = new Map(); // String(printer id) -> {statusColor, status
 function statusColorText(p){
   const override=STATUS_OVERRIDE.get(String(p.id));
   if(override) return override;
+  // A firmware deploy in flight. Checked BEFORE offline on purpose: the
+  // printer legitimately drops off the network for minutes while it writes
+  // the image, and reporting that as "Offline" is exactly what tempts
+  // someone into power-cycling it mid-write. The server decides how long
+  // this may claim the card (FW_REBOOT_GRACE_MS in server.js) — it is not
+  // open-ended.
+  if(p.state==="updating") return { statusColor:"var(--violet)", statusTxt:t("printer_status.updating") };
+  // Distinct from Updating on purpose: one is work in progress, the other is
+  // a wait for the machine to come back. Amber matches the row's own bar.
+  if(p.state==="rebooting") return { statusColor:"var(--warn)", statusTxt:t("printer_status.rebooting") };
   if(!p.online) return { statusColor:"var(--ink-faint)", statusTxt:t("printer_status.offline") };
   if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:t("printer_status.printing") };
   if(p.state==="paused") return { statusColor:"var(--paused)", statusTxt:t("printer_status.paused") };
@@ -1261,6 +1271,7 @@ function refreshDynamicI18nText(){
   refreshFleetDynamicText();
   refreshHealthDynamicText();
   refreshMaintDynamicText();
+  refreshFirmwareDynamicText();
   refreshLangEditorDynamicText();
 }
 // cardSignature() (reconcileFleetCards()'s incremental-render dedup key)
@@ -2247,6 +2258,25 @@ function wireUI(){
   $("fwGet").addEventListener("click", loadFirmware);
   $("fwSelect").addEventListener("click", openFirmwarePicker);
   $("fwDeploy").addEventListener("click", confirmFirmwareDeploy);
+  // Filter/search/sort work on rows already in the DOM — no refetch, and no
+  // rebuild, so a row the deploy poll is writing progress into survives.
+  $("fwSearch").addEventListener("input", renderFirmwareList);
+  $("fwConnector").addEventListener("change", renderFirmwareList);
+  $("fwStop").addEventListener("click", stopFirmwareQueue);
+  // Saved on change, like the other settings on this page — there is no Save
+  // button on this tab because nothing else here is a stored value.
+  ["fwSkipCurrent","fwVerify"].forEach(id=>{
+    $(id).addEventListener("change", ()=>{ saveFirmwareOptions(); renderFirmwareImageCard(); });
+  });
+  $("fwSortBtn").addEventListener("click", e=>{ e.stopPropagation(); $("fwSortMenu").classList.toggle("open"); });
+  document.querySelectorAll("#fwSortMenu .sort-opt").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      FW_SORT=btn.dataset.fwsort;
+      $("fwSortMenu").classList.remove("open");
+      applyFirmwareSortUI();
+      renderFirmwareList();
+    });
+  });
 
 
   $("jobEject").addEventListener("click", clearJobSelection);
@@ -4713,6 +4743,9 @@ async function loadFleet(){
       // of them benefit from diffing here, not just the timer tick.
       renderFleet({ incremental: true });
       updateAllPrinterRowStatuses();
+      // Firmware-tab checkboxes are gated on live printer state — a printer
+      // that just started printing must stop being selectable here too.
+      refreshFirmwareRowEligibility();
     }
   }
   catch(e){
@@ -8276,122 +8309,968 @@ async function navigateFirmwarePicker(rel){
     list.innerHTML=`<div class="browse-empty">${esc(t("settings.firmware.pick_empty"))}</div>`;
   }
 }
-function selectFirmware(file){
-  SELECTED_FIRMWARE={ name:file.name, path:file.path };
+// Inspecting at selection time rather than only at deploy time is the point:
+// a file that cannot be flashed should say so while the user is still
+// choosing, not after they have ticked eight printers.
+async function selectFirmware(file){
+  SELECTED_FIRMWARE={ name:file.name, path:file.path, inspect:null };
   closeFirmwarePicker();
   const st=$("fwStatus");
-  st.className="pstatus ok";
-  st.textContent=t("settings.firmware.selected",{name:file.path});
-}
-// ---- Deploy firmware ----
-// One printer at a time, and only printers whose connector advertises
-// firmwareDeploy — today that is the Snapmaker U1, whose network flashing
-// protocol is the only one verified against real hardware. Other brands
-// expose no equivalent API to drive, so they are absent rather than
-// disabled-with-an-excuse.
-function syncFirmwareDeployTargets(){
-  const sel=$("fwPrinter");
-  if(!sel) return;
-  const prev=sel.value;
-  const targets=FLEET.filter(p=>p.capabilities&&p.capabilities.firmwareDeploy);
-  sel.innerHTML = targets.length
-    ? targets.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join("")
-    : `<option value="">${esc(t("settings.firmware.no_targets"))}</option>`;
-  sel.disabled=!targets.length;
-  if(prev&&targets.some(p=>String(p.id)===prev)) sel.value=prev;
+  st.className="pstatus"; st.textContent="";
+  renderFirmwareImageCard();
+  syncFirmwareDeployButton();
+  const ins=await inspectSelectedFirmware();
+  if(!SELECTED_FIRMWARE||SELECTED_FIRMWARE.path!==file.path) return;   // superseded while inspecting
+  // The card carries the version, the warnings and any hard failure, so the
+  // status line does not repeat them.
+  renderFirmwareImageCard();
+  // A target version regroups the whole list into needs-update / up-to-date.
+  renderFirmwareList();
 }
 
-// Phase -> what the user is told. The sequence runs for minutes and the
-// phases are not interchangeable: "uploading" and "writing the image" carry
-// completely different advice about whether it is safe to walk away.
-const FW_DEPLOY_PHASE_KEYS={
-  starting:"settings.firmware.phase_starting",
-  device:"settings.firmware.phase_device",
-  upload:"settings.firmware.phase_upload",
-  uploaded:"settings.firmware.phase_uploaded",
-  verify:"settings.firmware.phase_verify",
-  verified:"settings.firmware.phase_verified",
-  flash:"settings.firmware.phase_flash",
-  progress:"settings.firmware.phase_flash"
+// The two toggles are stored settings, saved through their own tiny route
+// rather than the shared /api/config body — a partial post there would fall
+// back to CFG for everything it omitted, which is a lot to risk for two
+// booleans.
+async function saveFirmwareOptions(){
+  try{
+    await postJSON("/api/firmware-options",{
+      skipCurrent: firmwareSkipCurrentEnabled(),
+      verify: firmwareVerifyEnabled() });
+  }catch{ /* a failed save is not worth interrupting the page for */ }
+}
+
+async function stopFirmwareQueue(){
+  const btn=$("fwStop");
+  if(btn) btn.disabled=true;
+  try{ await postJSON("/api/firmware-stop",{}); }
+  catch{ if(btn) btn.disabled=false; return; }
+  pollFirmwareStatus();
+}
+// Reads the firmware image server-side and reports what could be
+// established from its bytes. Never throws: a failed inspection is reported
+// as a hard failure, which is the safe direction.
+async function inspectSelectedFirmware(){
+  if(!SELECTED_FIRMWARE) return null;
+  let r;
+  try{ r=await fetch("/api/firmware-inspect?path="+encodeURIComponent(SELECTED_FIRMWARE.path)); }
+  catch(e){ return { hardFail:[e.message], warnings:[] }; }
+  checkAuthFailure(r);
+  // Branch on the CONTENT TYPE, not the status. A missing route and a missing
+  // file are both 404 — one answers with an HTML error page, the other with
+  // {error:"Firmware file not found"} — so status alone cannot tell "this
+  // SnapCon is older than this page" from "that file is gone", and guessing
+  // wrong sends the user to look in entirely the wrong place.
+  if(!(r.headers.get("content-type")||"").includes("application/json")){
+    return { hardFail:[t("settings.firmware.inspect_http_error",{status:r.status})], warnings:[] };
+  }
+  let d;
+  try{ d=await r.json(); }
+  catch{ return { hardFail:[t("settings.firmware.inspect_http_error",{status:r.status})], warnings:[] }; }
+  if(!d||d.error) return { hardFail:[(d&&d.error)||"Could not read the firmware file"], warnings:[] };
+  SELECTED_FIRMWARE.inspect=d;
+  return d;
+}
+// ---- Deploy firmware ----
+// Multi-select: tick the printers to update and the SERVER runs them one at a
+// time (FW_QUEUE in server.js). A failure records that printer and moves to the
+// next rather than cancelling the rest.
+//
+// Only printers whose connector advertises firmwareDeploy can be picked; today
+// that is the Snapmaker U1, whose network flashing protocol is the only one
+// verified against real hardware.
+//
+// Eligibility is decided twice and the SERVER's answer is the one that counts:
+// what is dimmed here comes from the last fleet poll, which can be seconds
+// stale, while /api/firmware-deploy re-asks the printer at request time and
+// again immediately before the irreversible write.
+const FW_ROWS = new Map();      // printer index -> its .fwcard element
+let FW_DATA = [];               // last /api/firmware rows
+let FW_LAST_STATUS = null;      // last /api/firmware-status body, for redraws
+let FW_SORT = "default";
+let FW_LOADED = false;          // the list has been read at least once this session
+
+// Selection lives HERE, not in the DOM. Rows move between groups as versions
+// change and as filters apply, and a checkbox that gets re-rendered loses its
+// state — so the set is the authority and the checkboxes are drawn from it.
+const FW_SEL = new Set();
+
+// Collapsed by default for everything that is not the thing you came here to
+// do. "Needs update" is the actionable group and stays open.
+const FW_COLLAPSED = { needs: false, uptodate: true, unsupported: true, unavailable: true };
+
+// A U1 reboots in about two minutes (measured: flash to klippy-ready in ~110s).
+// Used only to phrase the wait, never to decide anything.
+const FW_REBOOT_EXPECTED_MS = 120 * 1000;
+// How long a printer may stay away before the row calls it a failure. Well
+// past the observed recovery and comfortably under the server's own 15-minute
+// claim on the fleet card, so the row never contradicts the card.
+const FW_REBOOT_ERROR_MS = 5 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// Eligibility
+// ---------------------------------------------------------------------------
+
+// Why this printer cannot be picked right now, as a stable CODE, or null if it
+// can. Deliberately mirrors firmwareDeployBlockedBy() in server.js: a rule that
+// existed here and not there would disable a control the server would have
+// accepted.
+//
+// A code rather than a message because two callers need different things from
+// the same decision — the checkbox needs a sentence, the grouping and the sort
+// need something to group by. Sorting on the rendered text would order printers
+// alphabetically by their translated status, which is nobody's idea of an order.
+function firmwareIneligibleCode(p){
+  if(!p) return "offline";
+  if(!(p.capabilities&&p.capabilities.firmwareDeploy)) return "unsupported";
+  if(p.state==="updating"||p.state==="rebooting") return "in_progress";
+  if(!p.online) return "offline";
+  if(p.state==="printing"||p.state==="paused") return "printing";
+  return null;
+}
+const FW_INELIGIBLE_KEYS={
+  unsupported:"settings.firmware.ineligible_unsupported",
+  in_progress:"settings.firmware.ineligible_in_progress",
+  offline:"settings.firmware.ineligible_offline",
+  printing:"settings.firmware.ineligible_printing",
 };
-function confirmFirmwareDeploy(){
-  const st=$("fwStatus"), sel=$("fwPrinter");
+function firmwareIneligibleReason(p){
+  const code=firmwareIneligibleCode(p);
+  return code ? t(FW_INELIGIBLE_KEYS[code]) : null;
+}
+
+// Grouped by what the operator would do about it: ready first, then already
+// updating, then blocked by a print, then unreachable, then never applicable.
+const FW_STATUS_RANK={ ok:0, in_progress:1, printing:2, offline:3, unsupported:4 };
+function firmwareStatusRank(r){
+  return FW_STATUS_RANK[firmwareIneligibleCode(FLEET.find(p=>p.id===r.id))||"ok"];
+}
+const firmwareFleetOf = idx => FLEET.find(p=>p.id===idx);
+const firmwareCanDeploy = idx => {
+  const p=firmwareFleetOf(idx);
+  return !!(p&&p.capabilities&&p.capabilities.firmwareDeploy);
+};
+
+// ---------------------------------------------------------------------------
+// The image being deployed
+// ---------------------------------------------------------------------------
+
+// The version this deploy would move printers TO, or null when the image does
+// not state one (pre-1.6.0 U1 images carry no build marker). Never guessed from
+// the file name — see connectors/firmwareImage.js.
+function firmwareTargetVersion(){
+  return (SELECTED_FIRMWARE&&SELECTED_FIRMWARE.inspect&&SELECTED_FIRMWARE.inspect.version)||null;
+}
+// The full build identifier the image would leave on a printer, composed
+// server-side so both sides compare the same string.
+function firmwareTargetBuild(){
+  return (SELECTED_FIRMWARE&&SELECTED_FIRMWARE.inspect&&SELECTED_FIRMWARE.inspect.buildId)||null;
+}
+
+// What this printer is ACTUALLY running.
+//
+// r.firmware is product_info.firmware_version, which a U1 truncates to three
+// parts ("1.6.0"). r.klipper is printer/info software_version, which carries
+// the whole build ("1.6.0.267_20260815150420") — the same string the image
+// states. Comparing the truncated one against an image version matches
+// nothing, which is why every printer already running the image was still
+// being offered for a re-flash.
+function firmwarePrinterBuild(r){ return r.klipper||null; }
+function firmwarePrinterVersion(r){
+  const k=String(r.klipper||"").split("_")[0];
+  return k||r.firmware||null;
+}
+// With a build stamp the whole identifier must match. Without one the version
+// half is the strongest reading available — still from the payload, never
+// from the file name.
+function firmwareIsCurrent(r){
+  const build=firmwareTargetBuild();
+  if(build) return firmwarePrinterBuild(r)===build;
+  const ver=firmwareTargetVersion();
+  return !!ver&&firmwarePrinterVersion(r)===ver;
+}
+
+// Compare two printer-reported version strings numerically, so 1.10 sorts above
+// 1.9 rather than below it the way a string compare would. Splits on any
+// non-digit run, which covers "1.6.0" and "1.5.2.13" alike.
+function compareFirmwareVersions(a,b){
+  const pa=String(a).split(/[^0-9]+/).filter(Boolean).map(Number);
+  const pb=String(b).split(/[^0-9]+/).filter(Boolean).map(Number);
+  for(let i=0;i<Math.max(pa.length,pb.length);i++){
+    const d=(pa[i]||0)-(pb[i]||0);
+    if(d) return d;
+  }
+  return 0;
+}
+
+// Renders the image card: a summary line once something is chosen, an
+// explanation when nothing is. The printer list renders either way — hiding the
+// fleet behind an image selection answers a question nobody asked first.
+function renderFirmwareImageCard(){
+  const box=$("fwImageText");
+  if(!box) return;
+  const sel=$("fwSelect");
+  if(!SELECTED_FIRMWARE){
+    box.innerHTML=`<div class="fwimage-name">${esc(t("settings.firmware.image_none_title"))}</div>`+
+      `<div class="fwimage-help">${esc(t("settings.firmware.image_none_help"))}</div>`;
+    if(sel) sel.textContent=t("settings.firmware.select_button");
+    return;
+  }
+  const ins=SELECTED_FIRMWARE.inspect||{};
+  const bits=[];
+  bits.push(ins.version
+    ? `<b>${esc(t("settings.firmware.image_version",{version:ins.version}))}</b>`
+    : esc(t("settings.firmware.image_version_unknown")));
+  if(ins.buildTime) bits.push(esc(ins.buildTime));
+  if(ins.size) bits.push(esc(fmtFileSize(ins.size)));
+  // A hard failure means the file cannot be used at all; warnings are things to
+  // check, never a claim that the image was proven to fit this model.
+  const bad=(ins.hardFail||[]).join("; ");
+  const warn=(ins.warnings||[]).join(" · ");
+  box.innerHTML=`<div class="fwimage-name" title="${esc(SELECTED_FIRMWARE.path)}">${esc(SELECTED_FIRMWARE.name)}</div>`+
+    `<div class="fwimage-meta">${bits.join(" · ")}</div>`+
+    (bad?`<div class="fwimage-warn">${esc(t("settings.firmware.inspect_failed",{error:bad}))}</div>`:"")+
+    (!bad&&warn?`<div class="fwimage-warn">${esc(t("settings.firmware.inspect_warning",{warning:warn}))}</div>`:"")+
+    (!firmwareVerifyEnabled()?`<div class="fwimage-warn">${esc(t("settings.firmware.confirm_no_verify"))}</div>`:"");
+  if(sel) sel.textContent=t("settings.firmware.image_replace");
+}
+
+// ---------------------------------------------------------------------------
+// Filtering, sorting and grouping
+// ---------------------------------------------------------------------------
+
+const connectorLabel=type=>(CONNECTOR_TYPES.find(c=>c.type===type)||{}).label||type||"";
+
+function firmwareRowCompare(a,b){
+  const byName=()=>String(a.name||"").localeCompare(String(b.name||""));
+  if(FW_SORT==="name") return byName();
+  if(FW_SORT==="status") return (firmwareStatusRank(a)-firmwareStatusRank(b))||byName();
+  if(FW_SORT==="version"){
+    // Oldest first: the printers that need updating are the reason to sort by
+    // version at all. A printer that reports no version sorts last rather than
+    // being treated as 0, which would put it at the top as the most out of date.
+    const av=a.firmware||null, bv=b.firmware||null;
+    if(av&&bv) return compareFirmwareVersions(av,bv)||byName();
+    if(av) return -1;
+    if(bv) return 1;
+    return byName();
+  }
+  return 0;   // "default" — keep the order loadFirmware() built (sort is stable)
+}
+
+function firmwareRowMatches(r,q,conn){
+  // Matched on the printer's real connector id, never on brand or model text:
+  // brand is user-editable on generic Klipper, so it is not evidence of what a
+  // printer actually speaks.
+  if(conn&&r.connector!==conn) return false;
+  if(!q) return true;
+  return [r.name,r.machine,r.firmware,r.software,r.klipper,connectorLabel(r.connector)]
+    .filter(Boolean).join(" ").toLowerCase().includes(q);
+}
+
+// True while the server is doing something to this printer. Such a printer is
+// shown by its DEPLOY state, never by the version read — during a reboot the
+// version read legitimately fails, and reporting that as "Offline — HTTP 502"
+// is what makes an operator intervene in the one moment they must not.
+function firmwareDeployActive(idx){
+  const x=FW_LAST_STATUS&&FW_LAST_STATUS.printers&&FW_LAST_STATUS.printers[idx];
+  return !!x&&!["updated","failed","skipped","cancelled"].includes(x.phase);
+}
+
+function firmwareGroupOf(r,target){
+  if(!firmwareCanDeploy(r.id)||r.reasonCode==="not_supported") return "unsupported";
+  if(firmwareDeployActive(r.id)) return "needs";
+  if(r.skipped) return "unavailable";
+  if(!target) return "needs";
+  return firmwareIsCurrent(r) ? "uptodate" : "needs";
+}
+
+// ---------------------------------------------------------------------------
+// Rows
+// ---------------------------------------------------------------------------
+
+// Created once per printer and reused across renders: a card may be mid-deploy
+// with a progress bar being written into it, and rebuilding it would throw
+// that away along with the group it belongs to.
+function firmwareRowEl(r){
+  let el=FW_ROWS.get(r.id);
+  if(!el){
+    el=document.createElement("div");
+    el.className="fwcard";
+    el.dataset.fwid=String(r.id);
+    el.innerHTML=`<div class="fwcard-head">`+
+        `<input type="checkbox" class="fwchk checkbox-input" id="fwchk-${r.id}">`+
+        `<label class="fwcard-id" for="fwchk-${r.id}">`+
+          `<span class="fwcard-vendor"></span><span class="fwcard-name"></span>`+
+        `</label>`+
+      `</div>`+
+      `<div class="fwver"></div>`+
+      `<div class="fwstat"></div>`;
+    el.querySelector(".fwchk").addEventListener("change",e=>{
+      if(e.target.checked) FW_SEL.add(r.id); else FW_SEL.delete(r.id);
+      el.classList.toggle("sel",e.target.checked);
+      if(e.target.checked) el.classList.remove("dim");
+      else updateFirmwareRowCells(el,r);
+      syncFirmwareDeployButton();
+      renderFirmwareGroupHeads();
+    });
+    FW_ROWS.set(r.id,el);
+  }
+  updateFirmwareRowCells(el,r);
+  return el;
+}
+
+function updateFirmwareRowCells(el,r){
+  const target=firmwareTargetVersion();
+  const why=firmwareIneligibleReason(firmwareFleetOf(r.id));
+  const chk=el.querySelector(".fwchk");
+  chk.disabled=!!why;
+  chk.checked=FW_SEL.has(r.id);
+  if(why){ chk.title=why; } else chk.removeAttribute("title");
+  el.classList.toggle("ineligible",!!why);
+  el.classList.toggle("sel",chk.checked);
+  // Nothing to do to this printer: present and readable, but out of the way.
+  // Never while it is SELECTED, though — an up-to-date printer is still
+  // perfectly selectable (the server just skips it), and a ticked card at
+  // half opacity reads as disabled, which is exactly backwards.
+  const group=firmwareGroupOf(r,firmwareTargetVersion());
+  const settled=FW_LAST_STATUS&&FW_LAST_STATUS.printers&&FW_LAST_STATUS.printers[r.id];
+  el.classList.toggle("dim",!chk.checked&&!settled&&(group==="uptodate"||group==="unsupported"));
+  // The vendor comes from the printer's own Brand field, not from parsing its
+  // name — a name is whatever someone typed.
+  const fleet=firmwareFleetOf(r.id);
+  el.querySelector(".fwcard-vendor").textContent=(fleet&&fleet.brand)||"";
+
+  // The MCU detail is near-identical on every row and is not a decision input,
+  // so it lives in the row's title rather than a second line. The exception is
+  // a board that DISAGREES with the others: on a U1 every board shares one
+  // version, so a mismatch means one missed an update — rare, actionable, and
+  // worth a badge. Creality never flags: its boards are independent components.
+  const mcus=r.mcus||[];
+  const distinct=new Set(mcus.map(m=>m.version||"—"));
+  const mismatch=r.uniformMcuVersions&&distinct.size>1;
+  el.title=[mcus.map(m=>m.name+": "+(m.version||"—")).join("\n"), r.os||""].filter(Boolean).join("\n");
+  el.querySelector(".fwcard-name").innerHTML=esc(r.name)+
+    (mismatch?` <span class="fwwarn" title="${esc(t("settings.firmware.row_mcu_mismatch"))}">⚠</span>`:"");
+
+  const ver=el.querySelector(".fwver");
+  if(r.skipped&&!firmwareDeployActive(r.id)){
+    // Unreadable version: say why instead of inventing a transition.
+    ver.className="fwver fwskip";
+    ver.textContent=firmwareSkipReasonText(r);
+  } else if(target&&firmwareIsCurrent(r)){
+    ver.className="fwver current";
+    ver.textContent=firmwarePrinterVersion(r)||"";
+    ver.title=firmwarePrinterBuild(r)||"";
+  } else if(target&&firmwarePrinterVersion(r)){
+    ver.className="fwver";
+    ver.innerHTML=esc(firmwarePrinterVersion(r))+` <span class="fwver-to">→ ${esc(target)}</span>`;
+    ver.title=(firmwarePrinterBuild(r)||"")+" → "+(firmwareTargetBuild()||target);
+  } else {
+    ver.className="fwver";
+    ver.textContent=firmwarePrinterVersion(r)||t("settings.firmware.row_no_target");
+    ver.title=firmwarePrinterBuild(r)||"";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The one status slot per row
+// ---------------------------------------------------------------------------
+
+const FW_SETTLED=["updated","failed","skipped","cancelled"];
+
+// What a status SAYS, separately from the markup that carries it. Split out
+// because these values change on every poll — the byte count each second,
+// the reboot countdown every four — while the elements around them must not
+// be recreated. See renderFirmwareRowStatus.
+function firmwareStatusText(x,queuePos){
+  switch(x.phase){
+    // The position answers "when does mine start" without a separate list.
+    case "queued":    return queuePos>0 ? t("settings.firmware.st_queued_nth",{n:queuePos})
+                                        : t("settings.firmware.st_queued");
+    case "preparing": return t("settings.firmware.st_preparing");
+    case "upload":    return t("settings.firmware.st_uploading_bytes",
+      {sent:fmtFileSize(x.sent||0),total:fmtFileSize(x.total||0)});
+    case "verify":    return t("settings.firmware.st_verifying_image");
+    case "flash":     return t("settings.firmware.st_flashing");
+    case "rebooting": {
+      const elapsed=x.flashStartedAt?Date.now()-x.flashStartedAt:0;
+      if(elapsed>FW_REBOOT_ERROR_MS) return t("settings.firmware.st_failed");
+      return elapsed<FW_REBOOT_EXPECTED_MS
+        ? t("settings.firmware.st_rebooting_eta",{eta:fmtDuration((FW_REBOOT_EXPECTED_MS-elapsed)/1000)})
+        : t("settings.firmware.st_rebooting")+" · "+fmtDuration(elapsed/1000);
+    }
+    // How long ago it finished, so a card that has been sitting there since
+    // yesterday does not read like it just happened.
+    case "updated":   return x.ts?t("settings.firmware.st_updated_ago",{ago:fmtTime(x.ts)})
+                                 :t("settings.firmware.st_updated");
+    case "skipped":   return t("settings.firmware.st_skipped");
+    // Distinct from both "skipped" (already on this build — nothing needed
+    // doing) and "failed" (it was attempted and went wrong). Rejected means the
+    // server would not start it, and the reason is the useful part.
+    case "rejected":  return t("settings.firmware.st_rejected");
+    case "cancelled": return t("settings.firmware.st_cancelled");
+    case "failed":    return t("settings.firmware.st_failed");
+    default: return "";
+  }
+}
+// Only the upload knows a real fraction. Everything else with a bar is
+// indeterminate and sits full width, sweeping rather than claiming a
+// percentage nothing reports.
+function firmwareStatusPct(x){
+  return x.phase==="upload" ? (x.total>0?(x.sent/x.total)*100:0) : 100;
+}
+// Which MARKUP a status needs. Distinct from the phase because two of them
+// change shape without changing phase: a reboot that overruns becomes an
+// error, and an unverified flash carries an extra line.
+function firmwareStatusShape(x){
+  if(!x) return "";
+  switch(x.phase){
+    case "rebooting": {
+      const elapsed=x.flashStartedAt?Date.now()-x.flashStartedAt:0;
+      return elapsed>FW_REBOOT_ERROR_MS ? "rebooting-lost" : "rebooting";
+    }
+    case "updated": return x.verify==="none" ? "updated-unverified" : "updated";
+    case "failed":  return x.error ? "failed-reason" : "failed";
+    case "rejected": return x.error ? "rejected-reason" : "rejected";
+    default: return x.phase;
+  }
+}
+
+// A chip for a state that simply IS, a label plus a 4px bar for one that is
+// moving. Two shapes, so which kind of state a card is in is legible before
+// any of the words are.
+function firmwareStatusHtml(x,queuePos){
+  const txt=firmwareStatusText(x,queuePos);
+  const chip=cls=>`<span class="fwstat-chip ${cls}" title="${esc(txt)}">${esc(txt)}</span>`;
+  const label=cls=>`<div class="fwstat-label ${cls}" title="${esc(txt)}">${esc(txt)}</div>`;
+  const bar=working=>`<div class="prog-track"><div class="prog-fill ${working?"amber working":"cyan"}" `+
+    `style="width:${Math.max(0,Math.min(100,firmwareStatusPct(x)))}%"></div></div>`;
+
+  switch(x.phase){
+    case "queued":    return chip("");
+    case "preparing": return chip("accent");
+    case "upload":    return label("")+bar(false);
+    case "verify":    return label("")+bar(true);
+    case "flash":     return label("")+bar(true);
+    case "rebooting":
+      // Past the point where waiting is still reasonable, this stops being a
+      // wait and becomes something to look at.
+      if(firmwareStatusShape(x)==="rebooting-lost"){
+        return chip("err")+
+          `<div class="fwstat-reason">${esc(t("settings.firmware.row_refresh_failed"))}</div>`;
+      }
+      return label("warn")+bar(true);
+    case "updated":
+      return chip("ok")+
+        (x.verify==="none"?`<div class="fwstat-reason">${esc(t("settings.firmware.st_unverified"))}</div>`:"");
+    case "skipped":   return chip("ok");
+    // Same treatment as a failure, including Retry: the reasons are things an
+    // operator can act on (stop the print, clear the fault, rename the file)
+    // and then try that printer again without re-running the whole batch.
+    case "rejected":  return chip("err")+
+        (x.error?`<div class="fwstat-reason" title="${esc(x.error)}">${esc(x.error)}</div>`:"")+
+        `<button type="button" class="fwstat-retry" data-fwretry="1">${esc(t("settings.firmware.st_retry"))}</button>`;
+    case "cancelled": return chip("");
+    case "failed":
+      // The reason, not a raw HTTP code on its own, and a way to try again.
+      return chip("err")+
+        (x.error?`<div class="fwstat-reason" title="${esc(x.error)}">${esc(x.error)}</div>`:"")+
+        `<button type="button" class="fwstat-retry" data-fwretry="1">${esc(t("settings.firmware.st_retry"))}</button>`;
+    default: return "";
+  }
+}
+
+const FW_CARD_STATE={ upload:"busy", verify:"busy", flash:"busy", preparing:"busy",
+                      rebooting:"rebooting", updated:"done", failed:"failed",
+                      // A printer the server refused reads as a failure, because
+                      // that is what it is from the operator's side: they asked
+                      // for it and it did not happen.
+                      rejected:"failed" };
+function renderFirmwareRowStatus(idx,x,queuePos){
+  const el=FW_ROWS.get(idx);
+  if(!el) return;
+  const slot=el.querySelector(".fwstat");
+  if(!slot) return;
+  // The border carries the state, so the grid reads as a picture before any
+  // of the words do.
+  const state=(x&&FW_CARD_STATE[x.phase])||null;
+  ["busy","rebooting","done","failed"].forEach(c=>el.classList.toggle(c,state===c));
+  if(state) el.classList.remove("dim");
+  // Rebuild only when the SHAPE changes. Keying on the rendered markup does
+  // not work: the byte count changes every second and the reboot countdown
+  // every four, so the markup always differs and .prog-fill would be
+  // destroyed and recreated on every tick — restarting its animation from
+  // zero each time, so the bar visibly stutters instead of running. Within a
+  // shape only the words and the width move.
+  const shape=firmwareStatusShape(x);
+  if(slot.dataset.shape!==shape){
+    slot.dataset.shape=shape;
+    slot.innerHTML=x?firmwareStatusHtml(x,queuePos):"";
+    const retry=slot.querySelector("[data-fwretry]");
+    if(retry) retry.addEventListener("click",()=>retryFirmwarePrinter(idx));
+  }
+  if(x) updateFirmwareStatusValues(slot,x,queuePos);
+}
+
+// The per-tick update: text and width only, never structure.
+function updateFirmwareStatusValues(slot,x,queuePos){
+  const txt=firmwareStatusText(x,queuePos);
+  const words=slot.querySelector(".fwstat-label")||slot.querySelector(".fwstat-chip");
+  if(words&&words.textContent!==txt){ words.textContent=txt; words.title=txt; }
+  const fill=slot.querySelector(".prog-fill");
+  if(fill){
+    const w=Math.max(0,Math.min(100,firmwareStatusPct(x)))+"%";
+    if(fill.style.width!==w) fill.style.width=w;
+  }
+}
+
+async function retryFirmwarePrinter(idx){
+  if(!SELECTED_FIRMWARE) return;
+  FW_SEL.add(idx);
+  syncFirmwareDeployButton();
+  await confirmFirmwareDeploy();
+}
+
+// ---------------------------------------------------------------------------
+// The grouped list
+// ---------------------------------------------------------------------------
+
+const FW_GROUP_ORDER=["needs","uptodate","unsupported","unavailable"];
+const FW_GROUP_TITLE_KEYS={
+  needs:"settings.firmware.group_needs_update",
+  uptodate:"settings.firmware.group_up_to_date",
+  unsupported:"settings.firmware.group_not_supported",
+  unavailable:"settings.firmware.group_unavailable",
+};
+let FW_GROUPED={ needs:[], uptodate:[], unsupported:[], unavailable:[] };
+
+function renderFirmwareList(){
+  const wrap=$("fwResults");
+  if(!wrap) return;
+  const target=firmwareTargetVersion();
+  const q=($("fwSearch")?$("fwSearch").value:"").trim().toLowerCase();
+  const conn=$("fwConnector")?$("fwConnector").value:"";
+
+  FW_GROUPED={ needs:[], uptodate:[], unsupported:[], unavailable:[] };
+  let shown=0;
+  FW_DATA.slice().sort(firmwareRowCompare).forEach(r=>{
+    if(!firmwareRowMatches(r,q,conn)) return;
+    FW_GROUPED[firmwareGroupOf(r,target)].push(r);
+    shown++;
+  });
+
+  // Group shells are cheap to rebuild; the ROWS inside them are reused, so a
+  // transfer in flight keeps its bar and its place.
+  wrap.innerHTML=FW_GROUP_ORDER.filter(g=>FW_GROUPED[g].length).map(g=>
+    `<div class="fwgroup${FW_COLLAPSED[g]?" collapsed":""}" data-fwgroup="${g}">`+
+      `<div class="fwgroup-head">`+
+        (g==="needs"
+          ? `<input type="checkbox" class="checkbox-input fwgroup-all" data-fwgroup-all="${g}" `+
+            `data-i18n-title="settings.firmware.group_select_all" title="Select every printer in this group">`
+          : `<span></span>`)+
+        `<div class="fwgroup-title">${esc(t(FW_GROUP_TITLE_KEYS[g]))}`+
+          `<span class="fwgroup-count" data-fwgroup-count="${g}"></span></div>`+
+        `<div class="fwgroup-right"><span data-fwgroup-summary="${g}"></span>`+
+          `<button type="button" class="fwgroup-toggle" data-fwgroup-toggle="${g}"></button></div>`+
+      `</div>`+
+      `<div class="fwgroup-body fwgrid" data-fwgroup-body="${g}"></div>`+
+    `</div>`).join("");
+
+  FW_GROUP_ORDER.forEach(g=>{
+    const body=wrap.querySelector(`[data-fwgroup-body="${g}"]`);
+    if(!body) return;
+    FW_GROUPED[g].forEach(r=>body.appendChild(firmwareRowEl(r)));
+  });
+
+  wrap.querySelectorAll("[data-fwgroup-toggle]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const g=btn.dataset.fwgroupToggle;
+      FW_COLLAPSED[g]=!FW_COLLAPSED[g];
+      const sec=wrap.querySelector(`[data-fwgroup="${g}"]`);
+      if(sec) sec.classList.toggle("collapsed",FW_COLLAPSED[g]);
+      renderFirmwareGroupHeads();
+    });
+  });
+  wrap.querySelectorAll("[data-fwgroup-all]").forEach(box=>{
+    box.addEventListener("change",()=>{
+      const rows=FW_GROUPED[box.dataset.fwgroupAll]||[];
+      rows.forEach(r=>{
+        if(firmwareIneligibleReason(firmwareFleetOf(r.id))) return;
+        if(box.checked) FW_SEL.add(r.id); else FW_SEL.delete(r.id);
+        const el=FW_ROWS.get(r.id);
+        if(el) el.querySelector(".fwchk").checked=box.checked;
+      });
+      syncFirmwareDeployButton();
+      renderFirmwareGroupHeads();
+    });
+  });
+
+  if($("fwNoMatches")) $("fwNoMatches").style.display=(FW_DATA.length&&!shown)?"":"none";
+  if($("fwTools")) $("fwTools").style.display=FW_DATA.length?"":"none";
+  if($("fwChips")) $("fwChips").style.display=FW_DATA.length?"":"none";
+  renderFirmwareGroupHeads();
+  renderFirmwareChips();
+  if(FW_LAST_STATUS) renderFirmwareStatus(FW_LAST_STATUS);
+  syncFirmwareDeployButton();
+}
+
+function renderFirmwareGroupHeads(){
+  const wrap=$("fwResults");
+  if(!wrap) return;
+  const target=firmwareTargetVersion();
+  FW_GROUP_ORDER.forEach(g=>{
+    const rows=FW_GROUPED[g]||[];
+    const count=wrap.querySelector(`[data-fwgroup-count="${g}"]`);
+    if(count) count.textContent=rows.length?String(rows.length):"";
+    const sum=wrap.querySelector(`[data-fwgroup-summary="${g}"]`);
+    if(sum){
+      if(g==="needs"){
+        const sel=rows.filter(r=>FW_SEL.has(r.id)).length;
+        sum.textContent=target
+          ? t("settings.firmware.group_selected_of",{n:sel,total:rows.length})+" · "+
+            tn("settings.firmware.group_transition",rows.length,{n:rows.length,version:target})
+          : t("settings.firmware.group_selected_of",{n:sel,total:rows.length});
+      } else if(g==="uptodate"){
+        sum.textContent=tn("settings.firmware.group_up_to_date_summary",rows.length,
+          {n:rows.length,version:target||"—"});
+      } else {
+        sum.textContent=tn("settings.firmware.group_not_supported_summary",rows.length,{n:rows.length});
+      }
+    }
+    const btn=wrap.querySelector(`[data-fwgroup-toggle="${g}"]`);
+    if(btn) btn.textContent=t(FW_COLLAPSED[g]?"settings.firmware.group_show":"settings.firmware.group_hide");
+    const all=wrap.querySelector(`[data-fwgroup-all="${g}"]`);
+    if(all){
+      const pickable=rows.filter(r=>!firmwareIneligibleReason(firmwareFleetOf(r.id)));
+      const sel=pickable.filter(r=>FW_SEL.has(r.id)).length;
+      all.checked=pickable.length>0&&sel===pickable.length;
+      all.indeterminate=sel>0&&sel<pickable.length;
+      all.disabled=!pickable.length;
+    }
+  });
+}
+
+// The fleet's version distribution, so "what state is my fleet in" is answered
+// by a row of chips rather than by reading every printer.
+function renderFirmwareChips(){
+  const box=$("fwChips");
+  if(!box) return;
+  const target=firmwareTargetVersion();
+  const counts=new Map();
+  let unsupported=0, unknown=0;
+  FW_DATA.forEach(r=>{
+    if(!firmwareCanDeploy(r.id)||r.reasonCode==="not_supported"){ unsupported++; return; }
+    // The same reading the rows show, so a chip and a row can never disagree
+    // about what a printer is running.
+    const v=firmwarePrinterVersion(r);
+    if(!v){ unknown++; return; }
+    counts.set(v,(counts.get(v)||0)+1);
+  });
+  const chips=[...counts.entries()]
+    .sort((a,b)=>compareFirmwareVersions(b[0],a[0]))
+    .map(([v,n])=>`<span class="fwchip${target&&v===target?" target":""}">${esc(v)} <b>${n}</b></span>`);
+  if(unknown) chips.push(`<span class="fwchip muted">${esc(t("settings.firmware.chip_unknown"))} <b>${unknown}</b></span>`);
+  if(unsupported) chips.push(`<span class="fwchip muted">${esc(t("settings.firmware.chip_unsupported"))} <b>${unsupported}</b></span>`);
+  box.innerHTML=chips.join("");
+}
+
+// ---------------------------------------------------------------------------
+// Selection, the footer and the deploy action
+// ---------------------------------------------------------------------------
+
+function selectedFirmwarePrinters(){
+  // Never offer a printer the server would refuse: the set can outlive a
+  // printer starting a print, and the row it came from may be filtered away.
+  return [...FW_SEL].filter(idx=>!firmwareIneligibleReason(firmwareFleetOf(idx)));
+}
+function clearFirmwareSelection(){
+  FW_SEL.clear();
+  FW_ROWS.forEach(el=>{ const c=el.querySelector(".fwchk"); if(c) c.checked=false; });
+  syncFirmwareDeployButton();
+  renderFirmwareGroupHeads();
+}
+
+// Both default ON when the control is somehow missing — the same default the
+// server applies to an absent field. For verification that is the difference
+// between a check and no check, so the fallback has to be the safe one.
+const firmwareSkipCurrentEnabled = () => { const el=$("fwSkipCurrent"); return el ? !!el.checked : true; };
+const firmwareVerifyEnabled      = () => { const el=$("fwVerify");      return el ? !!el.checked : true; };
+
+// The button names the scope of what it will do, and says why when it can't.
+function syncFirmwareDeployButton(){
+  const btn=$("fwDeploy");
+  if(!btn) return;
+  const n=selectedFirmwarePrinters().length;
+  btn.textContent=tn("settings.firmware.deploy_n",n,{n});
+  btn.disabled=!n||!SELECTED_FIRMWARE;
+  const why = !SELECTED_FIRMWARE ? t("settings.firmware.deploy_no_file")
+            : !n ? t("settings.firmware.deploy_no_selection") : "";
+  if(why) btn.title=why; else btn.removeAttribute("title");
+
+  // A selection survives filtering and collapsing: hiding a row must not
+  // quietly change what this button will do. That means the count can exceed
+  // the ticked boxes on screen, so say so rather than leaving it looking wrong.
+  const info=$("fwSelInfo");
+  if(info){
+    const visible=new Set();
+    FW_GROUP_ORDER.forEach(g=>{ if(!FW_COLLAPSED[g]) (FW_GROUPED[g]||[]).forEach(r=>visible.add(r.id)); });
+    const hidden=selectedFirmwarePrinters().filter(i=>!visible.has(i)).length;
+    info.textContent=hidden
+      ? tn("settings.firmware.selection_selected",n,{n})+" · "+
+        tn("settings.firmware.selection_hidden",hidden,{n:hidden})
+      : "";
+  }
+}
+
+// Batch progress, and an estimate built only from what this run has actually
+// measured — no constant, and nothing shown at all until there is a real rate.
+function renderFirmwareFooter(d){
+  const el=$("fwFooterProgress"), stop=$("fwStop");
+  if(!el) return;
+  const printers=(d&&d.printers)||{};
+  const keys=Object.keys(printers);
+  if(!keys.length){ el.textContent=""; if(stop) stop.style.display="none"; return; }
+  const phases=keys.map(k=>printers[k].phase);
+  const done=phases.filter(p=>FW_SETTLED.includes(p)||p==="rebooting").length;
+  const failed=phases.filter(p=>p==="failed").length;
+  const parts=[t("settings.firmware.footer_progress",{done,total:phases.length})];
+  if(failed) parts.push(`<span class="err">${esc(t("settings.firmware.footer_failed",{n:failed}))}</span>`);
+
+  const eta=firmwareEtaSeconds(printers);
+  if(eta!==null) parts.push(esc(t("settings.firmware.footer_eta",{eta:fmtDuration(eta)})));
+  el.innerHTML=parts.join(" · ");
+
+  const busy=phases.some(p=>!FW_SETTLED.includes(p));
+  if(stop){
+    stop.style.display=busy?"":"none";
+    stop.disabled=!!(d&&d.stopping);
+    stop.textContent=t(d&&d.stopping?"settings.firmware.footer_stopping":"settings.firmware.footer_stop");
+  }
+}
+
+// Derived from the transfer actually in flight: bytes moved over seconds
+// elapsed. Returns null rather than a guess when nothing has moved yet — an
+// invented estimate is worse than none on an operation measured in minutes.
+function firmwareEtaSeconds(printers){
+  const keys=Object.keys(printers);
+  const running=keys.map(k=>printers[k]).find(x=>x.phase==="upload"&&x.sent>0&&x.startedAt);
+  if(!running) return null;
+  const secs=(Date.now()-running.startedAt)/1000;
+  if(secs<=0) return null;
+  const rate=running.sent/secs;                 // bytes per second, measured
+  if(!(rate>0)) return null;
+  const rebootAllowance=FW_REBOOT_EXPECTED_MS/1000;
+  let left=(running.total-running.sent)/rate+rebootAllowance;
+  const waiting=keys.filter(k=>["queued","preparing"].includes(printers[k].phase)).length;
+  left+=waiting*(running.total/rate+rebootAllowance);
+  return left;
+}
+
+async function confirmFirmwareDeploy(){
+  const st=$("fwStatus");
   if(!SELECTED_FIRMWARE){
     st.className="pstatus err"; st.textContent=t("settings.firmware.deploy_no_file");
     return;
   }
-  const printerId=sel&&sel.value!==""?parseInt(sel.value,10):null;
-  const target=printerId!=null?FLEET.find(p=>p.id===printerId):null;
-  if(!target){
-    st.className="pstatus err"; st.textContent=t("settings.firmware.deploy_no_printer");
+  const picked=selectedFirmwarePrinters();
+  if(!picked.length){
+    st.className="pstatus err"; st.textContent=t("settings.firmware.deploy_no_selection");
     return;
   }
+  // Pre-flight the image before anything is committed. Only facts read out of
+  // the file's own bytes are fatal (see connectors/firmwareImage.js); a
+  // filename/model mismatch is shown as something to CHECK, because a filename
+  // is not evidence about the payload and this dialog must not imply that
+  // SnapCon has proven model compatibility.
+  const ins=await inspectSelectedFirmware();
+  renderFirmwareImageCard();
+  if(ins&&ins.hardFail&&ins.hardFail.length){
+    st.className="pstatus err";
+    st.textContent=t("settings.firmware.inspect_failed",{error:ins.hardFail.join("; ")});
+    return;
+  }
+  const names=picked.map(i=>{ const p=firmwareFleetOf(i); return p?p.name:("#"+i); });
+  const warns=(ins&&ins.warnings)||[];
+  // Choices made further up the page that change what this button does, stated
+  // here rather than left to be inferred from a switch set ten minutes ago.
+  const verifyOff=!firmwareVerifyEnabled();
+  const skipDead=firmwareSkipCurrentEnabled()&&!(ins&&ins.version);
   // Hold-to-confirm, the same control E-Stop and Cancel use — this is more
-  // destructive than either, so it does not get a lesser gate. The dialog
-  // names the printer and the file rather than asking "are you sure".
-  const current=(target.firmware&&target.firmware.firmware)||null;
+  // destructive than either, so it does not get a lesser gate. The dialog names
+  // the file, the version and every printer rather than asking "are you sure".
   openHoldConfirmDialog({
     mode:"hold",
     iconSrc:"/estop-icon.svg",
-    title:t("settings.firmware.confirm_title",{printer:target.name}),
+    title:tn("settings.firmware.confirm_title",picked.length,{n:picked.length}),
     subtitle:SELECTED_FIRMWARE.path,
     panelHtml:`<div class="hc-panel-file" title="${esc(SELECTED_FIRMWARE.path)}">${esc(SELECTED_FIRMWARE.name)}</div>`+
-      (current?`<div class="hc-panel-times">${esc(t("settings.firmware.confirm_current",{version:current}))}</div>`:""),
+      `<div class="hc-panel-times">${esc(ins&&ins.version
+        ?t("settings.firmware.confirm_version",{version:ins.version})
+        :t("settings.firmware.confirm_version_unknown"))}</div>`+
+      `<div class="hc-panel-times">${esc(names.join(", "))}</div>`,
     consequencesHtml:`<ul class="hc-consequences-list">`+
       `<li>${esc(t("settings.firmware.confirm_consequence_offline"))}</li>`+
       `<li>${esc(t("settings.firmware.confirm_consequence_power"))}</li>`+
       `<li>${esc(t("settings.firmware.confirm_consequence_one"))}</li>`+
+      (verifyOff?`<li>${esc(t("settings.firmware.confirm_no_verify"))}</li>`:"")+
+      (skipDead?`<li>${esc(t("settings.firmware.confirm_skip_no_version"))}</li>`:"")+
+      warns.map(w=>`<li>${esc(t("settings.firmware.inspect_warning",{warning:w}))}</li>`).join("")+
       `</ul>`,
-    idleLabel:t("settings.firmware.confirm_hold",{printer:target.name}),
+    idleLabel:tn("settings.firmware.confirm_hold_n",picked.length,{n:picked.length}),
     countdownLabel:n=>t("settings.firmware.confirm_hold_countdown",{n}),
     helperIdle:t("settings.firmware.confirm_helper_idle"),
     helperHolding:t("settings.firmware.confirm_helper_holding"),
     sendingLabel:t("settings.firmware.confirm_sending"),
     doneLabel:t("settings.firmware.confirm_started"),
-    onConfirm:async()=>{ await startFirmwareDeploy(target, SELECTED_FIRMWARE); }
+    onConfirm:async()=>{ await startFirmwareDeploy(picked); }
   });
 }
-let FW_DEPLOY_POLL=null;
-async function startFirmwareDeploy(target, firmware){
+
+// What to tell the operator once the server has answered.
+//
+// The old code said "Firmware update started" unconditionally. With five
+// printers selected and two printing, that sentence was simply false about two
+// of them — and since a rejected printer also got no status row, they vanished
+// entirely. The three outcomes are counted separately and the tone follows the
+// worst of them, so a partial batch cannot read as a clean success.
+function firmwareDeploySummary(d){
+  const acc=(d&&d.accepted||[]).length;
+  const rej=(d&&d.rejected||[]).length;
+  const skip=(d&&d.skipped||[]).length;
+  const parts=[];
+  if(acc)  parts.push(t("settings.firmware.summary_started",{n:acc}));
+  if(skip) parts.push(t("settings.firmware.summary_skipped",{n:skip}));
+  if(rej)  parts.push(t("settings.firmware.summary_rejected",{n:rej}));
+  // Nothing accepted at all is not a success in any reading of the word, even
+  // when every printer was merely "already up to date" — the operator asked for
+  // something and none of it is running.
+  const tone = rej ? (acc ? "warn" : "err") : (acc || skip ? "ok" : "err");
+  return { tone, text: parts.length?parts.join(" · "):t("settings.firmware.summary_nothing") };
+}
+
+async function startFirmwareDeploy(printers){
   const st=$("fwStatus");
-  st.className="pstatus work"; st.textContent=t("settings.firmware.phase_starting");
-  const r=await postJSON("/api/firmware-deploy",{printer:target.id, path:firmware.path});
+  // Sent as STABLE ids, not the row indexes. A Settings save can reorder the
+  // fleet between this list being drawn and Deploy being pressed, and the
+  // server resolves whatever it is given — so handing it an index would let a
+  // reorder retarget the flash. Falls back to the index only for a row with no
+  // id, which the server still accepts (see firmwareTargetFor).
+  const refs=printers.map(i=>{ const row=FW_DATA.find(r=>r.id===i); return row&&row.pid?row.pid:i; });
+  const r=await postJSON("/api/firmware-deploy",{
+    printers:refs, path:SELECTED_FIRMWARE.path,
+    skipCurrent: firmwareSkipCurrentEnabled(),
+    verify: firmwareVerifyEnabled() });
   const d=await r.json();
   if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
-  pollFirmwareDeploy(d.job, target);
+  (d.rejected||[]).forEach(x=>{ FW_REFRESHED.delete(x.printer); });
+  (d.accepted||[]).forEach(x=>{
+    FW_REFRESHED.delete(x.printer);   // this printer is about to change again
+    FW_REFRESH_TRIES.delete(x.printer);
+  });
+  const sum=firmwareDeploySummary(d);
+  st.className="pstatus "+sum.tone; st.textContent=sum.text;
+  // Nothing is selected any more: the work is the server's now, and leaving the
+  // boxes ticked invites a second identical deploy. Rejected printers keep their
+  // own status row, so clearing the selection does not hide them.
+  clearFirmwareSelection();
+  pollFirmwareStatus();
 }
-// Polled rather than streamed, matching /api/print-status. Slow on purpose:
-// the interesting transitions are minutes apart, and this must not add load
-// to a printer that is busy receiving a quarter-gigabyte image.
-function pollFirmwareDeploy(jobId, target){
-  clearInterval(FW_DEPLOY_POLL);
-  const st=$("fwStatus");
-  FW_DEPLOY_POLL=setInterval(async()=>{
-    let d;
-    try{ d=await getJSON("/api/firmware-deploy-status?job="+encodeURIComponent(jobId)); }
-    catch{ return; }   // a transient poll failure is not a deploy failure
-    if(d.error&&!d.done){ return; }
-    if(!d.done){
-      const key=FW_DEPLOY_PHASE_KEYS[d.phase]||"settings.firmware.phase_starting";
-      st.className="pstatus work"; st.textContent=t(key,{printer:target.name});
-      return;
-    }
-    clearInterval(FW_DEPLOY_POLL); FW_DEPLOY_POLL=null;
-    if(d.error){ st.className="pstatus err"; st.textContent=d.error; return; }
-    // The printer dropping the connection at the flash stage is the EXPECTED
-    // path — services go down to write the image. Reporting it as a failure
-    // is what would tempt someone into power-cycling mid-write.
-    // Branch on the outcome the server named, not on a missing version —
-    // "no version yet" is an expected ending, not an absent value to guess at.
-    if(d.result==="updated"&&d.to){
-      st.className="pstatus ok";
-      st.textContent=t("settings.firmware.done_updated",{printer:target.name,from:d.from||"—",to:d.to});
-    } else {
-      st.className="pstatus ok";
-      st.textContent=t("settings.firmware.done_flashing",{printer:target.name});
-    }
-  },4000);
+
+// ---------------------------------------------------------------------------
+// Polling
+// ---------------------------------------------------------------------------
+
+// Polled rather than streamed, matching /api/print-status. The server holds the
+// whole operation, so closing this tab (or the browser) does not stop a deploy —
+// this only decides how often the page asks what happened.
+let FW_STATUS_POLL=null, FW_POLL_MS=0;
+function scheduleFirmwareStatusPoll(ms){
+  if(FW_POLL_MS===ms) return;
+  clearInterval(FW_STATUS_POLL);
+  FW_POLL_MS=ms;
+  FW_STATUS_POLL = ms ? setInterval(pollFirmwareStatus,ms) : null;
 }
+async function pollFirmwareStatus(){
+  let d;
+  try{ d=await getJSON("/api/firmware-status"); }
+  catch{ return; }              // a transient poll failure is not a deploy failure
+  if(!d||!d.printers) return;
+  const wasActive=FW_LAST_STATUS?Object.keys(FW_LAST_STATUS.printers||{}).some(k=>
+    !FW_SETTLED.includes(FW_LAST_STATUS.printers[k].phase)):false;
+  FW_LAST_STATUS=d;
+  renderFirmwareStatus(d);
+  Object.keys(d.printers).forEach(k=>{
+    if(d.printers[k].phase==="updated") refreshFirmwareRow(parseInt(k,10));
+  });
+  const phases=Object.keys(d.printers).map(k=>d.printers[k].phase);
+  // 1 s while bytes are moving: the numbers must move continuously during a
+  // multi-minute transfer or it reads as stalled. Once a printer is only
+  // rebooting there is nothing to watch minute to minute, and once everything
+  // has settled the poll stops entirely.
+  const active=phases.some(p=>!FW_SETTLED.includes(p)&&p!=="rebooting");
+  // A finished printer still owes a version re-read, and that read usually
+  // fails the first time or two while the printer finishes booting.
+  const owed=Object.keys(d.printers).some(k=>
+    d.printers[k].phase==="updated"&&!FW_REFRESHED.has(parseInt(k,10)));
+  scheduleFirmwareStatusPoll(active?1000:((phases.includes("rebooting")||owed)?4000:0));
+  // A deploy that has just finished changes which group its printer belongs in.
+  const nowActive=phases.some(p=>!FW_SETTLED.includes(p));
+  if(wasActive&&!nowActive) renderFirmwareList();
+}
+function renderFirmwareStatus(d){
+  const queue=(d&&d.queue)||[];
+  Object.keys(d.printers||{}).forEach(k=>{
+    const idx=parseInt(k,10);
+    renderFirmwareRowStatus(idx,d.printers[k],queue.indexOf(idx)+1);
+  });
+  renderFirmwareFooter(d);
+}
+// A live language switch redraws off already-known state — no network call, no
+// re-read of the printers.
+function refreshFirmwareDynamicText(){
+  if(!FW_DATA.length) return;
+  renderFirmwareImageCard();
+  syncFirmwareConnectorFilter();
+  applyFirmwareSortUI();
+  // Status slots are cached on their rendered HTML, so a language switch has to
+  // invalidate that or the old language stays on screen until the phase changes.
+  FW_ROWS.forEach(el=>{ const s=el.querySelector(".fwstat"); if(s) delete s.dataset.render; });
+  renderFirmwareList();
+}
+
+function syncFirmwareConnectorFilter(){
+  const sel=$("fwConnector");
+  if(!sel) return;
+  const prev=sel.value;
+  // Only connectors actually present in the list — an option that can never
+  // match anything is a dead end, not a filter.
+  const present=[...new Set(FW_DATA.map(r=>r.connector).filter(Boolean))]
+    .sort((a,b)=>connectorLabel(a).localeCompare(connectorLabel(b)));
+  sel.innerHTML=`<option value="">${esc(t("settings.firmware.filter_all_connectors"))}</option>`+
+    present.map(c=>`<option value="${esc(c)}">${esc(connectorLabel(c))}</option>`).join("");
+  if(prev&&present.includes(prev)) sel.value=prev;
+}
+
+const FW_SORT_LABEL_KEYS={ default:"settings.firmware.sort_default", name:"settings.firmware.sort_name",
+                           status:"settings.firmware.sort_status", version:"settings.firmware.sort_version" };
+function applyFirmwareSortUI(){
+  Object.keys(FW_SORT_LABEL_KEYS).forEach(k=>{
+    const el=$("fwsc-"+k);
+    if(el) el.textContent = FW_SORT===k ? "✓" : "";
+  });
+  // The control is an icon, so what it currently sorts by has to be readable
+  // somewhere — a bare icon says nothing about the order on screen.
+  const btn=$("fwSortBtn");
+  if(btn) btn.title=t("settings.firmware.sort_title_current",{what:t(FW_SORT_LABEL_KEYS[FW_SORT])});
+}
+
+// ---------------------------------------------------------------------------
+// Reading the fleet's versions
+// ---------------------------------------------------------------------------
+
+// A row's cells are drawn from FW_DATA, so a row redrawn after a deploy shows
+// exactly what a freshly drawn one would.
 function firmwareSkipReasonText(r){
   if(!r.online){
     if(r.reasonCode==="offline") return r.detail?t("settings.firmware.status_offline_detail",{detail:r.detail}):t("printer_status.offline");
@@ -8401,51 +9280,80 @@ function firmwareSkipReasonText(r){
   if(r.reasonCode==="busy") return t("settings.firmware.status_skipped_busy",{state:r.state||""});
   return r.reason||"";
 }
+
+// Printers whose version text has been re-read after their deploy (or whose
+// re-read has been given up on), so a settled row is not re-fetched forever.
+const FW_REFRESHED=new Set();
+const FW_REFRESH_TRIES=new Map();
+// ~2 minutes at the 4s settled cadence. A U1 answers its first probe well
+// before Moonraker can serve /printer/info, so the first attempt almost always
+// fails — that is expected, not an error, and it is why this retries at all
+// rather than reading once and giving up.
+const FW_REFRESH_MAX_TRIES=30;
+const FW_REFRESH_INFLIGHT=new Set();
+
+// After a deploy lands, the row still shows the version the printer reported
+// BEFORE it was flashed — the one number someone looks at to confirm the update
+// took. Re-read just that printer. Deliberately not loadFirmware(): that
+// re-probes the whole fleet and rebuilds every row.
+async function refreshFirmwareRow(idx){
+  if(FW_REFRESHED.has(idx)||FW_REFRESH_INFLIGHT.has(idx)) return;
+  if(!FW_ROWS.has(idx)) return;
+  FW_REFRESH_INFLIGHT.add(idx);
+  let fresh;
+  try{ fresh=await getJSON("/api/firmware?printer="+encodeURIComponent(idx)); }
+  catch{ fresh=null; }
+  FW_REFRESH_INFLIGHT.delete(idx);
+  const tries=(FW_REFRESH_TRIES.get(idx)||0)+1;
+  FW_REFRESH_TRIES.set(idx,tries);
+  // A printer that has only just answered its first probe is still bringing
+  // Moonraker up and cannot serve /printer/info yet, so an early failure here is
+  // the normal case rather than a fault. Try again on the next poll — but not
+  // forever.
+  if(!fresh||fresh.error||fresh.skipped){
+    if(tries>=FW_REFRESH_MAX_TRIES) FW_REFRESHED.add(idx);
+    return;
+  }
+  FW_REFRESHED.add(idx);
+  const i=FW_DATA.findIndex(r=>r.id===idx);
+  if(i>=0) FW_DATA[i]=fresh;
+  // Its version changed, so it may belong in a different group now.
+  renderFirmwareList();
+}
+
 async function loadFirmware(){
-  const st=$("fwStatus"), wrap=$("fwResults"), btn=$("fwGet");
-  btn.disabled=true;
+  const st=$("fwStatus"), btn=$("fwGet");
+  if(btn) btn.disabled=true;
   st.className="pstatus work"; st.textContent=t("settings.firmware.reading");
-  wrap.innerHTML="";
   try{
     const rows=await getJSON("/api/firmware");
-    // Idle (readable) printers first, then busy, then offline.
-    const rank=r=>r.skipped?(r.online?1:2):0;
-    rows.sort((a,b)=>rank(a)-rank(b));
-    wrap.innerHTML=rows.map(r=>{
-      if(r.skipped){
-        const why=firmwareSkipReasonText(r);
-        return `<div class="fwrow"><input type="checkbox" class="fwchk checkbox-input" id="fwchk-${r.id}" data-id="${r.id}" disabled>`+
-               `<div><label for="fwchk-${r.id}" class="fwline1"><b>${esc(r.name)}</b></label><div class="fwskip">${esc(why)}</div></div></div>`;
-      }
-      // All MCUs usually share one version — collapse to one entry. If any
-      // board disagrees, show the majority version plus an amber callout for
-      // each outlier (that's the board that missed an update).
-      const mcus=r.mcus||[];
-      const byVer={};
-      mcus.forEach(m=>{ const v=m.version||"—"; (byVer[v]=byVer[v]||[]).push(m); });
-      const vers=Object.keys(byVer).sort((a,b)=>byVer[b].length-byVer[a].length);
-      let mcuHtml="";
-      if(vers.length===1){
-        const heads=mcus.filter(m=>m.name!=="mainboard").length;
-        mcuHtml=esc(tn("settings.firmware.mcu_single",heads,{version:vers[0]}));
-      } else if(vers.length>1){
-        const majority=vers[0];
-        const outliers=mcus.filter(m=>(m.version||"—")!==majority);
-        mcuHtml=esc(t("settings.firmware.mcu_majority",{version:majority,count:byVer[majority].length,total:mcus.length}))+
-          outliers.map(m=>` · <span class="fwdiff">⚠ ${esc(m.name)}: ${esc(m.version||"—")}</span>`).join("");
-      }
-      // "FW"/"SW"/"Klipper" are terse technical abbreviations and a product
-      // name, not SnapCon UI prose — left untranslated, same treatment as
-      // "MCU" above and the raw version numbers themselves.
-      const fwTxt="FW "+(r.firmware||"—")+(r.software&&r.software!==r.firmware?" / SW "+r.software:"")+" · Klipper "+(r.klipper||"—");
-      return `<div class="fwrow"><input type="checkbox" class="fwchk checkbox-input" id="fwchk-${r.id}" data-id="${r.id}">`+
-        `<div><label for="fwchk-${r.id}" class="fwline1"><b>${esc(r.name)}</b><span>${esc(fwTxt)}</span></label>`+
-        `<div class="fwline2">${mcuHtml}${r.os?esc(" · "+r.os):""}</div></div></div>`;
-    }).join("");
+    FW_DATA=rows;
+    FW_LOADED=true;
+    FW_REFRESHED.clear();
+    FW_REFRESH_TRIES.clear();
+    // A printer that has gone away must not stay selected or leave a row behind.
+    const live=new Set(rows.map(r=>r.id));
+    [...FW_SEL].forEach(i=>{ if(!live.has(i)) FW_SEL.delete(i); });
+    [...FW_ROWS.keys()].forEach(i=>{ if(!live.has(i)) FW_ROWS.delete(i); });
+    syncFirmwareConnectorFilter();
+    applyFirmwareSortUI();
+    renderFirmwareList();
     const read=rows.filter(r=>!r.skipped).length;
     st.className="pstatus ok"; st.textContent=tn("settings.firmware.read_summary",rows.length,{read,total:rows.length});
+    // Re-attach any deploy the server is still running to the fresh rows.
+    pollFirmwareStatus();
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
-  finally{ btn.disabled=false; }
+  finally{ if(btn) btn.disabled=false; }
+}
+
+// Re-run on every fleet poll: a printer that finishes its print becomes
+// selectable without pressing Refresh again — and one that STARTS a print stops
+// being selectable, which is the direction that matters.
+function refreshFirmwareRowEligibility(){
+  if(!FW_ROWS.size) return;
+  FW_DATA.forEach(r=>{ const el=FW_ROWS.get(r.id); if(el) updateFirmwareRowCells(el,r); });
+  renderFirmwareGroupHeads();
+  syncFirmwareDeployButton();
 }
 
 // ---- Generic per-tab dirty tracking for Settings ----
@@ -8500,14 +9408,29 @@ function showSetTab(name){
   // footer instead of the shared always-visible Save row. Remote Access and
   // Logs have no batched form to save — enabling/disabling/restarting and
   // viewing logs are both immediate actions — so neither shows a Save row.
-  if($("globalSaveRow")) $("globalSaveRow").style.display=(SETTINGS_TAB_TRACKERS[name]||name==="remote"||name==="logs"||name==="queue")?"none":"";
+  // Firmware is in this list because nothing on it is a saved setting: the
+  // two toggles persist on change, and everything else is an action.
+  if($("globalSaveRow")) $("globalSaveRow").style.display=(SETTINGS_TAB_TRACKERS[name]||name==="remote"||name==="logs"||name==="queue"||name==="firmware")?"none":"";
   // Remote Access has its own live status poller — only run it while its tab
   // is actually visible, same reasoning as the fleet poller not running
   // forever in the background for no reason.
   if(name==="remote"){ loadRemoteAccessStatus(); if(!RA_POLL_TIMER) RA_POLL_TIMER=setInterval(loadRemoteAccessStatus, 4000); }
   else if(RA_POLL_TIMER){ clearInterval(RA_POLL_TIMER); RA_POLL_TIMER=null; }
   if(name==="logs") loadAuditLogUI(true);
-  if(name==="firmware") syncFirmwareDeployTargets();
+  // The Firmware tab has its own status poller. Entering the tab picks up a
+  // deploy already running on the server (it does not belong to this page);
+  // leaving stops asking. syncFirmwareDeployButton() runs regardless so the
+  // button's disabled-reason title is translated before it can be hovered.
+  if(name==="firmware"){
+    renderFirmwareImageCard();
+    syncFirmwareDeployButton();
+    // The list used to stay empty until someone pressed a button, which read
+    // as a broken tab. Read once per session and leave refreshing to the
+    // button after that — it probes every printer, so it is not free.
+    if(!FW_LOADED) loadFirmware(); else renderFirmwareList();
+    pollFirmwareStatus();
+  }
+  else scheduleFirmwareStatusPoll(0);
 }
 
 // ---- Remote Access (Cloudflare Tunnel, managed) — Development Preview ----
@@ -8874,6 +9797,9 @@ async function loadConfigUI(){
     SYSTEM_DEFAULT_LOCALE=c.locale||"en";
     $("setFolder").value=c.gcodeFolder||"";
     $("setFirmwareFolder").value=c.firmwareFolder||"";
+    // Both default ON when absent, matching the server.
+    if($("fwSkipCurrent")) $("fwSkipCurrent").checked=c.firmwareSkipCurrent!==false;
+    if($("fwVerify")) $("fwVerify").checked=c.firmwareVerify!==false;
     scheduleFolderCheck();
     $("setLogsFolder").value=c.logsFolder||"";
     $("setCameraFolder").value=c.cameraFolder||"";

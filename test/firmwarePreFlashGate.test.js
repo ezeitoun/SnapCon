@@ -61,7 +61,11 @@ test("printer goes busy during the upload → the flash never starts", async () 
     assert.ok(steps.includes("verified"), "verification completed");
     assert.equal(steps.includes("flash"), false, "the flash step was never announced");
     assert.equal(mock.calls.uploads, 1);
-    assert.equal(mock.calls.reads, 1, "the image was still read back and verified");
+    // Verification still ran before the gate — in the default CRC mode that
+    // means the printer archived the file and the CRC was read out of it,
+    // not that a quarter-gigabyte came back over the network.
+    assert.equal(mock.calls.zips, 1, "the image was still verified");
+    assert.equal(mock.calls.reads, 0, "and verifying it did not pull it back");
   } finally { await mock.close(); }
 });
 
@@ -81,7 +85,10 @@ test("printer stays idle → the flash proceeds normally", async () => {
     assert.match(mock.calls.upgrade[0].filepath, /^\/userdata\/gcodes\/fw\.bin$/,
       "flashed by absolute path, built from the printer's own reported root");
     assert.ok(steps.includes("flash"), "the flash step was announced");
-    assert.equal(res.before.fullversion, "1.5.2.13");
+    // fullversion is the BUILD, the way a real U1 reports it — not the
+    // truncated three-part string it also reports in `version`.
+    assert.equal(res.before.fullversion, "1.5.2.13_20260722102206");
+    assert.equal(res.before.version, "1.5.2", "and the two are NOT the same string");
   } finally { await mock.close(); }
 });
 
@@ -135,18 +142,21 @@ test("beforeFlash is awaited immediately before the flash, after verification", 
 
 test("the server passes a fresh-probe gate, and its abort is a failure not a reboot", () => {
   const serverSrc = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
-  const route = serverSrc.slice(serverSrc.indexOf('app.post("/api/firmware-deploy"'),
-                                serverSrc.indexOf('app.get("/api/firmware-deploy-status"'));
-  assert.match(route, /beforeFlash: async \(\) => \{\s*\n\s*const busy = await firmwareDeployBlockedBy\(p\);/);
-  assert.match(route, /started printing during the upload — nothing was flashed/);
-  // The throw lands in the catch, which sets error + logs the failure event.
-  // job.result is only ever assigned on the success path, so an abort can never
-  // be reported as version-unconfirmed.
-  const setsResult = [...route.matchAll(/job\.result = /g)].length;
+  // The gate lives in the per-printer job, not in the route — the route only
+  // queues, and the flash happens minutes later.
+  const job = serverSrc.slice(serverSrc.indexOf("async function runFirmwareDeploy("),
+                              serverSrc.indexOf("let fwDraining = false;"));
+  assert.ok(job.length > 0, "the per-printer job must exist");
+  assert.match(job, /beforeFlash: async \(\) => \{\s*\n\s*const busy = await firmwareDeployBlockedBy\(p\);/);
+  assert.match(job, /started printing during the upload — nothing was flashed/);
+  // The throw lands in the catch, which records the failure. `result` is only
+  // ever assigned on the success path, so an abort can never be reported as
+  // version-unconfirmed.
+  const setsResult = [...job.matchAll(/const result = /g)].length;
   assert.equal(setsResult, 1, "result is assigned once, on the success path only");
-  const resultIdx = route.indexOf("job.result = ");
-  const catchIdx = route.indexOf("} catch (e) {");
-  assert.ok(resultIdx < catchIdx, "the only assignment is before the catch");
-  assert.match(route, /job\.error = e\.message; job\.phase = "error"; job\.done = true;/);
-  assert.match(route, /event: "firmware-deploy-failed"/);
+  const resultIdx = job.indexOf("const result = ");
+  const catchIdx = job.indexOf("} catch (e) {");
+  assert.ok(resultIdx > 0 && resultIdx < catchIdx, "the only assignment is before the catch");
+  assert.match(job, /fwSet\(id, \{ phase: "failed", error: e\.message/);
+  assert.match(job, /event: "firmware-deploy-failed"/);
 });

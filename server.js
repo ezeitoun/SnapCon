@@ -22,6 +22,7 @@ const connHttp = require("./connectors/http-utils");
 // drives it, and only ever for printers whose connector advertises
 // firmwareDeploy.
 const u1Firmware = require("./connectors/snapmaker-u1-firmware");
+const firmwareImage = require("./connectors/firmwareImage");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 const { createAuditLog } = require("./audit/AuditLog");
 const { createSyncEngine } = require("./sync/SyncEngine");
@@ -574,19 +575,110 @@ app.get("/api/firmware-files", requireAdmin, (req, res) => {
 // does not make that easy to trigger by accident, which is why there is no
 // option to point this at an arbitrary path or a remote URL.
 //
-// Progress is reported through a job record polled by
-// /api/firmware-deploy-status, exactly like /api/print + /api/print-status.
-// A blocking request is not viable here: upload, MD5 verify and the flash
-// watch together run for minutes, and the caller needs to know WHICH of
-// those it is in — a single spinner over the whole sequence is what makes
-// people power-cycle a printer mid-write.
-const FW_DEPLOYS = new Map();   // jobId -> { phase, done, error, outcome, before, after, file, ts }
-// printer id -> jobId, for as long as a deploy is actually running. Two
-// concurrent flashes of the same machine would interleave two uploads and two
-// systemUpgrade.sh runs against one filesystem; there is no version of that
-// worth allowing.
-const FW_ACTIVE = new Map();
+// SEQUENTIAL BY DESIGN. Each printer costs ~250 MB up and ~250 MB back for the
+// MD5 read-back; three at once is 1.5 GB of concurrent traffic on the same LAN
+// the printers depend on. Selected printers queue and run one at a time, and a
+// failure records that printer and moves to the next rather than cancelling
+// the rest.
+//
+// Progress is a printer-keyed record polled by /api/firmware-status. A
+// blocking request is not viable: upload, verify and the flash watch together
+// run for minutes, and the caller needs to know WHICH of those it is in — a
+// single spinner over the whole sequence is what makes people power-cycle a
+// printer mid-write.
+const FW_STATE = new Map();     // printer id -> { phase, sent, total, file, error, result, ... }
+const FW_QUEUE = [];            // { id, rel, actor } — waiting their turn
+let FW_RUNNING = null;          // the one printer deploying right now
+const FW_JOBS = new Map();      // jobId -> printer id, for /api/firmware-deploy-status
 const newFwJobId = () => "fw" + Date.now() + Math.random().toString(16).slice(2, 6);
+
+// How long a printer may claim to be "updating" after the flash began without
+// being seen again. Past this it falls back to whatever the probe actually
+// says, rather than claiming indefinitely that it is coming back.
+const FW_REBOOT_GRACE_MS = 15 * 60 * 1000;
+
+// A printer is off-limits to a second deploy while queued or running.
+const fwBusyWith = id => (FW_RUNNING === id || FW_QUEUE.some(e => e.id === id));
+
+// What the fleet card should say instead of the probe's own answer, or null.
+//
+// Two states, not one: "updating" while SnapCon is still doing something to
+// the printer (queued, transferring, verifying, writing), and "rebooting"
+// once the flash has taken it off the network. They mean different things to
+// whoever is stood in front of the machine — the first is interruptible work,
+// the second is a wait — and one word for both left people unsure whether
+// anything was happening at all.
+//
+// Deliberately NOT open-ended: see FW_REBOOT_GRACE_MS.
+function firmwareCardState(p) {
+  const st = FW_STATE.get(p.id);
+  if (!st) return null;
+  if (st.phase === "rebooting") {
+    return (st.flashStartedAt && Date.now() - st.flashStartedAt < FW_REBOOT_GRACE_MS)
+      ? "rebooting" : null;
+  }
+  return fwBusyWith(p.id) ? "updating" : null;
+}
+// Is SnapCon actively doing something to this printer's firmware? Covers the
+// whole window: queued, transferring, verifying, writing, and the reboot
+// afterwards. Used by isPrinterIdle so the print queue cannot dispatch a job
+// into the middle of a deploy.
+function firmwareUpdating(p) {
+  return firmwareCardState(p) !== null;
+}
+
+// Resolve whatever the browser named into a printer.
+//
+// Prefers the STABLE id. server.js already knows PRINTERS[] can be reordered by
+// a Settings save within one run — saveQueuedFiles() persists by p.id for
+// exactly that reason — and firmware deploy is the most destructive thing here,
+// so it must not resolve a target through an index that may since have moved.
+// A numeric index is still accepted so an older client keeps working, but it is
+// the weaker identifier and the browser no longer sends one.
+function firmwareTargetFor(ref) {
+  if (typeof ref === "string" && ref) return PRINTERS.find(x => x.id === ref) || null;
+  if (typeof ref === "number" && Number.isInteger(ref) && ref >= 0) return PRINTERS[ref] || null;
+  return null;
+}
+
+// Does the image positively CONTRADICT what this printer says it is?
+//
+// Deliberately narrow, and it does not second-guess connectors/firmwareImage.js:
+// that module documents at length that the payload never states a model and the
+// file name proves nothing, which is why compatibilityFor() returns a warning
+// rather than a verdict. So absence of evidence stays a warning and only
+// positive disagreement — the file says A400, the printer says U1 — stops the
+// deploy, before a quarter-gigabyte is uploaded rather than after.
+//
+// The escape hatch is deliberate and obvious: name the file correctly.
+function firmwareCompatReject(image, productCode) {
+  const c = firmwareImage.compatibilityFor(image, productCode);
+  if (c.hardFail && c.hardFail.length) return c.hardFail.join("; ");
+  const named = image && image.filename && image.filename.product;
+  if (!named || !productCode) return null;
+  if (String(named).toLowerCase() === String(productCode).toLowerCase()) return null;
+  return "The firmware file is named for " + named + " but this printer reports itself as "
+    + productCode + " — nothing was uploaded. Check the file, or rename it if it really is correct.";
+}
+
+// Called from probeCached with a fresh observation: a printer that answers
+// again after a flash has finished rebooting, so stop overriding its state.
+// Phase-gated — during upload/verify the printer is legitimately online and
+// must not clear itself early.
+function firmwareNoteObserved(p, online) {
+  const st = FW_STATE.get(p.id);
+  if (!st || !online) return;
+  if (st.phase === "rebooting") { st.phase = "updated"; st.backOnlineAt = Date.now(); st.ts = Date.now(); }
+}
+
+setInterval(() => {
+  const cutoff = Date.now() - JOB_MAX_AGE;
+  for (const [id, st] of FW_STATE) {
+    const settled = ["updated", "failed", "skipped", "cancelled", "rejected"].includes(st.phase);
+    if (settled && st.ts < cutoff && !fwBusyWith(id)) { FW_STATE.delete(id); }
+  }
+  for (const [jobId, id] of FW_JOBS) if (!FW_STATE.has(id)) FW_JOBS.delete(jobId);
+}, 60 * 1000).unref();
 
 // Resolve a browser-supplied RELATIVE path to a real file inside the
 // configured firmware folder, or explain why not.
@@ -614,7 +706,11 @@ function resolveFirmwareFile(relRaw) {
 }
 
 // Is this printer safe to flash right now? Re-asked immediately before the
-// deploy starts, not only when the request arrived.
+// deploy starts and again immediately before the irreversible write, not only
+// when the request arrived.
+//
+// Maintenance mode is deliberately NOT a blocker: a printer taken out of
+// production on purpose is a sensible one to update. Printing and paused are.
 async function firmwareDeployBlockedBy(p) {
   try {
     const st = await probeCached(p);
@@ -630,131 +726,372 @@ async function firmwareDeployBlockedBy(p) {
     if (st && st.online && st.state === "error") {
       return p.name + " is reporting an error — clear the fault before updating firmware";
     }
+    if (st && !st.online) return p.name + " is offline";
   } catch { /* unreachable printer: let the deploy itself report the failure */ }
   return null;
 }
-// Same abandoned-record sweep as JOBS above: nobody polls a job whose tab
-// closed mid-flash.
-setInterval(() => {
-  const cutoff = Date.now() - JOB_MAX_AGE;
-  for (const [id, j] of FW_DEPLOYS) if (j.done && j.ts < cutoff) FW_DEPLOYS.delete(id);
-}, 60 * 1000).unref();
+
+function fwSet(id, patch) {
+  const cur = FW_STATE.get(id) || { sent: 0, total: 0 };
+  FW_STATE.set(id, { ...cur, ...patch, ts: Date.now() });
+}
+
+// One printer, start to finish. Never throws: every ending is recorded on the
+// printer's own record so the queue can carry on to the next one.
+async function runFirmwareDeploy(id, relRaw, actor, verifyMode) {
+  const p = PRINTERS.find(x => x.id === id);
+  const st = FW_STATE.get(id) || {};
+  if (!p) { fwSet(id, { phase: "failed", error: "Printer no longer exists" }); return; }
+  try {
+    fwSet(id, { phase: "preparing", sent: 0, total: 0, startedAt: Date.now() });
+    // Re-ask both questions against the state that will actually be used. The
+    // request-time answers are already stale by the time this runs, and "the
+    // printer was idle a moment ago" is not what makes flashing safe.
+    const stillBlocked = await firmwareDeployBlockedBy(p);
+    if (stillBlocked) throw new Error(stillBlocked);
+    const now = resolveFirmwareFile(relRaw);
+    if (now.error) throw new Error(now.error);
+
+    // With no mode the connector picks its own default: a CRC-32 taken from
+    // the printer's own archive of the file, falling back to windowed
+    // sampling on firmware without that endpoint. "none" is the one value a
+    // request can set, and it means exactly what it says.
+    const r = await u1Firmware.updateFromFile(p, now.file, {
+      ...(verifyMode ? { verify: verifyMode } : {}),
+      onStep: sInfo => {
+        if (sInfo.step === "device" && sInfo.info) fwSet(id, { before: sInfo.info });
+        if (sInfo.step === "upload") fwSet(id, { phase: "upload", sent: 0 });
+        if (sInfo.step === "verify") fwSet(id, { phase: "verify", sent: 0 });
+        if (sInfo.step === "verify-skipped") fwSet(id, { verify: "none" });
+        if (sInfo.step === "flash") fwSet(id, { phase: "flash", flashStartedAt: Date.now() });
+      },
+      // Per-chunk, so this only touches an in-memory record — the poll reads it.
+      onProgress: (phase, sent, total) => {
+        const cur = FW_STATE.get(id);
+        if (cur && cur.phase === phase) { cur.sent = sent; cur.total = total; cur.ts = Date.now(); }
+      },
+      // The last exit before anything irreversible. Upload and verify take
+      // minutes, which is long enough for someone to have started a print
+      // since this deploy began. Throwing here aborts with nothing written;
+      // the uploaded image stays on the printer, which is inert.
+      beforeFlash: async () => {
+        const busy = await firmwareDeployBlockedBy(p);
+        if (busy) throw new Error(p.name + " started printing during the upload — nothing was flashed");
+      },
+    });
+
+    // Three distinct endings, kept distinct. A flash that started and took the
+    // printer offline to write the image is a SUCCESS the user should see as
+    // such — but the new version is genuinely not observable yet, so nothing
+    // invents one: "after" stays null and the phase says why.
+    const result = r.after ? "updated" : "version-unconfirmed";
+    fwSet(id, {
+      phase: r.after ? "updated" : "rebooting",
+      result, before: r.before, after: r.after, sent: 0, total: 0,
+      flashStartedAt: (FW_STATE.get(id) || {}).flashStartedAt || Date.now(),
+    });
+    auditLog.log({
+      category: "admin", event: "firmware-deploy", ...actor,
+      printerId: p.id, printerName: p.name,
+      // The verification MODE is recorded, not just that it happened: if this
+      // printer later turns out to have been flashed with a bad image, "which
+      // check ran, and did it fall back to a weaker one" is the question.
+      detail: { file: st.file, result, watch: r.outcome,
+                verify: r.verify || null, verifyFellBackFrom: r.fellBackFrom || null,
+                from: (r.before && r.before.fullversion) || null,
+                to: (r.after && r.after.fullversion) || null },
+    });
+  } catch (e) {
+    fwSet(id, { phase: "failed", error: e.message, result: null, sent: 0, total: 0 });
+    auditLog.log({
+      category: "admin", event: "firmware-deploy-failed", ...actor,
+      printerId: p.id, printerName: p.name,
+      detail: { file: st.file, error: e.message },
+    });
+  }
+}
+
+// Set by POST /api/firmware-stop. Honoured BETWEEN printers only: a flash
+// that has started is never interrupted, because the half-written image is
+// what leaves a printer unbootable. Everything still queued is dropped and
+// recorded as cancelled, so the rows say what happened rather than silently
+// disappearing.
+let FW_STOP_REQUESTED = false;
+
+// Drains the queue one printer at a time. Re-entrant-safe: only ever one
+// runner, and it keeps going until the queue is empty.
+let fwDraining = false;
+async function drainFirmwareQueue() {
+  if (fwDraining) return;
+  fwDraining = true;
+  try {
+    while (FW_QUEUE.length) {
+      if (FW_STOP_REQUESTED) {
+        // Between printers is the only safe place to stop.
+        for (const job of FW_QUEUE.splice(0)) {
+          fwSet(job.id, { phase: "cancelled", result: "cancelled", sent: 0, total: 0 });
+        }
+        break;
+      }
+      const job = FW_QUEUE.shift();
+      FW_RUNNING = job.id;
+      // Never throws — see runFirmwareDeploy. One printer failing must not
+      // cancel the printers queued behind it.
+      await runFirmwareDeploy(job.id, job.rel, job.actor, job.verifyMode);
+      FW_RUNNING = null;
+    }
+  } finally { FW_RUNNING = null; fwDraining = false; FW_STOP_REQUESTED = false; }
+}
+
+// Inspect a firmware file without deploying it — what the confirmation dialog
+// shows before anything is committed.
+app.get("/api/firmware-inspect", requireAdmin, (req, res) => {
+  const resolved = resolveFirmwareFile(String(req.query.path || ""));
+  if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
+  // Belt and braces with the module's own guarding: this route must always
+  // answer JSON, because a caller that gets an HTML error page back cannot
+  // tell "this file is unreadable" from "this SnapCon has no such route".
+  let info;
+  try { info = firmwareImage.inspectFirmwareImage(resolved.file); }
+  catch (e) { return res.status(500).json({ error: "The firmware file could not be checked: " + e.message }); }
+  res.json({
+    file: info.file, size: info.size, container: info.container, chip: info.chip,
+    chipOk: info.chipOk, headerConsistent: info.headerConsistent,
+    version: info.version, buildTime: info.buildTime,
+    // What a printer would report if it were running this image. The browser
+    // compares on THIS, never on the version alone — see firmwareBuildId.
+    buildId: firmwareImage.firmwareBuildId(info),
+    filenameProduct: info.filename ? info.filename.product : null,
+    hardFail: info.hardFail, warnings: info.warnings,
+  });
+});
 
 app.post("/api/firmware-deploy", requireAdmin, async (req, res) => {
-  const { printer, path: rel } = req.body || {};
-  const p = PRINTERS[printer];
-  if (!p) return res.status(400).json({ error: "Unknown printer" });
-  // Mirrors /api/exclude's refusal: a connector that does not advertise the
-  // capability has no verified flashing protocol, and guessing one at a
-  // printer is not a risk worth taking.
-  if (!getCapabilities(p.connector, p).firmwareDeploy) {
-    return res.status(400).json({ error: p.name + " does not support firmware deployment" });
-  }
-  const relRaw = String(rel || "");
+  const b = req.body || {};
+  const actor = actorFromReq(req);
+  const relRaw = String(b.path || "");
+  const skipCurrent = b.skipCurrent !== false;   // defaults ON
+  // Verification is a MODE, and only an explicit false turns it off — an old
+  // or hand-written client that omits the field still gets the check. null
+  // means "let the connector choose", which is the CRC-32 check.
+  const verifyMode = b.verify === false ? "none" : null;
+  const wanted = Array.isArray(b.printers) ? b.printers : (b.printer !== undefined ? [b.printer] : []);
+  if (!wanted.length) return res.status(400).json({ error: "No printers selected" });
+
   const resolved = resolveFirmwareFile(relRaw);
   if (resolved.error) return res.status(resolved.status).json({ error: resolved.error });
 
-  // Flashing mid-print destroys the job and leaves the machine in an unknown
-  // state. Asked from the cached probe rather than a fresh one so a printer
-  // that has gone unreachable does not block a recovery flash.
-  const blocked = await firmwareDeployBlockedBy(p);
-  if (blocked) return res.status(400).json({ error: blocked });
+  // Pre-flight on the image itself. Only facts readable from the bytes are
+  // fatal (container, chip, internally impossible offsets); a filename/model
+  // mismatch is a warning carried to the caller, never a claim of proven
+  // compatibility — see connectors/firmwareImage.js.
+  const image = firmwareImage.inspectFirmwareImage(resolved.file);
+  if (image.hardFail.length) return res.status(400).json({ error: image.hardFail.join("; ") });
+  const targetBuild = firmwareImage.firmwareBuildId(image);
 
-  // Claim the printer. This sits AFTER the await above on purpose: from here
-  // to the FW_ACTIVE.set below there is no further await, so two requests that
-  // were both waiting on the probe cannot both get past it — the first to
-  // resume claims the printer and the second sees the claim.
-  if (FW_ACTIVE.has(p.id)) {
-    return res.status(409).json({ error: p.name + " already has a firmware update running" });
-  }
-  const jobId = newFwJobId();
-  FW_ACTIVE.set(p.id, jobId);
-  const job = { phase: "starting", done: false, error: null, outcome: null, result: null,
-                before: null, after: null, file: path.basename(resolved.file), detail: null, ts: Date.now() };
-  FW_DEPLOYS.set(jobId, job);
-  const actor = actorFromReq(req);
+  const accepted = [], rejected = [], skipped = [];
 
-  // Deliberately not awaited: the response carries the job id and the client
-  // polls from here.
-  (async () => {
-    try {
-      // Re-ask both questions against the state that will actually be used.
-      // The request-time answers are already stale by the time this runs, and
-      // "the printer was idle a moment ago" is not what makes flashing safe.
-      const stillBlocked = await firmwareDeployBlockedBy(p);
-      if (stillBlocked) throw new Error(stillBlocked);
-      const now = resolveFirmwareFile(relRaw);
-      if (now.error) throw new Error(now.error);
-      const r = await u1Firmware.updateFromFile(p, now.file, {
-        onStep: s => {
-          job.ts = Date.now();
-          job.phase = s.step;
-          if (s.step === "device" && s.info) job.before = s.info;
-          if (s.step === "uploaded") job.detail = s.size ? String(s.size) : null;
-          if (s.step === "progress") job.detail = s.state ? String(s.state.state || s.state.message || "") : (s.kind || null);
-        },
-        // The last exit before anything irreversible. Upload and verify take
-        // minutes, which is long enough for someone to have started a print
-        // since this deploy began — the state answered at request time says
-        // nothing about the state now. Throwing here aborts with nothing
-        // written; the uploaded image stays on the printer, which is inert.
-        beforeFlash: async () => {
-          const busy = await firmwareDeployBlockedBy(p);
-          if (busy) throw new Error(p.name + " started printing during the upload — nothing was flashed");
-        },
-      });
-      // Three distinct endings, kept distinct. A flash that started and took
-      // the printer offline to write the image is a SUCCESS the user should
-      // see as such — but the new version is genuinely not observable yet, so
-      // nothing invents one: `after` stays null and the outcome says why.
-      job.result = r.after ? "updated" : "version-unconfirmed";
-      job.outcome = r.outcome; job.before = r.before; job.after = r.after;
-      job.phase = "done"; job.done = true; job.ts = Date.now();
-      // The audit entry matters more than anything returned to the browser:
-      // this is the record of who flashed what onto which machine. `to` is
-      // null when the printer is still writing the image and has not come
-      // back to report its new version — that is the expected path.
-      auditLog.log({
-        category: "admin", event: "firmware-deploy", ...actor,
-        printerId: p.id, printerName: p.name,
-        detail: { file: job.file, result: job.result,
-                  // the raw watch outcome too, since "disconnected" vs
-                  // "timeout" is the difference between a flash that started
-                  // and one that never reported anything
-                  watch: r.outcome,
-                  from: (r.before && r.before.fullversion) || null,
-                  to: (r.after && r.after.fullversion) || null },
-      });
-    } catch (e) {
-      job.error = e.message; job.phase = "error"; job.done = true; job.ts = Date.now();
-      auditLog.log({
-        category: "admin", event: "firmware-deploy-failed", ...actor,
-        printerId: p.id, printerName: p.name,
-        detail: { file: job.file, error: e.message },
-      });
-    } finally {
-      // Released on every path, including the throws above — a stuck claim
-      // would lock a printer out of firmware updates until restart.
-      if (FW_ACTIVE.get(p.id) === jobId) FW_ACTIVE.delete(p.id);
+  // A rejected printer used to be pushed to `rejected` and nothing else: it got
+  // no FW_STATE, so it never appeared in the status table, and the browser read
+  // the array only to clear a refresh flag. Selecting five printers with two
+  // printing therefore reported "Firmware update started" and those two silently
+  // vanished. Every rejection now leaves a visible record carrying its reason.
+  //
+  // The one exception is a printer already mid-deploy: writing here would
+  // overwrite the live progress record of the deploy that is actually running.
+  const reject = (p, idx, error, status) => {
+    rejected.push({ printer: idx, id: p ? p.id : null, name: p ? p.name : undefined,
+                    ...(status ? { status } : {}), error });
+    if (p && !fwBusyWith(p.id)) {
+      fwSet(p.id, { phase: "rejected", file: path.basename(resolved.file), error,
+                    result: "rejected", sent: 0, total: 0 });
     }
-  })();
+  };
 
-  res.json({ ok: true, job: jobId });
+  for (const ref of wanted) {
+    const p = firmwareTargetFor(ref);
+    if (!p) {
+      rejected.push({ printer: typeof ref === "number" ? ref : null, id: typeof ref === "string" ? ref : null,
+                      error: "That printer no longer exists" });
+      continue;
+    }
+    // The index is still reported back so the existing status table, which is
+    // keyed by index, can find the row. Resolution happened by id.
+    const idx = PRINTERS.indexOf(p);
+    if (!getCapabilities(p.connector, p).firmwareDeploy) {
+      reject(p, idx, p.name + " does not support firmware deployment");
+      continue;
+    }
+    // Cheap early answer; the claim that actually decides is taken below,
+    // after every await, so this one is an optimisation and not the guard.
+    if (fwBusyWith(p.id)) {
+      reject(p, idx, p.name + " already has a firmware update running", 409);
+      continue;
+    }
+    const blocked = await firmwareDeployBlockedBy(p);
+    if (blocked) { reject(p, idx, blocked); continue; }
+
+    // Already on this build? Not a failure — nothing needed doing. Costs a
+    // ~250 MB upload and an unnecessary flash to find out the hard way.
+    // Asked here, with the rest of the awaits, so the claim below can be
+    // taken synchronously.
+    //
+    // Compared on the BUILD ID, not the version. A U1 reports "1.6.0" in the
+    // version field and "1.6.0.267_20260815150420" in fullversion; the image
+    // states the latter. Comparing the short one against the image never
+    // matched, so this skip silently never fired — every printer already
+    // running the image was re-flashed anyway.
+    // Read once and used for two questions: which build this printer is on,
+    // and which product it says it is. Previously only fetched when skipCurrent
+    // was on, which is why the compatibility check below could never run.
+    let current = null, product = null;
+    try {
+      const info = await u1Firmware.getDeviceInfo(p);
+      // product_code is the field name system.get_device_info actually uses
+      // (confirmed in connectors/firmwareImage.js and the mock printer). Reading
+      // `product` instead silently returns undefined, which makes the
+      // compatibility check below inert rather than failing loudly.
+      if (info) { current = info.fullversion || info.version; product = info.product_code || null; }
+    } catch { /* unknown: neither question can be answered, so neither blocks */ }
+
+    // Before the upload, not after: a contradiction found here costs nothing,
+    // and found later costs a quarter-gigabyte and an operator's confidence.
+    const incompatible = firmwareCompatReject(image, product);
+    if (incompatible) { reject(p, idx, incompatible); continue; }
+
+    // ---- NO await from here to the claim. ----
+    // Two requests naming the same printer can both be parked on the probes
+    // above; if the queue claim were taken after another await, both would
+    // pass the check and the printer would be enqueued twice. Node will not
+    // interleave a synchronous check-then-claim, so this window contains none.
+    if (fwBusyWith(p.id)) {
+      reject(p, idx, p.name + " already has a firmware update running", 409);
+      continue;
+    }
+    // With a build stamp the whole identifier must match. Without one (a
+    // pre-1.6.0 image states no BUILD_NUMBER) fall back to the version half,
+    // which is weaker but still a real reading from the payload.
+    const same = targetBuild
+      ? String(current) === targetBuild
+      : !!(image.version && firmwareImage.firmwareVersionPart(current) === image.version);
+    // skipCurrent is re-asserted HERE, not in whether the version was read.
+    // Device info is now fetched unconditionally (the compatibility check needs
+    // the product code), so gating on `current` being populated would silently
+    // start skipping printers for an operator who deliberately turned skipping
+    // off. The switch decides, exactly as before.
+    if (skipCurrent && (targetBuild || image.version) && current && same) {
+      fwSet(p.id, { phase: "skipped", file: path.basename(resolved.file), error: null,
+                    result: "already-current", sent: 0, total: 0, current });
+      skipped.push({ printer: idx, id: p.id, name: p.name, version: current });
+      continue;
+    }
+    fwSet(p.id, { phase: "queued", file: path.basename(resolved.file), error: null,
+                  result: null, sent: 0, total: 0, queuedAt: Date.now(), flashStartedAt: null });
+    // Each entry carries its OWN file, actor and verification choice. A second
+    // request that arrives while the queue is still draining names a different
+    // file, and deploying it with the first request's image would flash the
+    // wrong firmware onto a printer nobody asked to change.
+    FW_QUEUE.push({ id: p.id, rel: relRaw, actor, verifyMode });
+    const jobId = newFwJobId();
+    FW_JOBS.set(jobId, p.id);
+    accepted.push({ printer: idx, id: p.id, name: p.name, job: jobId });
+  }
+
+  // A new request clears a stop from a previous batch — otherwise the stop
+  // would silently cancel work the user just asked for.
+  if (accepted.length) { FW_STOP_REQUESTED = false; drainFirmwareQueue(); }
+  res.json({ ok: true, accepted, rejected, skipped, warnings: image.warnings, version: image.version, buildId: targetBuild });
 });
 
-// Poll a deploy. Same shape and lifetime rules as /api/print-status, except
-// a finished record is kept a little longer: the last phase of a successful
-// flash is "the printer went away", and the user may take a moment to read it.
-app.get("/api/firmware-deploy-status", requireAdmin, (req, res) => {
-  const job = FW_DEPLOYS.get(req.query.job);
-  if (!job) return res.status(404).json({ error: "No such job" });
-  res.json({
-    phase: job.phase, done: job.done, error: job.error, outcome: job.outcome,
-    result: job.result, file: job.file, detail: job.detail,
-    from: (job.before && job.before.fullversion) || null,
-    to: (job.after && job.after.fullversion) || null,
+// The Firmware tab's two switches. A dedicated route rather than the shared
+// /api/config body, which falls back to the current value for every field it
+// is not given — far too much to put at risk for two booleans saved on every
+// toggle. Admin-only for the same reason the deploy is: turning verification
+// off changes what a later flash checks.
+app.post("/api/firmware-options", requireAdmin, (req, res) => {
+  const b = req.body || {};
+  if (typeof b.skipCurrent === "boolean") CFG.firmwareSkipCurrent = b.skipCurrent;
+  if (typeof b.verify === "boolean") CFG.firmwareVerify = b.verify;
+  // Same guard every other write in this file uses: a config that failed to
+  // load must never be overwritten from memory, or a recoverable read failure
+  // becomes permanent data loss (CODE_AUDIT P0-1).
+  if (CONFIG_LOAD_FAILED) return res.status(409).json({ error: "Config could not be read; not overwriting it" });
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { return res.status(500).json({ error: "Could not save: " + e.message }); }
+  if (b.verify === false) {
+    // Worth a line in the audit on its own: it is the one setting that
+    // decides whether anything checks an image before it is written.
+    auditLog.log({ category: "admin", event: "firmware-verify-disabled", ...actorFromReq(req) });
+  }
+  res.json({ ok: true, skipCurrent: CFG.firmwareSkipCurrent !== false, verify: CFG.firmwareVerify !== false });
+});
+
+// Stop the queue after the printer currently being flashed finishes. Never
+// interrupts a flash in progress — see FW_STOP_REQUESTED.
+app.post("/api/firmware-stop", requireAdmin, (req, res) => {
+  const pending = FW_QUEUE.length;
+  FW_STOP_REQUESTED = true;
+  auditLog.log({
+    category: "admin", event: "firmware-deploy-stop", ...actorFromReq(req),
+    detail: { running: FW_RUNNING !== null, pending },
   });
-  if (job.done) setTimeout(() => FW_DEPLOYS.delete(req.query.job), 30000);
+  res.json({ ok: true, running: FW_RUNNING !== null, pending });
+});
+
+// Aggregate status for the Firmware tab: every printer this server knows
+// something about, plus the queue. Same lifetime rules as /api/print-status.
+app.get("/api/firmware-status", requireAdmin, (req, res) => {
+  // FW_STATE is keyed by the printer's STABLE id, so a Settings reorder cannot
+  // slide one printer's progress onto another mid-deploy. The browser addresses
+  // printers by array index, the same as every other route, so translate on the
+  // way out rather than teaching the frontend a second identifier.
+  const idxOf = new Map(PRINTERS.map((p, i) => [p.id, i]));
+  const printers = {};
+  for (const [id, st] of FW_STATE) {
+    const idx = idxOf.get(id);
+    if (idx === undefined) continue;   // printer deleted since the deploy
+    printers[idx] = {
+      phase: st.phase, sent: st.sent || 0, total: st.total || 0,
+      file: st.file || null, error: st.error || null, result: st.result || null,
+      current: st.current || null,
+      // So the row can show a clock ticking through the reboot, which is the
+      // one stretch where nothing else on screen changes.
+      flashStartedAt: st.flashStartedAt || null,
+      // The footer builds its estimate from bytes moved over seconds elapsed
+      // on the transfer actually in flight, rather than from a constant.
+      startedAt: st.startedAt || null,
+      // When this record last changed — a settled card reports how long ago
+      // it finished rather than just that it did.
+      ts: st.ts || null,
+      verify: st.verify || null,
+      from: (st.before && st.before.fullversion) || null,
+      to: (st.after && st.after.fullversion) || null,
+    };
+  }
+  const toIdx = id => { const i = idxOf.get(id); return i === undefined ? null : i; };
+  res.json({
+    running: FW_RUNNING === null ? null : toIdx(FW_RUNNING),
+    queue: FW_QUEUE.map(e => toIdx(e.id)).filter(i => i !== null),
+    stopping: FW_STOP_REQUESTED,
+    printers,
+  });
+});
+
+// Retained for compatibility with the single-job shape this route has always
+// had. Nothing in the tree consumes it any more (the Firmware tab reads the
+// aggregate above), so it is a candidate for deliberate removal rather than
+// something to keep growing.
+app.get("/api/firmware-deploy-status", requireAdmin, (req, res) => {
+  const id = FW_JOBS.get(req.query.job);
+  const st = id !== undefined ? FW_STATE.get(id) : null;
+  if (!st) return res.status(404).json({ error: "No such job" });
+  const done = ["updated", "failed", "skipped", "rebooting"].includes(st.phase);
+  res.json({
+    phase: st.phase, done, error: st.error || null, outcome: st.result || null,
+    result: st.result || null, file: st.file || null, detail: null,
+    from: (st.before && st.before.fullversion) || null,
+    to: (st.after && st.after.fullversion) || null,
+  });
 });
 
 // Recursive walk under `dir`, filtering to the same sliced-file extensions
@@ -1306,6 +1643,15 @@ async function probeCached(p) {
   }
   // Checked fresh every call, independent of the reachability cache above —
   // maintenanceMode can flip without a new probe cycle needing to happen.
+  // A printer being reflashed reports nothing useful about itself — and for
+  // part of that window it is legitimately offline while it writes the image.
+  // Showing "Offline" in red at exactly that moment is what makes people
+  // power-cycle a printer mid-write, so the firmware state speaks instead.
+  // Server-side, so it holds for every client whether or not the Firmware
+  // tab is open. Cleared by observation or by the reboot grace window.
+  firmwareNoteObserved(p, !!result.online);
+  const fwState = firmwareCardState(p);
+  if (fwState) return { ...result, state: fwState };
   return p.maintenanceMode ? { ...result, state: "maintenance" } : result;
 }
 
@@ -1892,8 +2238,43 @@ async function probeFirmware(p) {
 }
 
 app.get("/api/firmware", requireAuth, async (req, res) => {
+  // ?printer=<index> reads ONE printer, the same shape /api/fleet?printer=i
+  // uses. The Firmware tab calls it after a deploy finishes so a single row
+  // can be refreshed in place — re-reading the whole fleet would rebuild every
+  // row and throw away the selection and the progress bars on screen.
+  if (req.query.printer !== undefined) {
+    const idx = parseInt(req.query.printer, 10);
+    const p = PRINTERS[idx];
+    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: "Unknown printer" });
+    const one = await probeFirmware(p);
+    return res.json({
+      id: idx,
+      // The STABLE identity, additive to the index the rest of the tab is keyed
+      // on. Deploy sends this back so a Settings reorder between rendering this
+      // list and pressing Deploy cannot retarget the flash — see
+      // firmwareTargetFor().
+      pid: p.id,
+      connector: p.connector,
+      uniformMcuVersions: getCapabilities(p.connector, p).uniformMcuVersions === true,
+      ...one,
+    });
+  }
   const visible = PRINTERS.map((p, i) => ({ p, i })).filter(({ p }) => printerVisibleTo(req.user, p));
-  const out = await Promise.all(visible.map(({ p, i }) => probeFirmware(p).then(r => ({ id: i, ...r }))));
+  // `connector` is the printer's real connector id, not something inferred
+  // from its brand or model text — the Firmware tab filters on it, and a
+  // brand string is user-editable on generic Klipper.
+  //
+  // `uniformMcuVersions` travels per row because it decides whether a board
+  // reporting a different version is a fault worth flagging or just a
+  // separate component. Sent even on skipped rows so the filter still works
+  // on a printer whose version could not be read.
+  const out = await Promise.all(visible.map(({ p, i }) => probeFirmware(p).then(r => ({
+    id: i,
+    pid: p.id,
+    connector: p.connector,
+    uniformMcuVersions: getCapabilities(p.connector, p).uniformMcuVersions === true,
+    ...r,
+  }))));
   res.json(out);
 });
 
@@ -2352,6 +2733,10 @@ function publicCfg(role) {
     logsFolder: CFG.logsFolder || "",
     cameraFolder: CFG.cameraFolder || "",
     firmwareFolder: CFG.firmwareFolder || "",
+    // Both default ON when unset, so an install that predates them gets the
+    // safe behaviour rather than the fast one.
+    firmwareSkipCurrent: CFG.firmwareSkipCurrent !== false,
+    firmwareVerify: CFG.firmwareVerify !== false,
     gcodeSyncFolder: CFG.gcodeSyncFolder || "",
     logsRetentionDays: CFG.logsRetentionDays || null,
     cameraRetentionDays: CFG.cameraRetentionDays || null,
@@ -2751,6 +3136,8 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     logsFolder: (typeof b.logsFolder === "string") ? b.logsFolder.trim() : (CFG.logsFolder || ""),
     cameraFolder: (typeof b.cameraFolder === "string") ? b.cameraFolder.trim() : (CFG.cameraFolder || ""),
     firmwareFolder: (typeof b.firmwareFolder === "string") ? b.firmwareFolder.trim() : (CFG.firmwareFolder || ""),
+    firmwareSkipCurrent: (typeof b.firmwareSkipCurrent === "boolean") ? b.firmwareSkipCurrent : (CFG.firmwareSkipCurrent !== false),
+    firmwareVerify: (typeof b.firmwareVerify === "boolean") ? b.firmwareVerify : (CFG.firmwareVerify !== false),
     gcodeSyncFolder: (typeof b.gcodeSyncFolder === "string") ? b.gcodeSyncFolder.trim() : (CFG.gcodeSyncFolder || ""),
     logsRetentionDays: (typeof b.logsRetentionDays === "number" && b.logsRetentionDays > 0) ? b.logsRetentionDays : undefined,
     cameraRetentionDays: (typeof b.cameraRetentionDays === "number" && b.cameraRetentionDays > 0) ? b.cameraRetentionDays : undefined,
