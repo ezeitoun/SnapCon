@@ -6170,13 +6170,33 @@ function mappingPhaseBadge(mapped, prefs){
   if(prefs&&prefs.timelapse) return { statusColor:"var(--busy)", statusTxt:t("printer_status.preparing") };
   return { statusColor:"var(--busy)", statusTxt:t("printer_status.mapping_heads") };
 }
-async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId){
-  const overrideKey=printerId!=null?String(printerId):null;
-  let overrideActive=false;
-  const clearOverride=()=>{
-    if(overrideActive && overrideKey){ STATUS_OVERRIDE.delete(overrideKey); renderFleet({incremental:true}); }
-    overrideActive=false;
+// Tracks which job-phase badge is currently pinned on a card, so it FOLLOWS the
+// job (Uploading -> Mapping heads -> cleared) rather than sticking at whichever
+// phase happened first. Extracted from pollJob so the transitions can be tested:
+// every phase badge the upload flow shows rides on this, not just Uploading.
+//
+// Re-setting the SAME phase is a no-op — pollJob ticks every 400ms and would
+// otherwise re-render the fleet several times a second for an unchanged badge.
+function makePhaseOverride(printerId, onChange){
+  const key=printerId!=null?String(printerId):null;
+  let phase=null;
+  const changed=typeof onChange==="function"?onChange:()=>renderFleet({incremental:true});
+  return {
+    set(nextPhase,badge){
+      if(!key||phase===nextPhase) return false;
+      STATUS_OVERRIDE.set(key,badge); phase=nextPhase; changed(); return true;
+    },
+    clear(){
+      if(!phase||!key){ phase=null; return false; }
+      STATUS_OVERRIDE.delete(key); phase=null; changed(); return true;
+    },
+    get phase(){ return phase; }
   };
+}
+async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId){
+  const ov=makePhaseOverride(printerId);
+  const setOverride=(phase,badge)=>ov.set(phase,badge);
+  const clearOverride=()=>ov.clear();
   try{
     for(;;){
       await new Promise(r=>setTimeout(r,400));
@@ -6189,6 +6209,10 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId)
         return false;
       }
       // The button itself fills as the upload progress bar — no bar below.
+      // The card reads "Idle" while a file is being pushed to the printer --
+      // nothing in Klipper's own state changes during an upload. Same
+      // client-side badge mechanism the mapping/leveling phases already use.
+      if(d.phase==="upload") setOverride("upload",{statusColor:"var(--busy)",statusTxt:t("printer_status.uploading")});
       if(d.phase==="upload" && d.total){
         const pct=Math.min(100,Math.round(d.sent/d.total*100));
         setBtnFill(btn, pct);
@@ -6201,11 +6225,7 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId)
         // Klipper's own reported state stays "standby"/idle for the whole
         // physical leveling/calibration pass (see mappingPhaseBadge's own
         // comment) — set once per phase entry, not every 400ms tick.
-        if(!overrideActive && overrideKey){
-          STATUS_OVERRIDE.set(overrideKey, mappingPhaseBadge(mapped, prefs));
-          overrideActive=true;
-          renderFleet({incremental:true});
-        }
+        setOverride("mapping", mappingPhaseBadge(mapped, prefs));
       }
       else if(d.phase==="preparing"){
         // Reserved for the CFS material-preparation stage (docs/TODO.md 9e).
