@@ -35,6 +35,9 @@ exports.capabilities = {
   // its root path 404s), unlike Klipper/Moonraker printers which commonly
   // proxy Fluidd/Mainsail or a vendor UI on the same host.
   webUi: false, setColor: false, singleToolhead: true,
+  // Stock firmware accepts M112 and ignores it (see flashforge-utils estop).
+  // A control that cannot do what its label promises is not offered.
+  estop: false,
   // Same bed platform family as AD5X, spec'd to 110°C.
   maxBedTemp: 110
 };
@@ -74,9 +77,12 @@ function moonrakerCaps(extra) {
     ...exports.capabilities,
     camera: false, cameraSnapshot: false,   // overridden below only on real evidence
     excludeObject: true, firmwareInfo: true, health: true, fileSync: true, webUi: true,
+    // ZMOD/Klipper has a real halt: /printer/emergency_stop.
+    estop: true,
     // Hardware gates — an unverified capability ships off.
     setColor: false, unloadFilament: false, autoLevel: false,
     ...extra
+
   };
 }
 

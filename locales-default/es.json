@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 44,
+    "version": 45,
     "snapconVersion": "0.7.0",
     "updated": "2026-09-10"
   },
@@ -44,7 +44,8 @@
     "action_web_interface_title": "Abrir interfaz web",
     "action_web_interface_alt": "Interfaz web",
     "action_plate": "Placa",
-    "action_plate_title": "Placa {done}/{total}"
+    "action_plate_title": "Placa {done}/{total}",
+    "action_estop_unsupported_title": "La parada de emergencia no está disponible en esta impresora: su firmware acepta el comando sin detenerse. Usa Cancelar o corta la alimentación de la impresora."
   },
   "fleet": {
     "estop_status_sending": "Enviando parada de emergencia…",

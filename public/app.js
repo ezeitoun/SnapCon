@@ -394,6 +394,21 @@ function statusColorText(p){
   return { statusColor:"var(--ok)", statusTxt:t("printer_status.idle") };
 }
 
+// A connector reports estop:false when the printer ACKNOWLEDGES an emergency
+// stop and never performs one — confirmed live on FlashForge native firmware,
+// where ~M112 returns "ok" and the machine keeps printing. The button stays
+// VISIBLE but disabled with an explanation: silently removing an emergency
+// control teaches an operator it does not exist, whereas saying why sends them
+// to Cancel or the power switch.
+//
+// Tested for === false on purpose. Connectors with a working e-stop (U1,
+// Creality, Klipper) never declare the flag, and a truthiness check here would
+// disable E-Stop across the whole rest of the fleet.
+function estopUnsupported(p){
+  return !!(p && p.capabilities && p.capabilities.estop === false);
+}
+
+
 // Whether a printer is free to be sent a file right now -- drives the Send
 // modal's default selection and its row dot.
 //
@@ -5219,7 +5234,7 @@ function buildCardHtml(p, need, dragEnabled){
             // stop). Icon/handler unchanged, text only.
             + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""><span>${esc(t("common.cancel"))}</span></button>`
             + (p.capabilities?.excludeObject&&p.plate&&p.plate.total>1?`<button class="btn-chip" ${canAct()?"":"disabled"} data-plate="${p.id}" title="${esc(t("printer.action_plate_title",{done:p.plate.total-p.plate.excluded,total:p.plate.total}))}"><img src="/plate-icon.svg" alt=""><span>${esc(t("printer.action_plate"))}</span></button>`:"")
-            + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-estop="${p.id}" title="${esc(t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""><span>${esc(t("printer.action_estop"))}</span></button>`
+            + `<button class="btn-chip danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""><span>${esc(t("printer.action_estop"))}</span></button>`
           : `<button class="btn-chip" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
             + `<button class="btn-chip" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
             + `<button class="btn-chip" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
@@ -5612,7 +5627,7 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
             ? `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""></button>`
             : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""></button>`)
         + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""></button>`
-        + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-estop="${p.id}" title="${esc(t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
+        + `<button class="btn-chip icon-only danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
       : `<button class="btn-chip icon-only" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
         + `<button class="btn-chip icon-only" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
         + `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""></button>`;

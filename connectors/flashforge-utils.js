@@ -199,9 +199,34 @@ function sendTcpSequence(p, commands, ms = 4000) {
     sock.on("close", () => { clearTimeout(timer); resolve({ ok: idx > 0 }); });
   });
 }
+// NATIVE FLASHFORGE HAS NO WORKING EMERGENCY STOP. Verified live on a real
+// 5M Pro (firmware 5.1.7) on 2026-09-09, three separate ways: idle via script,
+// mid-print via script, and mid-print via SnapCon's own E-Stop button. The
+// printer never halted in any of them; the operator had to cancel by hand.
+//
+// The raw TCP capture shows the firmware ACCEPTING M112 and ignoring it:
+//
+//   ~M601 S1  ->  CMD M601 Received. / Control Success V2.1. / ok
+//   ~M112     ->  CMD M112 Received. / ok          <- acknowledged
+//   ~M119     ->  MachineStatus: READY, MoveMode: READY   <- never halted
+//
+// sendTcpSequence's success rule was "M112 may never reply cleanly once the
+// halt begins, so reaching it means it worked" — precisely inverted on this
+// hardware, so the signal meant to PROVE the stop landed was being produced by
+// a printer that did nothing.
+//
+// That was worse than a cosmetic lie. Both connectors wrap estop in a
+// cross-transport retry (`try native, catch -> try moonraker`), so a native
+// estop that RESOLVED meant the Moonraker fallback was never attempted — a ZMOD
+// printer misdetected as native had its emergency stop silently swallowed.
+// Throwing here restores that safety net as well as removing the lie.
+//
+// Deliberately NOT falling back to a graceful cancel: cancel has different
+// semantics and timing, and quietly substituting it for an emergency stop would
+// be its own kind of dishonesty. The operator is told plainly instead.
 async function estop(p) {
-  const r = await sendTcpSequence(p, ["M601 S1", "M112"]);
-  if (!r.ok) throw new Error("Could not confirm the printer received the stop — check it directly");
+  throw new Error("Emergency stop isn't available on this printer's stock firmware — "
+    + "it acknowledges the command without halting. Cancel the print, or cut power to the printer.");
 }
 
 // -100 = off, -200 = "no change" (per temperatureCtl_cmd's documented args)
@@ -438,7 +463,13 @@ async function getCameraSnapshot(p) {
 }
 
 module.exports = {
+  // sendTcpSequence is RETAINED though estop no longer calls it: the protocol
+  // knowledge (M601 acquires a control session scoped to the CONNECTION, not a
+  // token) is hard-won and is the only known raw-gcode path into these
+  // printers. It stays available for a future verified stop.
+  _internal: { sendTcpSequence },
   baseUrl, fetchTimeout, ffPost, ffDetail, ffControl, STATE_MAP, decodeCommonStatus,
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile, issuePrintAndConfirm,
   listFiles, getThumbnail, getFileMetadata, uploadFile, getCameraSnapshot
+
 };

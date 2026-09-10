@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 44,
+    "version": 45,
     "snapconVersion": "0.7.0",
     "updated": "2026-09-10"
   },
@@ -44,7 +44,8 @@
     "action_web_interface_title": "Open Web Interface",
     "action_web_interface_alt": "Web Interface",
     "action_plate": "Plate",
-    "action_plate_title": "Plate {done}/{total}"
+    "action_plate_title": "Plate {done}/{total}",
+    "action_estop_unsupported_title": "Emergency stop is not available on this printer — its firmware acknowledges the command without halting. Use Cancel, or cut power to the printer."
   },
   "fleet": {
     "estop_status_sending": "Sending emergency stop…",

@@ -37,6 +37,9 @@ exports.capabilities = {
   headMapping: true,
   // AD5X's heated bed is spec'd to 110°C.
   maxBedTemp: 110,
+  // Stock firmware accepts M112 and ignores it (see flashforge-utils estop).
+  // Confirmed on a 5M Pro, and this connector shares that exact native path.
+  estop: false,
   // "filamentHeads" only means "this printer has a per-color slot picker" —
   // it doesn't say whether those slots are genuinely independent physical
   // extruders (Snapmaker U1: each head can only ever hold one color at a
@@ -90,9 +93,12 @@ function moonrakerCaps(extra) {
     ...exports.capabilities,
     camera: false, cameraSnapshot: false,
     excludeObject: true, firmwareInfo: true, health: true, fileSync: true, webUi: true,
+    // ZMOD/Klipper has a real halt: /printer/emergency_stop.
+    estop: true,
     // Hardware gates — each ships off until individually verified.
     setColor: false, unloadFilament: false, autoLevel: false,
     // Gated on the print-start macro (see startPrintFile below). Offering a
+
     // mapping picker that cannot be acted on is worse than offering nothing.
     headMapping: false,
     filamentHeads: false,
