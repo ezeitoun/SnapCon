@@ -319,3 +319,35 @@ ignored rather than quietly acted on.
 
 Snapmaker U1 printers are unaffected and keep their own auto-level, which works differently: it
 tells the firmware to level at the right moment rather than leveling ahead of the print.
+
+### Update Snapmaker U1 Firmware Across the Fleet
+The Firmware tab can now update several U1 printers from one place, using a firmware file you
+supply from a folder you configure. Nothing is downloaded from Snapmaker and no USB stick is needed.
+
+- **One printer at a time, on purpose.** Selected printers queue and run in sequence. Each update
+  moves around a quarter of a gigabyte to the printer and reads it back to check it arrived intact,
+  and doing several at once would saturate the same network the printers rely on.
+- **You can see which stage each printer is in** — waiting, transferring (with a byte count),
+  checking, writing, or restarting — rather than one spinner covering several minutes. A printer
+  dropping off the network while it writes the image is shown as progress, because that is what it
+  is; it is not an error and the printer must not be powered off.
+- **Stop applies between printers.** A printer already writing its image is never interrupted, since
+  a half-written image is what leaves a machine unbootable.
+- **Printers already running the chosen build are skipped** rather than re-flashed, and printers
+  that cannot be updated right now — printing, faulted, offline — are listed with the reason and a
+  Retry, instead of quietly dropping out of the batch.
+- **The file is checked before anything is sent.** SnapCon reads the image and refuses one that is
+  not a valid firmware container for the U1's processor, or whose internal structure does not fit
+  the file.
+- **A print will not be started on a printer that is being updated**, and an update will not begin
+  on a printer that is printing.
+
+About the file-name check: if the file is named for a different product than the printer reports
+itself to be, SnapCon stops before uploading. This is a check on the NAME, and it is not proof of
+compatibility — a firmware image does not state which model it belongs to, so an image that is named
+correctly but is not the right firmware will pass unnoticed. It catches a naming mistake. Confirm
+you have the right file for your printer.
+
+Updating firmware is the most consequential thing SnapCon can do to a printer, so Deploy is
+admin-only, needs a deliberate press-and-hold, and names every printer and the version before it
+starts. Nothing is available until an administrator sets a firmware folder in Settings.
