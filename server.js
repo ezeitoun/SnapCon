@@ -30,6 +30,7 @@ const { loadConfigFile } = require("./configLoader");
 const locales = require("./locales");
 const { readNotifyToken, ensureNotifyToken, timingSafeTokenEqual } = require("./notifyToken");
 const { isPathWithinFolder, resolveWithinFolder } = require("./pathSafety");
+const { sendWebhook, redactUrls } = require("./webhookNotify");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -2773,7 +2774,11 @@ function publicCfg(role) {
     // the Resend API key below — a bot token is a real secret (anyone who
     // has it can send messages as your bot).
     notifications: CFG.notifications
-      ? { ...CFG.notifications, telegramBotToken: undefined, hasTelegramBotToken: !!CFG.notifications.telegramBotToken }
+      ? { ...CFG.notifications, telegramBotToken: undefined, hasTelegramBotToken: !!CFG.notifications.telegramBotToken,
+          // The webhook URL is itself the credential — a Discord webhook URL
+          // embeds a token granting posting rights to that channel — so it gets
+          // the same never-round-trip treatment as the bot token above.
+          webhookUrl: undefined, hasWebhookUrl: !!CFG.notifications.webhookUrl }
       : null,
     // The Moonraker API token is a real secret too — same treatment as
     // telegramBotToken above, replacing the old "send it in plaintext, mask
@@ -3209,7 +3214,16 @@ app.post("/api/config", requireAdmin, async (req, res) => {
       // whatever's already on file.
       telegramBotToken: (typeof b.notifications.telegramBotToken === "string" && b.notifications.telegramBotToken.trim())
         ? b.notifications.telegramBotToken.trim()
-        : (b.notifications.telegramBotToken === "" ? undefined : ((CFG.notifications && CFG.notifications.telegramBotToken) || undefined))
+        : (b.notifications.telegramBotToken === "" ? undefined : ((CFG.notifications && CFG.notifications.telegramBotToken) || undefined)),
+      webhookEnabled: !!b.notifications.webhookEnabled,
+      // "discord" (an embed) or "json" (SnapCon's own fields, for n8n/Home
+      // Assistant/anything custom). Explicit rather than sniffed from the URL:
+      // guessing wrong on a value the UI masks would be baffling to debug.
+      webhookFormat: b.notifications.webhookFormat === "json" ? "json" : "discord",
+      // Same 3-state convention as telegramBotToken above.
+      webhookUrl: (typeof b.notifications.webhookUrl === "string" && b.notifications.webhookUrl.trim())
+        ? b.notifications.webhookUrl.trim()
+        : (b.notifications.webhookUrl === "" ? undefined : ((CFG.notifications && CFG.notifications.webhookUrl) || undefined))
     } : (CFG.notifications || undefined),
     port: PORT,
     // Internal bookkeeping, not part of this endpoint's editable settings —
@@ -4375,9 +4389,19 @@ async function sendEventNotification(idx, p, ev, st) {
     jobs.push(sendTelegram({ botToken: nf.telegramBotToken, chatId: nf.telegramChatId, message: p.name + ": " + message, image })
       .catch(e => { throw new Error("Telegram: " + e.message); }));
   }
+  if (nf.webhookEnabled) {
+    // sendWebhook already redacts its own errors; the prefix stays generic so
+    // the destination is never named in a failure line either.
+    jobs.push(sendWebhook({
+      url: nf.webhookUrl, format: nf.webhookFormat, printerName: p.name,
+      message, event: ev, st, image
+    }).catch(e => { throw new Error("Webhook: " + e.message); }));
+  }
   const results = await Promise.allSettled(jobs);
   const failed = results.filter(r => r.status === "rejected");
-  if (failed.length) console.log("notify: " + p.name + ": " + failed.map(r => r.reason.message).join("; "));
+  // redactUrls here as well as inside sendWebhook: this line concatenates
+  // messages from every provider, and a future one could carry a URL too.
+  if (failed.length) console.log("notify: " + p.name + ": " + redactUrls(failed.map(r => r.reason.message).join("; ")));
   if (failed.length && failed.length === results.length) throw new Error(failed[0].reason.message);
 }
 
@@ -4394,13 +4418,14 @@ async function notifyTick() {
   const nf = CFG.notifications || {};
   const ntfyReady = !!nf.ntfyEnabled && !!nf.ntfyTopic;
   const telegramReady = !!nf.telegramEnabled && !!nf.telegramChatId && !!nf.telegramBotToken;
+  const webhookReady = !!nf.webhookEnabled && !!nf.webhookUrl;
   // Whether the Notifications feature itself can fire anything right now —
   // gates ONLY the actual sendEventNotification calls below. State tracking
   // (prev/cur diffing, newJob detection) and the audit-log calls that ride on
   // it run unconditionally, regardless of this — see the notifyTick refactor
   // in the Audit plan: a job started/finished on a printer's own screen must
   // still be logged even with Notifications turned off entirely.
-  const notifyReady = !!nf.enabled && (ntfyReady || telegramReady);
+  const notifyReady = !!nf.enabled && (ntfyReady || telegramReady || webhookReady);
   const canNotifyEvent = notifyReady && (nf.onStart || nf.onPause || nf.onError || nf.onComplete);
   const canNotifyIntervals = notifyReady && nf.onIntervals;
   const milestones = (Array.isArray(nf.milestonePercents) && nf.milestonePercents.length) ? nf.milestonePercents : DEFAULT_MILESTONES;
@@ -4542,7 +4567,7 @@ notifyTick();   // prime NOTIFY_STATE at startup (first sight never notifies)
 app.post("/api/notify-test", requireAdmin, async (req, res) => {
   const b = req.body || {};
   const nf = CFG.notifications || {};
-  const service = b.service === "telegram" ? "telegram" : "ntfy";
+  const service = (b.service === "telegram" || b.service === "webhook") ? b.service : "ntfy";
   if (!PRINTERS.length) return res.status(400).json({ error: "Add a printer first", code: "no_printers" });
   const p = PRINTERS[0]; // any configured printer works for a connectivity test
 
@@ -4556,9 +4581,19 @@ app.post("/api/notify-test", requireAdmin, async (req, res) => {
       try { image = await getSnapshot(p); }
       catch (e) { message += "\n(camera unavailable: " + e.message + ")"; }
     }
+    if (service === "webhook") {
+      // Same "test the form's current value, fall back to what's saved"
+      // convention as the Telegram branch below — works before Save too.
+      const url = (typeof b.webhookUrl === "string" && b.webhookUrl.trim()) ? b.webhookUrl.trim() : (nf.webhookUrl || "");
+      const format = b.webhookFormat === "json" ? "json" : "discord";
+      if (!url) return res.status(400).json({ error: "Enter a webhook URL first", code: "missing_webhook_url" });
+      await sendWebhook({ url, format, printerName: p.name, message, event: ev, st, image });
+      return res.json({ ok: true, service, printer: p.name });
+    }
     if (service === "telegram") {
       const chatId = String(b.chatId || nf.telegramChatId || "").trim();
       // Same "test with the form's current value, fall back to what's saved"
+
       // convention as the OTP/Resend test buttons — works before Save too.
       const botToken = (typeof b.botToken === "string" && b.botToken.trim()) ? b.botToken.trim() : (nf.telegramBotToken || "");
       if (!chatId) return res.status(400).json({ error: "Enter a Telegram chat ID first", code: "missing_chat_id" });

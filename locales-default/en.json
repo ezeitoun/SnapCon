@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 43,
+    "version": 44,
     "snapconVersion": "0.7.0",
     "updated": "2026-09-10"
   },
@@ -958,7 +958,17 @@
       "test_error_missing_chat_id": "Enter a Telegram chat ID first",
       "test_error_missing_bot_token": "Enter a Telegram bot token first",
       "test_error_invalid_topic": "Enter a valid ntfy topic first",
-      "test_error_printer_offline": "{name} is offline: {detail}"
+      "test_error_printer_offline": "{name} is offline: {detail}",
+      "webhook_label": "Webhook (Discord)",
+      "webhook_url_label": "Webhook URL",
+      "webhook_url_warn": "The URL is a secret — anyone who has it can post to your channel. http and https only, and redirects are never followed.",
+      "webhook_format_label": "Payload format",
+      "webhook_format_discord": "Discord",
+      "webhook_format_json": "Generic JSON",
+      "webhook_format_help": "Discord sends a rich embed with the camera snapshot. Generic JSON sends SnapCon's own fields for tools like n8n or Home Assistant.",
+      "send_test_webhook": "Send test to webhook",
+      "sent_webhook": "Test sent to the webhook",
+      "test_error_missing_webhook_url": "Enter a webhook URL first"
     },
     "printers": {
       "toolbar_search_placeholder": "Search printers…",

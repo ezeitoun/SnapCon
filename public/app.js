@@ -2183,6 +2183,7 @@ function wireUI(){
     }catch{}
   });
   wireSecretField($("ntfBotTokenField"));
+  wireSecretField($("ntfWebhookUrlField"));
   $("ntfMilestones").addEventListener("change", syncMilestoneNesting);
   $("ntfMilestoneChips").addEventListener("click", e=>{
     const btn=e.target.closest(".btn-chip[data-pct]");
@@ -2194,8 +2195,10 @@ function wireUI(){
   });
   $("ntfyEnabled").addEventListener("change", ()=>syncProviderCard("ntfyEnabled","ntfyBody"));
   $("telegramEnabled").addEventListener("change", ()=>syncProviderCard("telegramEnabled","telegramBody"));
+  $("webhookEnabled").addEventListener("change", ()=>syncProviderCard("webhookEnabled","webhookBody"));
   $("ntfTestNtfy").addEventListener("click", ()=>sendProviderTest("ntfy","ntfTestNtfy","ntfTestNtfyStatus"));
   $("ntfTestTelegram").addEventListener("click", ()=>sendProviderTest("telegram","ntfTestTelegram","ntfTestTelegramStatus"));
+  $("ntfTestWebhook").addEventListener("click", ()=>sendProviderTest("webhook","ntfTestWebhook","ntfTestWebhookStatus"));
   $("notifDiscard").addEventListener("click", ()=>discardSettingsTab("notif"));
   $("notifSaveBtn").addEventListener("click", saveConfig);
 
@@ -8109,6 +8112,7 @@ function applyNtfEnabled(){
     syncMilestoneNesting();
     syncProviderCard("ntfyEnabled","ntfyBody");
     syncProviderCard("telegramEnabled","telegramBody");
+    syncProviderCard("webhookEnabled","webhookBody");
   }
 }
 function syncMilestoneNesting(){
@@ -8129,6 +8133,9 @@ let NTF_MILESTONES=new Set([25,50,75]);
 // only put the secret control back to whatever visual state (Configured vs
 // empty) matched what was actually on file as of the last load/save.
 let NTF_HAS_TELEGRAM_TOKEN=false;
+// The webhook URL is itself the credential, so like the bot token it never
+// arrives from the server — only whether one is on file.
+let NTF_HAS_WEBHOOK_URL=false;
 function renderMilestoneChips(){
   document.querySelectorAll("#ntfMilestoneChips .btn-chip").forEach(b=>{
     b.classList.toggle("active", NTF_MILESTONES.has(parseInt(b.dataset.pct,10)));
@@ -8148,7 +8155,8 @@ const NOTIF_TEST_ERROR_KEYS={
   no_printers:"settings.notif.test_error_no_printers",
   missing_chat_id:"settings.notif.test_error_missing_chat_id",
   missing_bot_token:"settings.notif.test_error_missing_bot_token",
-  invalid_topic:"settings.notif.test_error_invalid_topic"
+  invalid_topic:"settings.notif.test_error_invalid_topic",
+  missing_webhook_url:"settings.notif.test_error_missing_webhook_url"
 };
 async function sendProviderTest(provider,btnId,statusId){
   const st=$(statusId), btn=$(btnId);
@@ -8157,6 +8165,7 @@ async function sendProviderTest(provider,btnId,statusId){
   try{
     const body={ service:provider, includeImage:$("ntfImage").checked };
     if(provider==="ntfy") body.topic=$("ntfTopic").value.trim();
+    else if(provider==="webhook"){ body.webhookUrl=secretFieldValue($("ntfWebhookUrlField")); body.webhookFormat=$("ntfWebhookFormat").value; }
     else { body.chatId=$("ntfChatId").value.trim(); body.botToken=secretFieldValue($("ntfBotTokenField")); }
     const r=await postJSON("/api/notify-test",body);
     const d=await r.json();
@@ -8166,7 +8175,8 @@ async function sendProviderTest(provider,btnId,statusId){
       else if(d.code && NOTIF_TEST_ERROR_KEYS[d.code]) msg=t(NOTIF_TEST_ERROR_KEYS[d.code]);
       throw new Error(msg);
     }
-    st.className="pstatus ok"; st.textContent=provider==="telegram"?t("settings.notif.sent_telegram"):t("settings.notif.sent_ntfy");
+    st.className="pstatus ok"; st.textContent=provider==="telegram"?t("settings.notif.sent_telegram")
+      :provider==="webhook"?t("settings.notif.sent_webhook"):t("settings.notif.sent_ntfy");
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
   finally{ btn.disabled=false; }
 }
@@ -9739,7 +9749,10 @@ function notifTabValues(){
     includeImage:$("ntfImage").checked,
     ntfyEnabled:$("ntfyEnabled").checked, telegramEnabled:$("telegramEnabled").checked,
     ntfyTopic:$("ntfTopic").value.trim(), telegramChatId:$("ntfChatId").value.trim(),
-    telegramToken:secretFieldValue($("ntfBotTokenField"))
+    telegramToken:secretFieldValue($("ntfBotTokenField")),
+    webhookEnabled:$("webhookEnabled").checked,
+    webhookFormat:$("ntfWebhookFormat").value,
+    webhookUrl:secretFieldValue($("ntfWebhookUrlField"))
   };
 }
 function setNotifTabValues(v){
@@ -9753,10 +9766,14 @@ function setNotifTabValues(v){
   $("ntfyEnabled").checked=v.ntfyEnabled; $("telegramEnabled").checked=v.telegramEnabled;
   $("ntfTopic").value=v.ntfyTopic; $("ntfChatId").value=v.telegramChatId;
   setSecretFieldState($("ntfBotTokenField"),NTF_HAS_TELEGRAM_TOKEN);
+  $("webhookEnabled").checked=v.webhookEnabled;
+  $("ntfWebhookFormat").value=v.webhookFormat||"discord";
+  setSecretFieldState($("ntfWebhookUrlField"),NTF_HAS_WEBHOOK_URL);
   applyNtfEnabled();
   syncMilestoneNesting();
   syncProviderCard("ntfyEnabled","ntfyBody");
   syncProviderCard("telegramEnabled","telegramBody");
+  syncProviderCard("webhookEnabled","webhookBody");
 }
 registerSettingsTab("notif",notifTabValues,setNotifTabValues);
 
@@ -9880,11 +9897,16 @@ async function loadConfigUI(){
     // control: a "Configured" badge when one's on file, a plain input
     // otherwise.
     NTF_HAS_TELEGRAM_TOKEN=!!nf.hasTelegramBotToken;
+    NTF_HAS_WEBHOOK_URL=!!nf.hasWebhookUrl;
     setSecretFieldState($("ntfBotTokenField"), NTF_HAS_TELEGRAM_TOKEN);
+    $("webhookEnabled").checked=!!nf.webhookEnabled;
+    $("ntfWebhookFormat").value=nf.webhookFormat==="json"?"json":"discord";
+    setSecretFieldState($("ntfWebhookUrlField"), NTF_HAS_WEBHOOK_URL);
     applyNtfEnabled();
     syncMilestoneNesting();
     syncProviderCard("ntfyEnabled","ntfyBody");
     syncProviderCard("telegramEnabled","telegramBody");
+    syncProviderCard("webhookEnabled","webhookBody");
     baselineSettingsTab("notif");
     PRINTERS_CFG=c.printers||[];
     renderPrinterRowsFromConfig();
@@ -11227,10 +11249,14 @@ async function saveConfig(){
       telegramEnabled:$("telegramEnabled").checked,
       ntfyTopic:$("ntfTopic").value.trim(),
       telegramChatId:$("ntfChatId").value.trim(),
-      telegramBotToken:secretFieldValue($("ntfBotTokenField"))
+      telegramBotToken:secretFieldValue($("ntfBotTokenField")),
+      webhookEnabled:$("webhookEnabled").checked,
+      webhookFormat:$("ntfWebhookFormat").value,
+      webhookUrl:secretFieldValue($("ntfWebhookUrlField"))
     },
     printers:gatherPrinters() };
   try{
+
     const c=await (await postJSON("/api/config",body)).json();
     if(c.error) throw new Error(c.error);
     // The response already reflects server.js's post-save loadConfig() reload

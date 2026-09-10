@@ -426,6 +426,36 @@
                 </div>
               </div>
 
+              <div class="ntf-provider-card">
+                <label class="switch-row" for="webhookEnabled"><input type="checkbox" role="switch" id="webhookEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.webhook_label">Webhook (Discord)</span></span></label>
+                <div class="ntf-provider-body" id="webhookBody">
+                  <div class="settings-field">
+                    <label class="settings-label" data-i18n="settings.notif.webhook_url_label">Webhook URL</label>
+                    <div class="secret-field" id="ntfWebhookUrlField" data-cleared="0">
+                      <input type="password" class="field secret-input" id="ntfWebhookUrl" placeholder="https://discord.com/api/webhooks/..." autocomplete="off">
+                      <div class="secret-chip" style="display:none">
+                        <span class="status-badge" style="--status-color:var(--ok)" data-i18n="common.secret_configured">Configured</span>
+                        <button type="button" class="btn ghost secret-replace" data-i18n="common.secret_replace">Replace</button>
+                        <button type="button" class="btn ghost secret-clear" data-i18n="common.secret_clear">Clear</button>
+                      </div>
+                    </div>
+                    <div class="settings-help warn" data-i18n="settings.notif.webhook_url_warn">The URL is a secret — anyone who has it can post to your channel. http and https only, and redirects are never followed.</div>
+                  </div>
+                  <div class="settings-field">
+                    <label class="settings-label" for="ntfWebhookFormat" data-i18n="settings.notif.webhook_format_label">Payload format</label>
+                    <select class="field" id="ntfWebhookFormat">
+                      <option value="discord" data-i18n="settings.notif.webhook_format_discord">Discord</option>
+                      <option value="json" data-i18n="settings.notif.webhook_format_json">Generic JSON</option>
+                    </select>
+                    <div class="settings-help" data-i18n="settings.notif.webhook_format_help">Discord sends a rich embed with the camera snapshot. Generic JSON sends SnapCon’s own fields for tools like n8n or Home Assistant.</div>
+                  </div>
+                  <div class="ntf-provider-footer">
+                    <button class="btn ghost" type="button" id="ntfTestWebhook" data-i18n="settings.notif.send_test_webhook">Send test to webhook</button>
+                    <span class="pstatus" aria-live="polite" id="ntfTestWebhookStatus"></span>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
 

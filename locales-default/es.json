@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 43,
+    "version": 44,
     "snapconVersion": "0.7.0",
     "updated": "2026-09-10"
   },
@@ -958,7 +958,17 @@
       "test_error_missing_chat_id": "Introduce un ID de chat de Telegram primero",
       "test_error_missing_bot_token": "Introduce un token de bot de Telegram primero",
       "test_error_invalid_topic": "Introduce un topic de ntfy válido primero",
-      "test_error_printer_offline": "{name} está fuera de línea: {detail}"
+      "test_error_printer_offline": "{name} está fuera de línea: {detail}",
+      "webhook_label": "Webhook (Discord)",
+      "webhook_url_label": "URL del webhook",
+      "webhook_url_warn": "La URL es un secreto: cualquiera que la tenga puede publicar en tu canal. Solo http y https, y nunca se siguen redirecciones.",
+      "webhook_format_label": "Formato del contenido",
+      "webhook_format_discord": "Discord",
+      "webhook_format_json": "JSON genérico",
+      "webhook_format_help": "Discord envía un embed con la instantánea de la cámara. JSON genérico envía los campos propios de SnapCon para herramientas como n8n o Home Assistant.",
+      "send_test_webhook": "Enviar prueba al webhook",
+      "sent_webhook": "Prueba enviada al webhook",
+      "test_error_missing_webhook_url": "Introduce primero una URL de webhook"
     },
     "printers": {
       "toolbar_search_placeholder": "Buscar impresoras…",
