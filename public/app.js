@@ -5756,8 +5756,8 @@ async function printQueuedFile(printerId, filename, prefs){
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     ok=await pollJob(d.jobId, st, true, d.mapped||0, null, null, prefs, printerId);
     // pollJob writes its own generic completion text. This path had its own
-    // wording before and keeps it: this is a synchronous -> asynchronous
-    // conversion, not a change to what the operator reads.
+    // wording before 9a and keeps it: the conversion is synchronous -> async,
+    // not a change to what the operator reads.
     if(ok&&st){ st.className="pstatus ok"; st.textContent=t("fleet.queued.printing_status",{filename}); }
   }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
   loadFleet();
@@ -11366,10 +11366,10 @@ async function saveConfig(){
     },
     printers:gatherPrinters() };
   try{
-
     const c=await (await postJSON("/api/config",body)).json();
     if(c.error) throw new Error(c.error);
     // The response already reflects server.js's post-save loadConfig() reload
+
     // (a real re-read of the just-written, definitely-valid file, not an
     // optimistic client-side assumption) — re-render so the warning banner
     // actually clears, matching what its own text claims.

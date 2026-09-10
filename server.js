@@ -1367,6 +1367,7 @@ app.post("/api/print", requireRegular, async (req, res) => {
   (async () => {
     try {
       await c.uploadFile(p, fp, name, job);               // 1) upload (with progress)
+      console.log(`[print] ${p.name}: upload resolved for "${name}" (start=${start})`);
       // 2) toolhead mapping + print-preference macros (connector-optional) —
       // still needed with no mapping chosen (tools=[]) when the printer has
       // its own preferences (auto-level/flow-calibrate/timelapse) to send
@@ -1375,10 +1376,15 @@ app.post("/api/print", requireRegular, async (req, res) => {
       await withStartSequence(p, async () => {
         if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) {
           job.phase = "mapping";
+          console.log(`[print] ${p.name}: applyHeadMapping starting (tools=${tools.length}, prefs=${JSON.stringify(prefs)}, printer defaults autoLevel=${!!p.autoLevel} flowCalibrate=${!!p.flowCalibrate} timelapse=${!!p.timelapse})`);
           await c.applyHeadMapping(p, tools, map, prefs);
+          console.log(`[print] ${p.name}: applyHeadMapping resolved`);
         }
         if (start) {
-          job.phase = "starting"; await c.startPrintFile(p, name);
+          job.phase = "starting";
+          console.log(`[print] ${p.name}: startPrintFile starting for "${name}"`);
+          await c.startPrintFile(p, name);
+          console.log(`[print] ${p.name}: startPrintFile resolved`);
         }
       });
       if (!start) {
@@ -1396,6 +1402,7 @@ app.post("/api/print", requireRegular, async (req, res) => {
       if (start) ROUTE_STARTED_PRINT.add(p.url);
       auditLog.log({ category: "job", event: start ? "print-started" : "file-uploaded", ...actor, printerId: p.id, printerName: p.name, detail: { file: name } });
     } catch (e) {
+      console.log(`[print] ${p.name}: FAILED at phase "${job.phase}" — ${e.message}`);
       job.error = e.message; job.done = true; job.phase = "error";
     }
   })();
@@ -1439,31 +1446,34 @@ app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
 });
 
 // The slow half of /api/printfile, run detached so the request can return a
-// job id immediately. applyHeadMapping can take up to twelve minutes on
-// Creality (G29), and any gcode command can additionally sit queued behind a
-// blocking macro -- measured at ~46s for a CANCEL_PRINT stuck behind
-// START_PRINT -- so awaiting this on the request thread meant the browser
-// timed out on prints that had actually started.
+// job id immediately (docs/TODO.md item 9a). applyHeadMapping can take up to
+// twelve minutes on Creality (G29), and any gcode command can additionally sit
+// queued behind a blocking macro -- measured at ~46s for a CANCEL_PRINT stuck
+// behind START_PRINT -- so awaiting this on the request thread meant the
+// browser timed out on prints that had actually started.
 //
 // Named rather than an inline IIFE (unlike /api/print's, which predates this)
-// so the phase progression and the success bookkeeping are testable without
-// an express harness, which this project does not have.
+// so the phase progression and the success bookkeeping are testable without an
+// express harness, which this project does not have.
 //
 // The bookkeeping stays inside the success path on purpose: clearing the
-// "Loaded" badge, ROUTE_STARTED_PRINT (which suppresses notifyTick's
-// duplicate print-started notification) and the audit row must fire exactly
-// once, and never for a job that failed -- an audit trail claiming a print
-// started when it did not is worse than no trail at all.
+// "Loaded" badge, ROUTE_STARTED_PRINT (which suppresses notifyTick's duplicate
+// print-started notification) and the audit row must fire exactly once, and
+// never for a job that failed -- an audit trail claiming a print started when
+// it did not is worse than no trail at all.
 async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needsMapping, job, printerKey }) {
   try {
     await withStartSequence(p, async () => {
       if (needsMapping) {
         job.phase = "mapping";
+        console.log(`[printfile] ${p.name}: applyHeadMapping starting (tools=${tools.length}, prefs=${JSON.stringify(prefs)}, printer defaults autoLevel=${!!p.autoLevel} flowCalibrate=${!!p.flowCalibrate} timelapse=${!!p.timelapse})`);
         await c.applyHeadMapping(p, tools, map, prefs);
+        console.log(`[printfile] ${p.name}: applyHeadMapping resolved, calling startPrintFile`);
       }
       job.phase = "starting";
       await c.startPrintFile(p, filename);
     });
+    console.log(`[printfile] ${p.name}: startPrintFile resolved for "${filename}"`);
     // Printing it is what "ready to print" was waiting for -- clear the badge.
     if (queuedFile.get(printerKey)?.name === filename) { queuedFile.delete(printerKey); saveQueuedFiles(); }
     ROUTE_STARTED_PRINT.add(p.url);
@@ -1471,6 +1481,7 @@ async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needs
     job.result = { printer: p.name, filename, mapped: tools.length };
     job.phase = "done"; job.done = true;
   } catch (e) {
+    console.log(`[printfile] ${p.name}: FAILED at phase "${job.phase}" -- ${e.message}`);
     job.error = e.message; job.done = true; job.phase = "error";
   }
 }
@@ -1495,10 +1506,10 @@ app.post("/api/printfile", requireRegular, (req, res) => {
   const needsMapping = !!c.applyHeadMapping && (tools.length > 0 || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs));
 
   // Everything above is cheap and synchronous, so those rejections stay
-  // outright HTTP errors. Everything below can block on physical printer
-  // work, so it moves onto the same JOBS machinery /api/print already uses:
-  // this response now means "start job accepted", NOT "printing" -- clients
-  // poll /api/print-status for the outcome.
+  // outright HTTP errors. Everything below can block on physical printer work,
+  // so it moves onto the same JOBS machinery /api/print already uses: this
+  // response now means "start job accepted", NOT "printing" -- clients poll
+  // /api/print-status for the outcome.
   const jobId = newJobId();
   const job = { phase: needsMapping ? "mapping" : "starting", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now() };
   JOBS.set(jobId, job);
@@ -1722,9 +1733,9 @@ function findPrinterIndex(name) {
 //
 // An ALLOWLIST on purpose. This used to exclude only "printing"/"paused",
 // which meant every other state counted as idle -- including "error", so a
-// printer whose Klipper had shut down was handed queued jobs. Failing closed
-// also means a state we have not thought about, or one a future connector
-// introduces, cannot silently authorise starting a job.
+// printer whose Klipper had shut down was handed queued jobs (docs/TODO.md
+// item 9b). Failing closed also means a state we have not thought about, or
+// one a future connector introduces, cannot silently authorise starting a job.
 //
 // FlashForge's "busy" is deliberately absent even though it counted as idle
 // before: a dispatch predicate should not call an ambiguous state idle merely
@@ -1737,19 +1748,15 @@ const DISPATCH_IDLE_STATES = new Set(["standby", "idle", "complete", "cancelled"
 // Between "SnapCon began starting a print" and "the printer reports a job"
 // the machine is physically busy while print_stats still says standby with no
 // filename -- so the allowlist above calls it idle and it looks dispatchable.
-// Reachable during that window: queue dispatch claiming a printer already
-// mid-start from another path, /api/notify-load uploading immediately instead
-// of staging, and the card reading Idle.
+// Reachable consequences during that window: queue dispatch claiming a
+// printer already mid-start from another path, /api/notify-load uploading
+// immediately instead of staging, and the card reading Idle.
 //
-// Keyed on "a start is in progress", not on any brand: the same race exists
-// wherever the start is slow. Creality auto-level runs G29 inside
+// Deliberately keyed on "a start is in progress", not on any brand: the same
+// race exists wherever the start is slow. Creality auto-level runs G29 inside
 // applyHeadMapping bounded at TWELVE minutes, CFS material preparation runs
 // 4-5 minutes, U1 head-mapping macros take seconds. One guard, three
-// durations -- the CFS case is only the one that made it obvious.
-//
-// This means the printer is EXECUTING ITS START SEQUENCE, not merely that
-// SnapCon is processing a print request: the upload phase stays outside, since
-// a printer receiving a file is not yet being driven toward a print.
+// durations. The CFS case is only the one that made it obvious.
 //
 // A LEAKED entry is worse than the bug -- the printer becomes permanently
 // undispatchable -- so every path in and out goes through withStartSequence,
@@ -4599,7 +4606,6 @@ app.post("/api/notify-test", requireAdmin, async (req, res) => {
     if (service === "telegram") {
       const chatId = String(b.chatId || nf.telegramChatId || "").trim();
       // Same "test with the form's current value, fall back to what's saved"
-
       // convention as the OTP/Resend test buttons — works before Save too.
       const botToken = (typeof b.botToken === "string" && b.botToken.trim()) ? b.botToken.trim() : (nf.telegramBotToken || "");
       if (!chatId) return res.status(400).json({ error: "Enter a Telegram chat ID first", code: "missing_chat_id" });
