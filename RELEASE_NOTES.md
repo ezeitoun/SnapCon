@@ -130,6 +130,57 @@ Users can be scoped to specific printer groups instead of seeing the whole fleet
 Settings → Users.
 
 0.7.0
+
+### Printer Health
+A new Health page gives one printer a full check-up: toolheads, the link to the controller board,
+heaters, fans, storage, system load, service history and recent faults, all on one screen. The
+fleet is scanned for printers that need attention, so a problem surfaces without opening each
+machine in turn.
+
+Reading a printer's health is deliberately on demand rather than polled - it asks the printer real
+questions and there is no reason to do that every few seconds - with an auto-refresh you can turn
+on while you are watching a particular machine.
+
+### Logs, Camera and G-code Sync
+SnapCon can copy files off your printers into a folder you choose: Klipper logs, camera captures
+and the G-code files stored on the machine. Each root is configured separately with its own
+retention, and old files are cleaned up on a schedule.
+
+It keeps a record of what it has already fetched, so re-running a sync transfers only what is new
+rather than everything again. Progress appears inline on the Storage card, and two syncs of the
+same printer and folder cannot overlap.
+
+### Light and Dark Themes
+SnapCon now has a light theme alongside the original dark one, with a sun/moon button in the top
+bar. Every status colour was re-derived for the light palette and contrast-checked rather than
+simply inverted.
+
+On first run it follows your operating system's setting and keeps following it until you make an
+explicit choice. The chosen theme is applied before the stylesheet loads, so there is no flash of
+the wrong colours on a refresh, and it is stored against your user account so it travels between
+browsers.
+
+### FlashForge Printers Running ZMOD or Forge-X
+A FlashForge printer runs either its stock firmware, which serves FlashForge's own API, or a
+community modification such as ZMOD or Forge-X, which replaces it with Moonraker. SnapCon now
+detects which one a printer is actually speaking and routes every operation accordingly.
+
+This is detected rather than configured, and re-checked - the same printer was observed serving
+one transport and then the other within a single session, so a mode that has gone stale is noticed
+instead of being trusted forever. Capabilities follow the transport too: a modded printer offers
+what Moonraker genuinely supports, and a stock one offers what the native API supports, rather
+than either being assumed from the model name.
+
+### The Snapmaker U1 Connector
+U1 printers now use the WebSocket connector by default. It follows the printer's status over a
+live connection instead of polling, notices when that connection has gone stale, and falls back to
+the original HTTP behaviour whenever the WebSocket is unhealthy.
+
+Existing printers are switched over automatically at startup. Only the connector changes - ids,
+addresses, tokens, serial numbers, queue pool assignments and group access are all preserved, and
+the new connector passes every control action straight through to the original, so the worst case
+for a migrated printer is exactly the behaviour it had before. The old connector remains available
+in the picker as "SnapMaker U1 (Old)".
 ### Multi-Language Support (English + Spanish)
 SnapCon's interface can now be used in English or Spanish, with the whole app — Fleet, Health,
 Maintenance, Settings, Queue Management, and the login screen itself — fully translated.
@@ -214,26 +265,43 @@ considerably lighter on a large farm.
 - **Large fleets ask far less of the browser.** With 100 actively printing test printers, the work
   each refresh costs dropped by roughly 8x.
 ### Update Snapmaker U1 Firmware Over the Network
-Settings → Firmware can now flash a Snapmaker U1 from a firmware file on your own machine — no USB
-stick, no Snapmaker cloud account. Point SnapCon at a **Firmware folder** in Settings → General,
-pick a file, choose the printer, and hold the button to confirm.
-- **One printer at a time**, chosen explicitly. The confirmation names the printer and the file
-  rather than asking whether you are sure, and tells you up front that the machine goes offline for
-  several minutes and must not lose power.
-- **It tells you which stage it is in** — uploading, checking the file, then writing — because those
-  stages take very different amounts of time and only one of them is safe to walk away from.
-- **The file is checked before anything is flashed.** SnapCon reads the uploaded copy back off the
-  printer and compares it to the original; if they differ, nothing is written.
+Settings → Firmware can flash Snapmaker U1 printers from a firmware file on your own machine — no
+USB stick, no Snapmaker cloud account. Point SnapCon at a **Firmware folder** in Settings →
+General, pick a file, select the printers, and hold the button to confirm.
+
+- **Several printers, one at a time.** Selected printers queue and run in sequence. Each update
+  moves around a quarter of a gigabyte to the printer and reads it back to check it arrived, and
+  doing that to several machines at once would saturate the same network the printers rely on.
+- **The confirmation names what will happen** — every printer, the file and the version — rather
+  than asking whether you are sure, and says up front that each machine goes offline for several
+  minutes and must not lose power.
+- **You can see which stage each printer is in** — waiting, transferring with a byte count,
+  checking, writing, or restarting — because those stages take very different amounts of time and
+  only one of them is safe to walk away from.
+- **The file is checked before anything is written.** SnapCon reads the uploaded copy back off the
+  printer and compares it against the original; if they differ, nothing is flashed.
 - **The printer going quiet at the end is normal.** It drops offline to write the image and returns
   a few minutes later on the new version — SnapCon says so rather than reporting an error.
+- **Stop applies between printers.** A machine already writing its image is never interrupted,
+  because a half-written image is what leaves a printer unbootable.
+- **Printers already on the chosen build are skipped** rather than re-flashed, and printers that
+  cannot be updated right now — printing, faulted, offline — are listed with the reason and a Retry
+  instead of quietly dropping out of the batch.
+- **A print will not be started on a printer being updated**, and an update will not begin on a
+  printer that is printing.
 - **Admin only**, and the file must come from your configured firmware folder. A U1 accepts firmware
   from anything on the same network with no password at all, so SnapCon deliberately does not offer
   a way to point this at an arbitrary file or a web address.
-- Snapmaker U1 only. Other printers do not expose a comparable network update interface, so they
-  are not offered as targets.
+- Snapmaker U1 only. Other printers do not expose a comparable network update interface, so they are
+  not offered as targets.
 - Downloading firmware from Snapmaker still needs their cloud, so SnapCon does not do it — you
   supply the file.
 
+About the file-name check: if the file is named for a different product than the printer reports
+itself to be, SnapCon stops before uploading. This is a check on the NAME, and it is not proof of
+compatibility — a firmware image does not state which model it belongs to, so an image that is named
+correctly but is not the right firmware will pass unnoticed. It catches a naming mistake. Confirm
+you have the right file for your printer.
 
 ### A Crashed Printer No Longer Looks Idle
 Klipper can shut itself down - a failed command, a lost connection to a control board, a
@@ -320,34 +388,29 @@ ignored rather than quietly acted on.
 Snapmaker U1 printers are unaffected and keep their own auto-level, which works differently: it
 tells the firmware to level at the right moment rather than leveling ahead of the print.
 
-### Update Snapmaker U1 Firmware Across the Fleet
-The Firmware tab can now update several U1 printers from one place, using a firmware file you
-supply from a folder you configure. Nothing is downloaded from Snapmaker and no USB stick is needed.
+### Security Fixes
+Five issues found during a review of SnapCon's own code. All are fixed in this release, and
+upgrading is recommended for anyone running SnapCon where more than one person can reach it.
 
-- **One printer at a time, on purpose.** Selected printers queue and run in sequence. Each update
-  moves around a quarter of a gigabyte to the printer and reads it back to check it arrived intact,
-  and doing several at once would saturate the same network the printers rely on.
-- **You can see which stage each printer is in** — waiting, transferring (with a byte count),
-  checking, writing, or restarting — rather than one spinner covering several minutes. A printer
-  dropping off the network while it writes the image is shown as progress, because that is what it
-  is; it is not an error and the printer must not be powered off.
-- **Stop applies between printers.** A printer already writing its image is never interrupted, since
-  a half-written image is what leaves a machine unbootable.
-- **Printers already running the chosen build are skipped** rather than re-flashed, and printers
-  that cannot be updated right now — printing, faulted, offline — are listed with the reason and a
-  Retry, instead of quietly dropping out of the batch.
-- **The file is checked before anything is sent.** SnapCon reads the image and refuses one that is
-  not a valid firmware container for the U1's processor, or whose internal structure does not fit
-  the file.
-- **A print will not be started on a printer that is being updated**, and an update will not begin
-  on a printer that is printing.
-
-About the file-name check: if the file is named for a different product than the printer reports
-itself to be, SnapCon stops before uploading. This is a check on the NAME, and it is not proof of
-compatibility — a firmware image does not state which model it belongs to, so an image that is named
-correctly but is not the right firmware will pass unnoticed. It catches a naming mistake. Confirm
-you have the right file for your printer.
-
-Updating firmware is the most consequential thing SnapCon can do to a printer, so Deploy is
-admin-only, needs a deliberate press-and-hold, and names every printer and the version before it
-starts. Nothing is available until an administrator sets a firmware folder in Settings.
+- **Printer group access was not enforced everywhere.** Group restrictions were applied across most
+  of the app but missing on thirteen routes, so a user limited to certain printers could still see
+  or act on printers outside their groups - including switching maintenance mode fleet-wide. Every
+  route now applies the same check.
+- **A damaged config file could be overwritten instead of preserved.** If `config.json` could not be
+  read or parsed, SnapCon fell back to empty defaults and then saved those defaults back over the
+  original within the first moments of startup, destroying every printer, user and credential with
+  no message. A genuine first run is now told apart from a failure; a failure is reported loudly and
+  the original file is set aside untouched rather than replaced.
+- **The gcode folder boundary could be sidestepped.** The check that keeps file operations inside
+  your gcode folder compared text rather than path segments, so a neighbouring folder whose name
+  merely started with the same characters was treated as inside it. Containment is now checked
+  properly.
+- **The slicer-integration endpoint now requires a credential.** The local file-path branch of the
+  print-trigger endpoint identified callers only by them appearing to be local. That stopped being a
+  meaningful distinction once Remote Access was available, because tunnelled traffic arrives looking
+  local. It now requires a credential the server generates once and the command-line tool reads.
+- **Printer commands can no longer hang forever.** The shared path behind E-Stop, pause, resume,
+  cancel, eject and bed temperature had no timeout, so a printer that accepted a connection and then
+  stopped responding could leave the most safety-critical action waiting indefinitely. Commands now
+  fail in reasonable time, with deliberately longer allowances for the few operations that really do
+  take minutes.
