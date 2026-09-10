@@ -129,7 +129,7 @@ printer doesn't erase its history. Filterable by date, category, and free-text s
 Users can be scoped to specific printer groups instead of seeing the whole fleet, managed from
 Settings → Users.
 
-0.6.0
+0.7.0
 ### Multi-Language Support (English + Spanish)
 SnapCon's interface can now be used in English or Spanish, with the whole app — Fleet, Health,
 Maintenance, Settings, Queue Management, and the login screen itself — fully translated.
