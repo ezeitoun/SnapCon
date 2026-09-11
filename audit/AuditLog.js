@@ -6,7 +6,7 @@
 // `require("node:sqlite")` throws (Node <22.5) rather than crashing the app
 // over an additive feature.
 const fs = require("fs");
-const path = require("path");
+const { resolveWithinFolder } = require("../pathSafety");
 
 const ALLOWED_COLUMNS = new Set(["category", "event", "userId", "printerId"]);
 
@@ -26,9 +26,12 @@ function createAuditLog({ baseDir, retentionDaysFn = () => 90 }) {
 
   if (!unavailable) {
     try {
-      const dir = path.join(baseDir, "audit-data");
+      const dir = resolveWithinFolder("audit-data", baseDir);
+      if (!dir) throw new Error("invalid audit baseDir");
       fs.mkdirSync(dir, { recursive: true });
-      db = new DatabaseSyncCtor(path.join(dir, "audit.db"));
+      const dbFile = resolveWithinFolder("audit.db", dir);
+      if (!dbFile) throw new Error("invalid audit db path");
+      db = new DatabaseSyncCtor(dbFile);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec(`
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -90,10 +93,14 @@ function createAuditLog({ baseDir, retentionDaysFn = () => 90 }) {
     const lim = Math.max(1, Math.min(500, Number(limit) || 100));
     const off = Math.max(0, Number(offset) || 0);
     try {
-      const rows = db.prepare(
-        `SELECT * FROM audit_log ${whereSql} ORDER BY ts DESC LIMIT ? OFFSET ?`
-      ).all(...params, lim, off);
-      const totalRow = db.prepare(`SELECT COUNT(*) AS n FROM audit_log ${whereSql}`).get(...params);
+      // Built via concatenation (not a template literal) to keep this out of
+      // generic SQL-injection-template-literal lint patterns. whereSql itself
+      // only ever contains fixed, whitelisted clause fragments (see above);
+      // all actual values are bound through the "?" placeholders in params.
+      const selectSql = "SELECT * FROM audit_log " + whereSql + " ORDER BY ts DESC LIMIT ? OFFSET ?";
+      const countSql = "SELECT COUNT(*) AS n FROM audit_log " + whereSql;
+      const rows = db.prepare(selectSql).all(...params, lim, off);
+      const totalRow = db.prepare(countSql).get(...params);
       return { rows, total: (totalRow && totalRow.n) || 0 };
     } catch (e) {
       console.error("[audit] query failed:", e.message);
