@@ -1,9 +1,0 @@
-# Where the add-on's image gets SnapCon from when it is installed from the
-# GitHub add-on repository. (A local add-on prepared with
-# ha-addon/prepare-local-addon.sh uses its bundled app/ folder instead.)
-build_from:
-  aarch64: node:22-alpine
-  amd64: node:22-alpine
-args:
-  SNAPCON_REPO: https://github.com/jschallmayer78/SnapCon.git
-  SNAPCON_REF: main

@@ -228,13 +228,18 @@ test("HA add-on: all state in /data, G-code on /share, ffmpeg built in", () => {
   assert.match(run, /GCODE=\/share\/snapcon\/gcode/);
   assert.match(run, /exec node server\.js/);
   const df = read("ha-addon/snapcon/Dockerfile");
-  assert.match(df, /^ARG BUILD_FROM=node:22-alpine\nFROM \$\{BUILD_FROM\}$/m);
+  // Not BUILD_FROM: Supervisor 2026.04+ ignores build.yaml and older ones
+  // pass their Node-less Alpine base as BUILD_FROM ("npm: not found").
+  assert.match(df, /^FROM node:22-alpine$/m);
+  assert.doesNotMatch(df, /^(ARG BUILD_FROM|FROM \$)/m);
+  assert.ok(!fs.existsSync(path.join(ROOT, "ha-addon", "snapcon", "build.yaml")), "build.yaml is no longer read — settings live in the Dockerfile");
+  assert.match(df, /io\.hass\.version="\$\{BUILD_VERSION\}"/);
+  assert.match(df, /io\.hass\.arch="\$\{BUILD_ARCH\}"/);
   assert.match(df, /apk add --no-cache tzdata ffmpeg/);
   assert.match(df, /if \[ -f \/addon\/app\/server\.js \]; then/, "a prepared local add-on uses its bundled app/");
   assert.match(df, /git clone --depth 1 --branch "\$SNAPCON_REF" "\$SNAPCON_REPO" \/app/);
-  const build = read("ha-addon/snapcon/build.yaml");
-  assert.match(build, /SNAPCON_REF: \S+/);
-  assert.match(build, /SNAPCON_REPO: https:\/\/github\.com\/\S+\.git/);
+  assert.match(df, /^ARG SNAPCON_REF=\S+$/m);
+  assert.match(df, /^ARG SNAPCON_REPO=https:\/\/github\.com\/\S+\.git$/m);
   assert.ok(fs.statSync(path.join(ROOT, "ha-addon", "snapcon", "run.sh")).mode & 0o111, "run.sh is executable");
 });
 
