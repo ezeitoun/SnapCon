@@ -1,6 +1,12 @@
 # SnapCon via Docker — for always-on hosts (Pi / NAS / homelab).
 #
-# Quick start:
+# Quick start (Linux host):
+#   ./docker-setup.sh                        # creates config.json, users.json,
+#                                            # gcode/ and the data folders
+#   docker compose up -d --build
+#   open http://<this-host-ip>:4545
+#
+# Or by hand:
 #   cp config.example.json config.json      # a writable config the hub persists to
 #   mkdir -p gcode                           # where your sliced .gcode lives
 #   touch users.json                        # pre-create as a FILE — a missing
@@ -10,20 +16,36 @@
 #                                            # DIRECTORY instead, which breaks
 #                                            # User Access Management the
 #                                            # moment it's turned on
-#   docker compose up -d
-#   open http://<this-host-ip>:4545
+#   docker compose up -d --build
 #
 # Auto-discovery scans your LAN, which only works with host networking (Linux
 # hosts). On Docker Desktop (macOS/Windows) host networking behaves differently —
-# use the "ports" block instead and just add printers by IP in Settings.
+# start it with the override file instead, which publishes port 4545, and add
+# printers by IP in Settings:
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml up -d --build
+#
+# Optional settings (time zone, ffmpeg, port) go in a .env file next to this
+# one — see .env.example.
 
 services:
   snapcon:
     # Build from this repo. (Once images are published you could instead use:
     #   image: ghcr.io/ezeitoun/snapcon:latest )
-    build: .
+    build:
+      context: .
+      args:
+        # ffmpeg gives relayed cameras (Bambu Lab) still frames for snapshots
+        # and notification images. false = smaller image, live view unchanged.
+        WITH_FFMPEG: ${SNAPCON_WITH_FFMPEG:-true}
+    image: snapcon:local
     container_name: snapcon
     restart: unless-stopped
+    # A tiny init as PID 1: forwards `docker stop` to Node right away and
+    # reaps child processes (ffmpeg, the Remote Access tunnel).
+    init: true
+    environment:
+      # Local time for log and audit-trail timestamps.
+      TZ: ${TZ:-UTC}
 
     # --- Linux hosts: host networking enables LAN auto-discovery ---
     network_mode: host

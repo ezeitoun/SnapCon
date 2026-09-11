@@ -7,7 +7,11 @@ users.json
 queued-files.json
 remote-access-data
 audit-data
+sync-data
 data
+locales
+notify-token.json
+.env
 gcode/*.gcode
 gcode/*.mapped.gcode
 .github
@@ -19,3 +23,9 @@ SECURITY_REVIEW.md
 VERIFIED_CODE_REVIEW.md
 queue-management-design.md
 queue-management-implementation-plan.md
+# Not part of the image (root Dockerfile COPYs an explicit list anyway —
+# this only keeps the build context small).
+test
+docs
+fixtures
+ha-addon

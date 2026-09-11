@@ -1,0 +1,6 @@
+# Home Assistant add-on repository: Settings → Add-ons → Add-on Store →
+# ⋮ → Repositories → add https://github.com/jschallmayer78/SnapCon
+# The add-on itself lives in ha-addon/snapcon/.
+name: SnapCon Add-ons
+url: https://github.com/jschallmayer78/SnapCon
+maintainer: jschallmayer78

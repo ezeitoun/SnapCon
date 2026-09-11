@@ -1,0 +1,19 @@
+# Docker Desktop (macOS / Windows) override for docker-compose.yml.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.desktop.yml up -d --build
+#   open http://localhost:4545
+#
+# Docker Desktop runs containers inside a small VM, so `network_mode: host`
+# would not put SnapCon on your LAN. This switches to a normal bridge network
+# and publishes the dashboard's port instead. Everything that SnapCon
+# connects to itself works this way — Snapmaker/Klipper over HTTP, Bambu Lab
+# MQTT (8883), camera (322) and preview (990) — only "Discover on network"
+# cannot scan your LAN: add printers by IP in Settings.
+#
+# SNAPCON_PORT (in .env) picks the port on your computer; inside the
+# container SnapCon keeps listening on 4545 (config.json "port").
+services:
+  snapcon:
+    network_mode: bridge
+    ports:
+      - "${SNAPCON_PORT:-4545}:4545"

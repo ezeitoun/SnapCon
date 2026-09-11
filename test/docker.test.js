@@ -127,3 +127,122 @@ test("i18n: Dockerfile COPYs locales-default (bundled originals, read via fs not
   const copied = dockerfileCopySources();
   assert.ok(copied.has("locales-default"), "locales-default must be COPYd or the container has nothing to seed BASE_DIR/locales/ from on first run");
 });
+
+// ---- Docker quality-of-life: ffmpeg, healthcheck, Docker Desktop, single data dir ----
+
+const read = (f) => fs.readFileSync(path.join(ROOT, f), "utf8");
+
+test("Dockerfile: ffmpeg is a build option that defaults to on, tzdata always installed", () => {
+  const df = read("Dockerfile");
+  assert.match(df, /^ARG WITH_FFMPEG=true$/m);
+  assert.match(df, /apk add --no-cache tzdata/);
+  assert.match(df, /if \[ "\$WITH_FFMPEG" = "true" \]; then apk add --no-cache ffmpeg; fi/);
+});
+
+test("Dockerfile: the HEALTHCHECK script is copied into the image and used", () => {
+  assert.ok(dockerfileCopySources().has("docker/healthcheck.js"));
+  assert.match(read("Dockerfile"), /HEALTHCHECK [^\n]*\\\n\s*CMD \["node", "docker\/healthcheck\.js"\]/);
+});
+
+function runHealthcheck(env) {
+  const { spawn } = require("child_process");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(ROOT, "docker", "healthcheck.js")], { env: { ...process.env, ...env } });
+    child.on("exit", (code) => resolve(code));
+  });
+}
+
+test("healthcheck: healthy only when /api/version answers 200 on config.json's port", async () => {
+  const http = require("http");
+  const os = require("os");
+  let status = 200;
+  const srv = http.createServer((req, res) => { res.statusCode = req.url === "/api/version" ? status : 404; res.end("{}"); });
+  await new Promise(r => srv.listen(0, "127.0.0.1", r));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snapcon-hc-"));
+  try {
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port: srv.address().port }));
+    assert.equal(await runHealthcheck({ SNAPCON_DATA_DIR: dir }), 0, "answers → healthy");
+    status = 503;
+    assert.equal(await runHealthcheck({ SNAPCON_DATA_DIR: dir }), 1, "error status → unhealthy");
+    const port = srv.address().port;
+    await new Promise(r => srv.close(r));
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ port }));
+    assert.equal(await runHealthcheck({ SNAPCON_DATA_DIR: dir }), 1, "nothing listening → unhealthy");
+  } finally {
+    if (srv.listening) srv.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("docker-compose.yml: TZ, init and the ffmpeg build arg are wired; host networking stays the Linux default", () => {
+  const c = read("docker-compose.yml");
+  assert.match(c, /WITH_FFMPEG: \$\{SNAPCON_WITH_FFMPEG:-true\}/);
+  assert.match(c, /TZ: \$\{TZ:-UTC\}/);
+  assert.match(c, /^\s*init: true$/m);
+  assert.match(c, /^\s*network_mode: host$/m);
+});
+
+test("docker-compose.desktop.yml: Docker Desktop switches to a bridge network and publishes the dashboard port", () => {
+  const c = read("docker-compose.desktop.yml");
+  assert.match(c, /^\s*network_mode: bridge$/m);
+  assert.match(c, /-\s*"\$\{SNAPCON_PORT:-4545\}:4545"/);
+});
+
+test("docker-setup.sh creates every single-FILE bind-mount source as a file (not left for Docker to make a directory)", () => {
+  const sh = read("docker-setup.sh");
+  const hosts = composeHostVolumePaths().map(h => h.slice(2));
+  for (const f of ["config.json", "users.json"]) {
+    assert.ok(hosts.includes(f), "sanity: " + f + " is mounted");
+    assert.match(sh, new RegExp("\\[ ! -e " + f.replace(".", "\\.") + " \\]"), f + " is created when missing");
+  }
+  for (const d of hosts.filter(h => !h.endsWith(".json"))) assert.match(sh, new RegExp("mkdir -p [^\\n]*\\b" + d + "\\b"), d + "/ is created");
+  assert.match(sh, /"printers": \[\]/, "a fresh config has no placeholder printers");
+});
+
+test("server.js: SNAPCON_DATA_DIR moves the whole writable tree, and nothing changes when it is unset", () => {
+  const src = read("server.js");
+  assert.match(src, /const BASE_DIR = process\.env\.SNAPCON_DATA_DIR\s*\n\s*\? path\.resolve\(process\.env\.SNAPCON_DATA_DIR\)\s*\n\s*: \(IS_PKG \? path\.dirname\(process\.execPath\) : __dirname\);/);
+  for (const c of ["CONFIG_PATH", "USERS_PATH", "QUEUED_FILE_PATH", "NOTIFY_TOKEN_PATH", "LOCALES_DIR"]) {
+    assert.match(src, new RegExp("const " + c + " = path\\.join\\(BASE_DIR, "), c + " derives from BASE_DIR");
+  }
+});
+
+// ---- Home Assistant add-on ----
+
+test("HA add-on: a valid repository layout with the add-on in ha-addon/snapcon", () => {
+  assert.match(read("repository.yaml"), /^name: .+$/m);
+  const cfg = read("ha-addon/snapcon/config.yaml");
+  for (const k of ["name", "version", "slug", "description", "arch"]) assert.match(cfg, new RegExp("^" + k + ":", "m"), k);
+  assert.match(cfg, /^slug: snapcon$/m);
+  assert.match(cfg, /^version: "([^"]+)"$/m);
+  assert.equal(/^version: "([^"]+)"$/m.exec(cfg)[1], require(path.join(ROOT, "package.json")).version, "add-on version follows package.json");
+  assert.match(cfg, /^host_network: true$/m, "LAN discovery and direct printer access");
+  assert.match(cfg, /^webui: http:\/\/\[HOST\]:\[PORT:4545\]$/m);
+  assert.doesNotMatch(cfg, /^ingress:/m, "the dashboard uses absolute /api paths, which ingress would break");
+  assert.match(cfg, /- type: share\s*\n\s*read_only: false/);
+});
+
+test("HA add-on: all state in /data, G-code on /share, ffmpeg built in", () => {
+  const run = read("ha-addon/snapcon/run.sh");
+  assert.match(run, /export SNAPCON_DATA_DIR=\/data/);
+  assert.match(run, /GCODE=\/share\/snapcon\/gcode/);
+  assert.match(run, /exec node server\.js/);
+  const df = read("ha-addon/snapcon/Dockerfile");
+  assert.match(df, /^ARG BUILD_FROM=node:22-alpine\nFROM \$\{BUILD_FROM\}$/m);
+  assert.match(df, /apk add --no-cache tzdata ffmpeg/);
+  assert.match(df, /if \[ -f \/addon\/app\/server\.js \]; then/, "a prepared local add-on uses its bundled app/");
+  assert.match(df, /git clone --depth 1 --branch "\$SNAPCON_REF" "\$SNAPCON_REPO" \/app/);
+  const build = read("ha-addon/snapcon/build.yaml");
+  assert.match(build, /SNAPCON_REF: \S+/);
+  assert.match(build, /SNAPCON_REPO: https:\/\/github\.com\/\S+\.git/);
+  assert.ok(fs.statSync(path.join(ROOT, "ha-addon", "snapcon", "run.sh")).mode & 0o111, "run.sh is executable");
+});
+
+test("HA add-on: the local-add-on copy never includes personal files", () => {
+  const sh = read("ha-addon/prepare-local-addon.sh");
+  assert.match(sh, /git -C "\$ROOT" ls-files -z --cached --others --exclude-standard/, "only tracked or not-ignored files");
+  const ignore = read(".gitignore");
+  for (const f of ["config.json", "users.json", "notify-token.json", "remote-access-data/", "ha-addon/snapcon/app/", ".env"]) {
+    assert.match(ignore, new RegExp("^" + f.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&") + "$", "m"), f + " is git-ignored");
+  }
+});

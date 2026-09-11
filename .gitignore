@@ -26,3 +26,8 @@ queue-management-implementation-plan.md
 FUTURE_WORK.md
 docs/TODO.md
 connector-test-results/
+
+# Docker: local settings (see .env.example)
+.env
+# Home Assistant add-on: app sources copied by ha-addon/prepare-local-addon.sh
+ha-addon/snapcon/app/

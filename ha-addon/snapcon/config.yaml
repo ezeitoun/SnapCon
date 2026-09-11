@@ -1,0 +1,29 @@
+# SnapCon as a Home Assistant add-on. See DOCS.md.
+name: SnapCon
+version: "0.7.0"
+slug: snapcon
+description: Fleet dashboard for Snapmaker U1 and Bambu Lab H2 3D printers
+url: https://github.com/jschallmayer78/SnapCon
+arch:
+  - aarch64
+  - amd64
+startup: application
+boot: auto
+# Host networking: "Discover on network" can scan the LAN, and the dashboard
+# is reachable on the Home Assistant host's IP at SnapCon's own port.
+host_network: true
+ports:
+  4545/tcp: 4545
+ports_description:
+  4545/tcp: SnapCon dashboard (change it in SnapCon's Settings, not here)
+webui: http://[HOST]:[PORT:4545]
+# Restarted by the Supervisor if the dashboard stops answering (when the
+# add-on's Watchdog switch is on).
+watchdog: http://[HOST]:[PORT:4545]/api/version
+# /share/snapcon/gcode is the default G-code folder — reachable over the
+# Samba/SSH add-ons, so a slicer can save straight into it.
+map:
+  - type: share
+    read_only: false
+options: {}
+schema: {}

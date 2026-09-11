@@ -471,6 +471,39 @@ Running inside a container is auto-detected (no configuration needed) and unlock
 in General Settings — restarts the container in place to pick up a `config.json` edited from outside SnapCon,
 or a freshly pulled image, without needing shell access to the host.
 
+**Linux host (Raspberry Pi, NAS, homelab)** — host networking, so *Discover on network* can scan the LAN:
+
+```sh
+git clone https://github.com/jschallmayer78/SnapCon.git && cd SnapCon
+./docker-setup.sh            # creates config.json, users.json, .env and the data folders
+docker compose up -d --build
+# open http://<host-ip>:4545
+```
+
+**Docker Desktop (macOS / Windows)** — containers run in a VM there, so the override file switches to a
+bridge network and publishes the port. Add printers by IP (discovery cannot scan from inside the VM):
+
+```sh
+./docker-setup.sh
+docker compose -f docker-compose.yml -f docker-compose.desktop.yml up -d --build
+# open http://localhost:4545
+```
+
+Settings in `.env` (see `.env.example`): `TZ` (log/audit time zone), `SNAPCON_WITH_FFMPEG` (default `true` —
+ffmpeg turns the relayed Bambu Lab camera into still frames for snapshots and notification images; the live
+view works without it) and `SNAPCON_PORT` (Docker Desktop only). The image has a health check
+(`docker ps` shows *healthy* once the dashboard answers). All state lives in the mounted files and folders,
+so `git pull && docker compose up -d --build` updates without losing printers, users or history.
+
+`SNAPCON_DATA_DIR=/some/dir` moves every writable file (config, users, languages, audit, queue, Remote
+Access identity, and the default `gcode/` folder) into one directory — handy for a single volume:
+`docker run -d --network host -e SNAPCON_DATA_DIR=/data -v snapcon-data:/data snapcon:local`.
+
+**Home Assistant add-on** — see [`ha-addon/snapcon/DOCS.md`](ha-addon/snapcon/DOCS.md). In short: Settings →
+Add-ons → Add-on Store → ⋮ → Repositories → add `https://github.com/jschallmayer78/SnapCon`, then install
+**SnapCon**. State is kept in the add-on's `/data` (included in Home Assistant backups), the G-code folder
+is `/share/snapcon/gcode`.
+
 ---
 
 ## Download (no Node.js needed)

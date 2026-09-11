@@ -1,6 +1,20 @@
 # SnapCon — small runtime image for always-on hosts (Raspberry Pi, NAS,
 # homelab boxes). Runs the same Node/Express server as the desktop builds.
+#
+#   docker build -t snapcon .                               # with ffmpeg
+#   docker build -t snapcon --build-arg WITH_FFMPEG=false . # smaller, no ffmpeg
 FROM node:22-alpine
+
+# tzdata: log and audit timestamps in local time when TZ is set (e.g.
+# TZ=Europe/Berlin). ffmpeg (optional, on by default): turns the relayed
+# camera of Bambu Lab printers into still frames for the camera snapshot and
+# notification images — the live view itself plays without it. Everything
+# else in SnapCon works the same with WITH_FFMPEG=false (a much smaller image).
+ARG WITH_FFMPEG=true
+RUN apk add --no-cache tzdata \
+ && if [ "$WITH_FFMPEG" = "true" ]; then apk add --no-cache ffmpeg; fi
+
+ENV NODE_ENV=production
 
 WORKDIR /app
 
@@ -31,8 +45,16 @@ COPY public ./public
 # into the writable runtime locales/ directory on first run (see
 # locales.seedDefaultLocales in server.js) and never overwritten after that.
 COPY locales-default ./locales-default
+COPY docker/healthcheck.js ./docker/healthcheck.js
 
 # config.json and gcode/ are expected to be mounted as volumes (see
 # docker-compose.yml). The server creates sane defaults if they're absent.
+# Alternatively set SNAPCON_DATA_DIR=/data and mount a single volume there:
+# every writable file then lives in that one directory.
 EXPOSE 4545
+
+# "healthy" once the dashboard answers on the port config.json sets.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["node", "docker/healthcheck.js"]
+
 CMD ["node", "server.js"]

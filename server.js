@@ -52,7 +52,15 @@ process.on("unhandledRejection", (reason) => {
 // live NEXT TO THE EXE instead. Bundled assets (public/, parser.js) stay on
 // __dirname, which pkg maps into the snapshot.
 const IS_PKG = typeof process.pkg !== "undefined";
-const BASE_DIR = IS_PKG ? path.dirname(process.execPath) : __dirname;
+// SNAPCON_DATA_DIR (optional) moves every writable file — config.json,
+// users.json, locales/, the *-data folders and, by default, gcode/ — into one
+// directory. The Home Assistant add-on points it at its persistent /data, and
+// a Docker setup can use it to keep all state in a single volume. Unset, the
+// layout is exactly as before (next to server.js / the executable).
+const BASE_DIR = process.env.SNAPCON_DATA_DIR
+  ? path.resolve(process.env.SNAPCON_DATA_DIR)
+  : (IS_PKG ? path.dirname(process.execPath) : __dirname);
+if (process.env.SNAPCON_DATA_DIR) { try { fs.mkdirSync(BASE_DIR, { recursive: true }); } catch {} }
 const ASSET_DIR = __dirname;
 
 // /.dockerenv is created by the Docker Engine in every Linux container —
