@@ -16,6 +16,9 @@ const REGISTRY = {
   "creality-klipper": () => require("./creality-klipper"),
   "flashforge-adventurer": () => require("./flashforge-adventurer"),
   "flashforge-ad5x": () => require("./flashforge-ad5x"),
+  // Monitoring only — declares capabilities.control === false (see
+  // connectors/monitorOnly.js and the connector's own header).
+  "bambulab-h2": () => require("./bambulab-h2"),
   "simulator": () => require("./dummy-simulator")
 };
 

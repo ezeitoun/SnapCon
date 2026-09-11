@@ -22,7 +22,7 @@ For Snapmaker U1 farms, SnapCon provides capabilities such as:
 
 SnapCon communicates directly with each U1 through its local Klipper and Moonraker interfaces. Nothing needs to leave the local network unless Remote Access is explicitly enabled.
 
-Support for additional printer platforms was added in response to requests from users with mixed printer farms. Experimental connectors currently include selected FlashForge, Creality, and generic Klipper/Moonraker printers.
+Support for additional printer platforms was added in response to requests from users with mixed printer farms. Experimental connectors currently include selected FlashForge, Creality, and generic Klipper/Moonraker printers, plus monitoring-only support for the Bambu Lab H2 series (H2D, H2D Pro, H2S, H2C).
 
 These additional connectors are not the main focus of the project and may not provide the same depth of functionality, testing, or integration available for the Snapmaker U1. SnapCon’s development priorities remain focused on the U1 and its specific capabilities.
 
@@ -265,6 +265,20 @@ The Discover Button Scans the local network for supported printers and lets you 
 - Discovery Process: SnapCon probes ports 80 and 7125 in parallel, covering Moonraker installations running directly or behind a proxy. A typical /24 scan usually completes in about 10 seconds.
 
 Each result shows the available printer details and an Add button. Printers already configured in SnapCon are marked as Added. During first-time setup, Add All & Save can be used to add all discovered printers at once.
+
+#### Bambu Lab H2 series (monitoring only)
+Bambu Lab H2D, H2D Pro, H2S and H2C printers can sit on the same dashboard as the rest of the farm. SnapCon **watches** them and never commands them: the card, list view, notifications and audit trail show their state, progress, the printer's own remaining-time estimate, layers, bed and active-nozzle temperatures, and every AMS / AMS HT / external-spool slot with its colour and material (named the way the printer names them: A1…D4, HT1, Ext-L / Ext-R). The action buttons are replaced by a *Monitoring only* note, and the server refuses print, pause/resume/cancel, E-Stop, bed-temperature and queue requests for these printers.
+
+To add one, choose **Bambu Lab H2D / H2S / H2C (monitoring only)** as the connector and enter:
+- **IP / hostname** of the printer (the port, 8883, is applied automatically)
+- **Serial number** — on the printer's screen or in Bambu Studio / Handy
+- **Access code** — the 8-character LAN access code, on the printer under *Settings → Network / LAN Only Mode*
+
+LAN Only Mode and Developer Mode do **not** need to be switched on: reading a printer's status over its local connection is not affected by Bambu's Authorization Control firmware, so the printer stays connected to Bambu's cloud and Handy app. **Test Connection** works before saving.
+
+How it works: SnapCon keeps one MQTT-over-TLS session per printer to the broker the printer runs on port 8883 and subscribes to its status reports. The only messages it ever sends are the two *report your status* requests Bambu Studio itself sends (`get_version`, `pushall`). The printer's certificate is verified against Bambu Lab's own CA and must name the configured serial number, so the access code is never handed to another device. If a future printer's certificate is not recognised, `SNAPCON_BAMBU_INSECURE_TLS=1` skips that check; `SNAPCON_BAMBU_DEBUG=1` logs the connection in detail.
+
+Not available for Bambu printers yet: camera (the H2 camera is an RTSP video stream that needs a video decoder), print thumbnails, network discovery, and anything that sends the printer a command.
 
 
 ## Users

@@ -3,9 +3,9 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 45,
+    "version": 46,
     "snapconVersion": "0.7.0",
-    "updated": "2026-09-10"
+    "updated": "2026-09-11"
   },
   "printer_status": {
     "offline": "Sin conexión",
@@ -45,7 +45,9 @@
     "action_web_interface_alt": "Interfaz web",
     "action_plate": "Placa",
     "action_plate_title": "Placa {done}/{total}",
-    "action_estop_unsupported_title": "La parada de emergencia no está disponible en esta impresora: su firmware acepta el comando sin detenerse. Usa Cancelar o corta la alimentación de la impresora."
+    "action_estop_unsupported_title": "La parada de emergencia no está disponible en esta impresora: su firmware acepta el comando sin detenerse. Usa Cancelar o corta la alimentación de la impresora.",
+    "monitor_only_label": "Solo supervisión",
+    "monitor_only_title": "SnapCon muestra el estado de esta impresora pero no la controla. Usa la pantalla de la impresora, Bambu Studio o Bambu Handy para pausar, detener o iniciar impresiones."
   },
   "fleet": {
     "estop_status_sending": "Enviando parada de emergencia…",
@@ -1052,6 +1054,7 @@
       "pool_error_queue_not_idle": "La cola de esta impresora debe estar inactiva antes de cambiar su grupo",
       "pool_error_queue_not_empty": "Vacía la cola de esta impresora antes de cambiar su grupo",
       "pool_error_unknown_pool": "Grupo de impresoras desconocido",
+      "pool_error_monitor_only": "Esta impresora es solo de supervisión: SnapCon no puede enviarle impresiones, así que no puede formar parte de un grupo de impresoras.",
       "dirty_bar_named_one": "{count} cambio sin guardar en {shown}",
       "dirty_bar_named_other": "{count} cambios sin guardar en {shown}",
       "dirty_bar_more_suffix": " +{count} más",
@@ -1077,7 +1080,8 @@
       "transport_option_auto": "Detectar automáticamente",
       "transport_option_native": "API de FlashForge (puerto 8898)",
       "transport_option_moonraker": "Moonraker (puerto 7125)",
-      "transport_hint": "El firmware original ofrece la API de FlashForge en el puerto 8898. Un firmware modificado como ZMOD o Forge-X la sustituye por Moonraker en el puerto 7125. SnapCon detecta normalmente cuál está activo y vuelve a comprobarlo si cambia; fija uno concreto solo si la detección falla."
+      "transport_hint": "El firmware original ofrece la API de FlashForge en el puerto 8898. Un firmware modificado como ZMOD o Forge-X la sustituye por Moonraker en el puerto 7125. SnapCon detecta normalmente cuál está activo y vuelve a comprobarlo si cambia; fija uno concreto solo si la detección falla.",
+      "monitor_only_hint": "Solo supervisión: SnapCon lee el estado, el progreso, las temperaturas y las ranuras del AMS a través de la conexión local de la impresora y nunca le envía comandos. Introduce el número de serie de la impresora y su código de acceso LAN de 8 caracteres (en la impresora: Ajustes → Red / Modo solo LAN). No es necesario activar el Modo solo LAN."
     },
     "firmware": {
       "get_button": "Actualizar versiones",

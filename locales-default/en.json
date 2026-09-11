@@ -3,9 +3,9 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 45,
+    "version": 46,
     "snapconVersion": "0.7.0",
-    "updated": "2026-09-10"
+    "updated": "2026-09-11"
   },
   "printer_status": {
     "offline": "Offline",
@@ -45,7 +45,9 @@
     "action_web_interface_alt": "Web Interface",
     "action_plate": "Plate",
     "action_plate_title": "Plate {done}/{total}",
-    "action_estop_unsupported_title": "Emergency stop is not available on this printer — its firmware acknowledges the command without halting. Use Cancel, or cut power to the printer."
+    "action_estop_unsupported_title": "Emergency stop is not available on this printer — its firmware acknowledges the command without halting. Use Cancel, or cut power to the printer.",
+    "monitor_only_label": "Monitoring only",
+    "monitor_only_title": "SnapCon shows this printer's status but does not control it. Use the printer's screen, Bambu Studio or Bambu Handy to pause, stop or start prints."
   },
   "fleet": {
     "estop_status_sending": "Sending emergency stop…",
@@ -1052,6 +1054,7 @@
       "pool_error_queue_not_idle": "This printer's queue must be idle before changing its pool",
       "pool_error_queue_not_empty": "Clear this printer's queue before changing its pool",
       "pool_error_unknown_pool": "Unknown printer pool",
+      "pool_error_monitor_only": "This printer is monitored only — SnapCon cannot send it prints, so it cannot join a Printer Pool.",
       "dirty_bar_named_one": "{count} unsaved change on {shown}",
       "dirty_bar_named_other": "{count} unsaved changes on {shown}",
       "dirty_bar_more_suffix": " +{count} more",
@@ -1077,7 +1080,8 @@
       "transport_option_auto": "Detect automatically",
       "transport_option_native": "FlashForge API (port 8898)",
       "transport_option_moonraker": "Moonraker (port 7125)",
-      "transport_hint": "Stock firmware serves the FlashForge API on port 8898. A firmware mod such as ZMOD or Forge-X replaces it with Moonraker on port 7125. SnapCon normally detects which is live and re-checks if it changes — pin a specific one only if detection gets it wrong."
+      "transport_hint": "Stock firmware serves the FlashForge API on port 8898. A firmware mod such as ZMOD or Forge-X replaces it with Moonraker on port 7125. SnapCon normally detects which is live and re-checks if it changes — pin a specific one only if detection gets it wrong.",
+      "monitor_only_hint": "Monitoring only: SnapCon reads status, progress, temperatures and AMS slots over the printer's local connection and never sends it commands. Enter the printer's serial number and its 8-character LAN access code (on the printer: Settings → Network / LAN Only Mode). LAN Only Mode itself does not need to be switched on."
     },
     "firmware": {
       "get_button": "Refresh versions",

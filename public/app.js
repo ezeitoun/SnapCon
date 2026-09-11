@@ -202,7 +202,8 @@ const QUEUE_ERROR_KEYS={
   no_printer_access:"queue.error_no_printer_access",
   pool_not_found:"queue.error_pool_not_found",
   pool_name_required:"queue.error_pool_name_required",
-  reset_confirm_mismatch:"queue.error_reset_confirm_mismatch"
+  reset_confirm_mismatch:"queue.error_reset_confirm_mismatch",
+  monitor_only:"settings.printers.pool_error_monitor_only"
 };
 function queueErrorText(d,fallback){
   if(d&&d.code==="queue_save_failed") return d.detail?t("queue.error_queue_save_failed_detail",{detail:d.detail}):t("queue.error_queue_save_failed");
@@ -421,6 +422,33 @@ function statusColorText(p){
 // disable E-Stop across the whole rest of the fleet.
 function estopUnsupported(p){
   return !!(p && p.capabilities && p.capabilities.estop === false);
+}
+
+// A connector that reports control:false only WATCHES its printers (Bambu Lab
+// today — see connectors/monitorOnly.js). Every control for such a printer is
+// left out rather than shown disabled: none of them is ever going to work on
+// it, so the footer says so once instead of offering a row of dead buttons,
+// and the server refuses the routes regardless (refuseMonitorOnly).
+//
+// Same === false rule as estopUnsupported above, for the same reason: no
+// controllable connector declares the flag, and a truthiness check would
+// strip the controls from the entire rest of the fleet.
+function monitorOnly(p){
+  return !!(p && p.capabilities && p.capabilities.control === false);
+}
+// A connector that reports thumbnails:false has no job preview to serve
+// (Bambu Lab: it lives inside the .3mf on the printer's own storage). Leaving
+// the <img> out shows the usual "—" at once, instead of a broken-image icon
+// and four doomed thumbRetry() fetches per card per job. Same === false rule.
+function noThumbs(p){
+  return !!(p && p.capabilities && p.capabilities.thumbnails === false);
+}
+// The one line a monitor-only printer's footer / list-row actions show in
+// place of controls. The title says where control actually lives.
+function monitorOnlyNoteHtml(compact){
+  return `<span class="monitor-only-note${compact?' compact':''}" title="${esc(t("printer.monitor_only_title"))}">`+
+    `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>`+
+    `<span>${esc(t("printer.monitor_only_label"))}</span></span>`;
 }
 
 function canEject(p){
@@ -760,7 +788,11 @@ function sortedFleet(){
     });
   } else if(SORT_MODE === 'time'){
     const rem = p => {
-      if(!p.online || p.state !== 'printing' || !p.progress || p.progress <= 0) return Infinity;
+      if(!p.online || p.state !== 'printing') return Infinity;
+      // Printer-reported countdown (Bambu Lab) first — its elapsed can be
+      // unknown, and null*x would sort it as "finishing now".
+      if(typeof p.remaining === 'number' && isFinite(p.remaining)) return p.remaining;
+      if(!p.progress || p.progress <= 0 || !(p.elapsed > 0)) return Infinity;
       return p.elapsed * (1 / p.progress - 1);
     };
     arr.sort((a,b) => rem(a) - rem(b));
@@ -4279,7 +4311,7 @@ function renderQueueRow(p, qs, fleetRow, cat){
     const outsideNote=(qs&&qs.currentItem)?"":` <span class="pi-lbl">${t("queue.started_outside_queue")}</span>`;
     jobHtml=`<b title="${esc(full)}">${esc(name)}</b>${outsideNote}`;
     pctHtml=`<span class="qc-pct">${fillPct}%</span>`;
-    etaHtml=`<span class="qc-eta">${esc(fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress))}</span>`;
+    etaHtml=`<span class="qc-eta">${esc(fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress, fleetRow&&fleetRow.remaining))}</span>`;
   } else if(cat==="blocked"){
     jobHtml=`${t("queue.waiting_for_bed_clear")} <button type="button" class="btn primary qbedclear-btn queue-confirm-bedclear" data-printer="${esc(p.id)}">${t("queue.bed_clear_print_next_button")}</button>`;
   } else if(cat==="attention"){
@@ -4317,7 +4349,7 @@ function renderQueueExpandedPanel(p, qs, cat){
     items.push({ tag:t("queue.tag_printing_now"), now:true,
       name:full?stripExt(full):stripExt((fleetRow&&fleetRow.filename)||"")||"—", full:full||(fleetRow&&fleetRow.filename)||"",
       pct:(fleetRow&&typeof fleetRow.progress==="number")?Math.round(fleetRow.progress*100)+"%":"",
-      eta:fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress) });
+      eta:fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress, fleetRow&&fleetRow.remaining) });
   } else if(cat==="blocked"){
     items.push({ tag:t("queue.tag_blocked"), now:true, name:t("queue.waiting_for_bed_clear"), full:"" });
   } else if(cat==="attention"){
@@ -4747,7 +4779,11 @@ function fmtDuration(s){
   if(m)return m+'m '+String(sec).padStart(2,'0')+'s';
   return sec+'s';
 }
-function fmtRemaining(elapsed,progress){if(!elapsed||!progress||progress<=0)return'—';const total=elapsed/progress;const rem=Math.max(0,total-elapsed);return fmtDuration(rem);}
+// `remaining` (seconds) is the printer's own estimate, for connectors that
+// report one (Bambu Lab). It wins over the elapsed/progress extrapolation,
+// which on such a printer would rest on a whole-percent progress value.
+// Omitted or null for every other connector, which keeps today's behavior.
+function fmtRemaining(elapsed,progress,remaining){if(typeof remaining==='number'&&isFinite(remaining))return fmtDuration(Math.max(0,remaining));if(!elapsed||!progress||progress<=0)return'—';const total=elapsed/progress;const rem=Math.max(0,total-elapsed);return fmtDuration(rem);}
 
 // Klipper's current_layer only advances when a NEW layer's gcode starts, so
 // the final layer of a print never triggers a "next layer" bump — it stays
@@ -4966,6 +5002,9 @@ function afcLanesHtml(heads,activeExt,printerId,canUnload,finished){
     const color=esc((h&&h.hex)||'#383a4a');
     const material=h&&h.material||'—';
     const label=headLabel(i);
+    // A connector can name its slots the way the printer does (Bambu's AMS
+    // "A1".."D4", "HT1", "Ext-L"); everything else keeps T1..Tn.
+    const laneTitle=(h&&h.label)?String(h.label):'T'+(i+1);
     const uid=`${printerId}-${i}`;
     const cardStyle=active?`style="border:2px solid ${color}bb;box-shadow:inset 0 0 20px ${color}28,inset 0 0 6px ${color}18;background:${color}14"`:'';
     const hdrStyle=active?`style="color:${color}ee;background:${color}22;border-bottom-color:${color}33"`:'';
@@ -4985,7 +5024,7 @@ function afcLanesHtml(heads,activeExt,printerId,canUnload,finished){
       ? `<span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="${esc(headLabel(i))}">${spoolInner}</span>`
       : `<span title="${headLabel(i)}">${spoolInner}</span>`;
     return `<div class="afc-lane-card ${active?'active':loaded?'idle':'empty'}" ${cardStyle}>
-      <div class="afc-lane-hdr" ${hdrStyle}>T${i+1}${material&&material!=='—'?' '+esc(material):''}</div>
+      <div class="afc-lane-hdr" ${hdrStyle}>${esc(laneTitle)}${material&&material!=='—'?' '+esc(material):''}</div>
       <div class="afc-spool-area">
         ${spool}
         ${active?`<div class="afc-active-label" style="color:${color}cc">${esc(finished?t('fleet.card.afc_last_used'):t('fleet.card.afc_active'))}</div>`:''}
@@ -5097,7 +5136,7 @@ function updateFleetCardLiveValues(card, p){
   // Absent by design once the print completes — that cell becomes
   // "Finished <time>" instead, which is driven by completedAt and stays
   // structural. setText simply finds nothing then.
-  setText('[data-live="remaining"]', fmtRemaining(p.elapsed,p.progress));
+  setText('[data-live="remaining"]', fmtRemaining(p.elapsed,p.progress,p.remaining));
   // The target moves with the reading (both live on p.hotend/p.bed), so
   // setting a new bed target has to show up here too, not wait for the
   // next structural change.
@@ -5116,8 +5155,9 @@ function cardSignature(p){
   const stem=queuedReady?queuedReady.name:(p.filename||"");
   return JSON.stringify({
     online:p.online, state:p.state, name:p.name, brand:p.brand, url:p.url,
-    // progress/elapsed/bed/hotend are deliberately ABSENT — they are the
-    // four values that move on their own while a printer runs, and while
+    // progress/elapsed/bed/hotend (and remaining, the printer-reported
+    // countdown some connectors send) are deliberately ABSENT — they are the
+    // values that move on their own while a printer runs, and while
     // they were in here every actively printing card was destroyed and
     // rebuilt on every poll: a WebRTC camera renegotiated its session,
     // a .pstatus message being written by an in-flight action was wiped,
@@ -5208,7 +5248,7 @@ function buildCardHtml(p, need, dragEnabled){
       }
     }
     card.innerHTML=`
-      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${canEject(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title"))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${esc(p.brand||'SnapMaker')}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${canEject(p)&&!monitorOnly(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title"))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
       ${VIEW_MODE==='camera'?(!p.online
           ? `<div class="cam-shot-placeholder"><span>${esc(t("printer_status.offline"))}</span></div>`
@@ -5243,12 +5283,15 @@ function buildCardHtml(p, need, dragEnabled){
         // already points at the newly queued one.
         const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
         const stem=queuedReady?queuedReady.name:(p.filename||"");
-        const thumbCell=stem
+        const thumbCell=stem&&!noThumbs(p)
           ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
           `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.card.hotend_label"))}</div><div class="stats-cell-val"><span data-live="hotend-val">${extA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="hotend-target">${hotendBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="hotend-bar" style="${heatBarFillStyle(hotendBar)}"></div></div></div>`+
-          `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="${esc(t("fleet.card.bed_temp_title"))}"><div class="stats-cell-label">${esc(t("fleet.card.bed_label"))}</div><div class="stats-cell-val"><span data-live="bed-val">${bedA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="bed-target">${bedBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="bed-bar" style="${heatBarFillStyle(bedBar)}"></div></div></div>`+
+          (monitorOnly(p)
+            ? `<div class="stats-cell">`
+            : `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="${esc(t("fleet.card.bed_temp_title"))}">`)+
+          `<div class="stats-cell-label">${esc(t("fleet.card.bed_label"))}</div><div class="stats-cell-val"><span data-live="bed-val">${bedA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="bed-target">${bedBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="bed-bar" style="${heatBarFillStyle(bedBar)}"></div></div></div>`+
           `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.progress.layer_label"))}</div><div class="stats-cell-val">${layer?layer.current:'—'}<span class="stats-inline-target">${layer?'/'+layer.total:''}</span></div></div>`+
           thumbCell+
           `</div>`;
@@ -5290,7 +5333,7 @@ function buildCardHtml(p, need, dragEnabled){
           ? progRowHtml
           : camView
             ? `<div class="cam-prog-file">`+
-                `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"`:''}>${stem?`<img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)">`:''}</div>`+
+                `<div class="prog-file-thumb"${stem&&!noThumbs(p)?` data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"`:''}>${stem&&!noThumbs(p)?`<img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)">`:''}</div>`+
                 `<span class="prog-file-name">${esc(stem||'—')}</span>`+
                 progRowHtml+
               `</div>`
@@ -5304,13 +5347,15 @@ function buildCardHtml(p, need, dragEnabled){
           `<div class="prog-time-sep"></div>`+
           (p.state==='complete'
             ? `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.finished_label"))}</span><span class="prog-time-val">${fmtFinishedTime(p.completedAt)}</span></div>`
-            : `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="prog-time-val" data-live="remaining">${fmtRemaining(p.elapsed,p.progress)}</span></div>`)+
+            : `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="prog-time-val" data-live="remaining">${fmtRemaining(p.elapsed,p.progress,p.remaining)}</span></div>`)+
           `</div>`)+`</div>`;
       })():""}
       ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'):''}
       ${mapHtml}
       <div class="foot${busy?'':' foot-idle'}">
-        ${busy
+        ${monitorOnly(p)
+          ? monitorOnlyNoteHtml()
+          : busy
           ? (p.state==="paused"
                 ? `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_resume"))}</span></button>`
                 : `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""><span>${esc(t("printer.action_pause"))}</span></button>`)
@@ -5500,9 +5545,9 @@ function renderCamToolbar(preTabFleet){
 // shared verb + JS-composed "(N)" — parentheses here are UI notation, but
 // the full format still comes from the translation key, not concatenation.
 const BULK_ACT_DEFS=[
-  { act:"pause", buttonKey:"fleet.toolbar.bulk_pause_button", test:p=>p.state==="printing", reasonKey:"fleet.toolbar.bulk_reason_pause" },
-  { act:"resume", buttonKey:"fleet.toolbar.bulk_resume_button", test:p=>p.state==="paused", reasonKey:"fleet.toolbar.bulk_reason_resume" },
-  { act:"cancel", buttonKey:"fleet.toolbar.bulk_cancel_button", test:p=>p.state==="printing"||p.state==="paused", reasonKey:"fleet.toolbar.bulk_reason_cancel" },
+  { act:"pause", buttonKey:"fleet.toolbar.bulk_pause_button", test:p=>p.state==="printing"&&!monitorOnly(p), reasonKey:"fleet.toolbar.bulk_reason_pause" },
+  { act:"resume", buttonKey:"fleet.toolbar.bulk_resume_button", test:p=>p.state==="paused"&&!monitorOnly(p), reasonKey:"fleet.toolbar.bulk_reason_resume" },
+  { act:"cancel", buttonKey:"fleet.toolbar.bulk_cancel_button", test:p=>(p.state==="printing"||p.state==="paused")&&!monitorOnly(p), reasonKey:"fleet.toolbar.bulk_reason_cancel" },
 ];
 function updateCamToolbar(){
   for(const id of CAM_SELECTED){ if(!FLEET.some(f=>f.id===id)) CAM_SELECTED.delete(id); }
@@ -5542,7 +5587,7 @@ const BULK_ACT_RESULT_KEYS = { pause:"fleet.toolbar.bulk_result_paused", resume:
 async function bulkCtl(act){
   const eligible=[...CAM_SELECTED].filter(id=>{
     const p=FLEET.find(f=>f.id===id);
-    if(!p) return false;
+    if(!p||monitorOnly(p)) return false;
     return act==='pause' ? p.state==='printing' : act==='resume' ? p.state==='paused' : p.state==='printing'||p.state==='paused';
   });
   if(!eligible.length) return;
@@ -5663,7 +5708,9 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
     // already says "Loaded" for a different one.
     const queuedReady=p.queuedFile&&p.queuedFile.status==='ready'?p.queuedFile:null;
     const stem=queuedReady?queuedReady.name:(p.filename||"");
-    const fileCell=stem
+    const fileCell=stem&&noThumbs(p)
+      ? `<div class="list-file-cell"><span class="list-file-name">${esc(stem)}</span></div>`
+      : stem
       ? `<div class="list-file-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"><img class="list-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"><span class="list-file-name">${esc(stem)}</span></div>`
       : `<span class="list-file-empty">—</span>`;
     const pct=p.online&&p.progress!=null?p.progress*100:null;
@@ -5674,7 +5721,7 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
     // finish time to report — idle/error/cancelled rows already say so via
     // the 0% (or frozen %) above; a "—" placeholder there just adds noise.
     const progressMeta = p.state==='complete' ? fmtFinishedTime(p.completedAt)
-      : (p.state==='printing'||p.state==='paused') ? fmtRemaining(p.elapsed,p.progress)
+      : (p.state==='printing'||p.state==='paused') ? fmtRemaining(p.elapsed,p.progress,p.remaining)
       : '';
     const progressCell=pct!=null
       ? `<div class="list-progress">`+
@@ -5697,7 +5744,9 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
           return `<span class="list-filament-chip" style="background:${esc(hex)};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,4))}</span>`;
         }).join("")) || `<span class="list-file-empty">—</span>`
       : `<span class="list-file-empty">—</span>`;
-    const actionsCell=busy
+    const actionsCell=monitorOnly(p)
+      ? monitorOnlyNoteHtml(true)
+      : busy
       ? (p.state==="paused"
             ? `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""></button>`
             : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""></button>`)
@@ -6310,7 +6359,10 @@ function closeSendModal(){ $('sendmodal').classList.remove('show'); }
 
 function renderSendList(){
   const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
-  $('sendlist').innerHTML=urlFilterFleet(FLEET).map(p=>{
+  // Monitor-only printers are left out entirely: they can never receive a
+  // file, and the Select all / idle / compatible shortcuts must not be able to
+  // pick them either.
+  $('sendlist').innerHTML=urlFilterFleet(FLEET).filter(p=>!monitorOnly(p)).map(p=>{
     const idle=isIdle(p);
     const dot=p.online?(idle?'var(--ok)':'var(--busy)'):'var(--idle)';
     const {statusTxt}=statusColorText(p);
@@ -6502,7 +6554,7 @@ async function doEstop(printerId){
       `<div class="hc-panel-file" title="${esc(p.filename||"")}">${esc(stripExt(p.filename||""))}</div>`+
       `<div class="hc-panel-pct">${pct}%</div>`+
       `<div class="prog-track red"><div class="prog-fill red" style="width:${pct}%"></div></div>`+
-      `<div class="hc-panel-times">${esc(t("fleet.estop.progress_line",{elapsed:fmtDuration(p.elapsed),remaining:fmtRemaining(p.elapsed,p.progress)}))}</div>`;
+      `<div class="hc-panel-times">${esc(t("fleet.estop.progress_line",{elapsed:fmtDuration(p.elapsed),remaining:fmtRemaining(p.elapsed,p.progress,p.remaining)}))}</div>`;
   }
   const st=$("pst-"+printerId);
   openHoldConfirmDialog({
@@ -6566,7 +6618,7 @@ async function doCancelPrint(printerId){
       `<div class="hc-stat-sep"></div>`+
       `<div class="hc-stat center"><span class="hc-stat-label">${esc(t("fleet.progress.filament_label"))}</span><span class="hc-stat-val">${esc(filM)}</span></div>`+
       `<div class="hc-stat-sep"></div>`+
-      `<div class="hc-stat end"><span class="hc-stat-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="hc-stat-val">${esc(fmtRemaining(p&&p.elapsed,p&&p.progress))}</span></div>`+
+      `<div class="hc-stat end"><span class="hc-stat-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="hc-stat-val">${esc(fmtRemaining(p&&p.elapsed,p&&p.progress,p&&p.remaining))}</span></div>`+
     `</div>`;
   // Verified against queue/QueueEngine.js's actual onProbeFailedOrCancelled:
   // a printer whose queue believes it's "printing" transitions straight to
@@ -7329,7 +7381,8 @@ const BULKHEAT_REASON_KEYS = {
   busy: "fleet.modal.bulkheat.reason_busy",
   paused: "printer_status.paused",
   error: "printer_status.error",
-  maintenance: "printer_status.maintenance"
+  maintenance: "printer_status.maintenance",
+  monitor_only: "printer.monitor_only_label"
 };
 // A printer that's offline, mid-print, errored, or under maintenance can't
 // take a bed-temp command — same states server.js's connectors would refuse
@@ -7339,6 +7392,7 @@ const BULKHEAT_REASON_KEYS = {
 // other caller only ever checks it for truthiness/eligibility.
 function bulkheatDisableReason(p){
   if(!p||!p.online) return "offline";
+  if(monitorOnly(p)) return "monitor_only";
   if(p.state==="printing") return "busy";
   if(p.state==="paused") return "paused";
   if(p.state==="error") return "error";
@@ -10328,7 +10382,8 @@ const PRINTER_POOL_ERROR_KEYS={
   unknown_printer:"settings.printers.pool_error_unknown_printer",
   queue_not_idle:"settings.printers.pool_error_queue_not_idle",
   queue_not_empty:"settings.printers.pool_error_queue_not_empty",
-  unknown_pool:"settings.printers.pool_error_unknown_pool"
+  unknown_pool:"settings.printers.pool_error_unknown_pool",
+  monitor_only:"settings.printers.pool_error_monitor_only"
 };
 // ---- Printer address: IP / hostname + port ----
 // The connector owns the rules — scheme, default port, whether the port is
@@ -10482,6 +10537,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     `</select>`+
     `<div class="hint" style="margin-top:6px" data-i18n="settings.printers.transport_hint">${t("settings.printers.transport_hint")}</div>`+
     `</div>`+
+    `<div class="monitor-only-wrap settings-help" style="display:none;margin-top:10px" data-i18n="settings.printers.monitor_only_hint">${t("settings.printers.monitor_only_hint")}</div>`+
     `</div>`+
 
     `<div class="prow-section"><div class="prow-section-title" data-i18n="settings.printers.section_behavior">${t("settings.printers.section_behavior")}</div>`+
@@ -10530,6 +10586,7 @@ function addPrinterRow(name,url,opts,autoOpen){
   const filModeWrap=row.querySelector(".filmode-wrap"), filModeEl=row.querySelector(".pfilmode");
   filModeEl.value=(opts.filamentMode==="cfs")?"cfs":"single";
   const transportWrap=row.querySelector(".transport-wrap"), transportEl=row.querySelector(".ptransport");
+  const monitorOnlyWrap=row.querySelector(".monitor-only-wrap");
   transportEl.value=(opts.transport==="native"||opts.transport==="moonraker")?opts.transport:"auto";
   const syncPrintPrefVisibility=()=>{
     const caps=connectorCaps(connectorEl.value);
@@ -10553,6 +10610,9 @@ function addPrinterRow(name,url,opts,autoOpen){
     const isFlashForge=connectorEl.value==="flashforge-ad5x"||connectorEl.value==="flashforge-adventurer";
     transportWrap.style.display=isFlashForge?"":"none";
     if(!isFlashForge) transportEl.value="auto";
+    // A monitor-only connector (Bambu Lab) needs its serial + access code and
+    // gets no controls — say both where the credentials are entered.
+    monitorOnlyWrap.style.display=caps.control===false?"":"none";
   };
   const brandEl=row.querySelector(".pbrand");
   // Brand is editable for generic Klipper only (see the derivedBrand comment
@@ -10800,6 +10860,9 @@ function addPrinterRow(name,url,opts,autoOpen){
       try{
         const r=checkAuthFailure(await postJSON("/api/printer-pool",{printerId:row.dataset.printerId,printerPoolId:printerPoolEl.value||null}));
         const d=await r.json();
+        // Refused outright for a monitor-only printer: put the picker back to
+        // "no pool" so it does not keep showing an assignment that never saved.
+        if(d.code==="monitor_only") printerPoolEl.value="";
         if(!r.ok||d.error) throw new Error(PRINTER_POOL_ERROR_KEYS[d.code]?t(PRINTER_POOL_ERROR_KEYS[d.code]):(d.error||"HTTP "+r.status));
         // The server saved it, but PRINTERS_CFG is a snapshot fetched once at
         // page-load/gear-open — anything else that reads it (the Queue

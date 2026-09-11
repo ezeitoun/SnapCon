@@ -153,7 +153,11 @@ test("exactly four fields are absent from the signature — nothing else silentl
     "filename", "forceDefaults", "heads", "layer", "message", "name", "online",
     "plate", "queuedFile", "state", "statusOverride", "stem", "tags", "url"
   ]);
-  for (const gone of ["progress", "elapsed", "bed", "hotend"]) {
+  // `remaining` joined the live values with the Bambu Lab connector, which
+  // reports the printer's own countdown instead of leaving it to be derived
+  // from elapsed/progress. Like those two it only ever feeds the
+  // data-live="remaining" cell, so it is patched, never structural.
+  for (const gone of ["progress", "elapsed", "bed", "hotend", "remaining"]) {
     assert.equal(gone in sig, false, gone + " must stay out of the signature");
   }
 });
@@ -209,10 +213,12 @@ test("the build path and the live path share one heat-bar shadow spec", () => {
   assert.equal((appSrc.match(/0 0 6px \$\{bg\}/g) || []).length, 1, "exactly one shadow spec");
 });
 
-test("the live updater reads only the four live fields off the printer", () => {
+test("the live updater reads only the live fields off the printer", () => {
   const i = appSrc.indexOf("function updateFleetCardLiveValues(");
   const fn = appSrc.slice(i, appSrc.indexOf("\n}", i));
   const fields = [...new Set([...fn.matchAll(/\bp\.([a-zA-Z]+)/g)].map(m => m[1]))].sort();
-  assert.deepEqual(fields, ["bed", "elapsed", "hotend", "progress"],
+  // "remaining": a printer-reported countdown (Bambu Lab) — see the signature
+  // test above for why it is live rather than structural.
+  assert.deepEqual(fields, ["bed", "elapsed", "hotend", "progress", "remaining"],
     "patching anything else means that field no longer needs to be structural — decide deliberately, not by accident");
 });
