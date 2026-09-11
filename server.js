@@ -2202,6 +2202,57 @@ app.get("/api/snapshot", requireAuth, async (req, res) => {
   }
 });
 
+// ---- Live camera as a fragmented-MP4 byte stream ----
+// For connectors whose camera is a video stream the browser cannot open
+// itself (Bambu Lab: RTSPS). The connector relays it (one upstream session per
+// printer, shared by every viewer) and this route hands one viewer its copy.
+// The page plays it through Media Source Extensions; X-SnapCon-Codec tells it
+// which SourceBuffer to create before the first byte arrives. The response
+// never ends on its own — it stops when the viewer goes away or the camera
+// does. A viewer that falls far behind is dropped by the relay instead of
+// buffering the printer's video in SnapCon's memory.
+app.get("/api/camera-stream", requireAuth, async (req, res) => {
+  const p = PRINTERS[parseInt(req.query.printer, 10)];
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  const c = getConnector(p.connector);
+  if (!c.openCameraStream || !getCapabilities(p.connector, p).cameraStream) return res.status(400).json({ error: p.name + " has no live camera stream" });
+  let sub = null, ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    if (sub) sub.unsubscribe();
+    if (!res.writableEnded) res.end();
+  };
+  const headersFor = (codec) => ({
+    "Content-Type": "video/mp4",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-SnapCon-Codec": codec || ""
+  });
+  let pendingWrites = [];
+  const viewer = {
+    // Bytes can arrive (init segment + buffered GOP) before openCameraStream
+    // resolves with the codec for the headers — hold them until then.
+    write: (buf) => { if (ended) return; if (pendingWrites) pendingWrites.push(buf); else res.write(buf); },
+    end: () => finish(),
+    backlog: () => res.writableLength || 0
+  };
+  req.on("close", finish);
+  try {
+    sub = await c.openCameraStream(p, viewer);
+  } catch (e) {
+    pendingWrites = null;
+    if (!ended) res.status(e.status || 502).json({ error: e.message });
+    ended = true;
+    return;
+  }
+  if (ended) { sub.unsubscribe(); return; }
+  res.writeHead(200, headersFor(sub.codec));
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  const queued = pendingWrites; pendingWrites = null;
+  for (const b of queued) res.write(b);
+});
+
 // ---- Thumbnail proxy: fetch gcode thumbnail from Moonraker ----
 app.get("/api/thumbnail", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];

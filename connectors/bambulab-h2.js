@@ -8,7 +8,12 @@
 // fleet card, list view, notifications and audit trail then work unchanged:
 // state, progress, remaining time, layers, bed/nozzle temperatures, fan,
 // speed, and every AMS / AMS HT / external-spool slot with its colour and
-// material.
+// material. Two more read-only feeds sit on top:
+//   - the camera, relayed live from the printer's RTSPS stream (port 322) as
+//     fragmented MP4 (connectors/bambu-camera.js), once "LAN Only Liveview"
+//     is switched on at the printer;
+//   - the job preview image, read out of the job's .3mf over FTPS (port 990,
+//     connectors/bambu-preview.js).
 //
 // What it deliberately does NOT do: send the printer anything that changes
 // what it does. The only messages ever published are `get_version` and
@@ -52,6 +57,9 @@ const { MqttClient } = require("./bambu-mqtt");
 const { BAMBU_CA_PEMS } = require("./bambu-ca");
 const { parseAddressUrl, isValidHost } = require("./address");
 const { monitorOnlyError } = require("./monitorOnly");
+const camera = require("./bambu-camera");
+const preview = require("./bambu-preview");
+const { FtpsClient } = require("./ftps-client");
 
 exports.label = "Bambu Lab H2D / H2S / H2C (monitoring only)";
 exports.brand = "Bambu Lab";
@@ -61,14 +69,10 @@ exports.address = { scheme: "mqtts", defaultPort: 8883, portEditable: false, req
 exports.capabilities = {
   // THE flag: see file header and connectors/monitorOnly.js.
   control: false,
-  // H2 cameras are RTSPS-only (port 322, and only once "LAN Only Liveview" is
-  // switched on at the printer). Turning that into a still frame needs an
-  // H.264 decoder SnapCon does not ship, so no camera is offered rather than
-  // one that never loads.
-  camera: false, cameraSnapshot: false,
-  // The job preview lives inside the .3mf on the printer's storage (FTPS),
-  // not in the status report — the card shows "—" instead of asking.
-  thumbnails: false,
+  // The camera is decided per printer by getCapabilities() below: it exists
+  // only once the printer reports LAN Only Liveview as switched on. This
+  // static set is what a printer SnapCon has not heard from yet gets.
+  camera: false, cameraSnapshot: false, cameraStream: false,
   filamentHeads: true, headMapping: false,
   excludeObject: false, autoLevel: false, flowCalibration: false, timelapse: false,
   unloadFilament: false, setColor: false,
@@ -85,6 +89,7 @@ exports.capabilities = {
 };
 
 const MQTT_PORT = 8883;
+const FTP_PORT = 990;
 const MQTT_USER = "bblp";
 
 // ---- logging ----
@@ -701,6 +706,8 @@ async function connect(c) {
 
 function teardown(c) {
   c.state = "closed";
+  const relay = c.key != null ? relays.get(c.key) : null;
+  if (relay) { relay.stop(); relays.delete(c.key); }
   if (c.reconnectTimer) { clearTimeout(c.reconnectTimer); c.reconnectTimer = null; }
   const client = c.client;
   c.client = null;
@@ -749,6 +756,7 @@ function ensureConn(key, name, cfg) {
   }
   if (!c) {
     c = newConn(name, cfg);
+    c.key = key;
     connections.set(key, c);
     ensureSweep();
     connect(c);
@@ -805,12 +813,111 @@ for (const fn of ["uploadFile", "startPrintFile", "pause", "resume", "cancel", "
 // Read-only and harmless: nothing on the printer is listed for printing from
 // SnapCon, since SnapCon cannot start one here.
 exports.listFiles = async () => [];
-// The job preview lives inside the .3mf on the printer's storage (FTPS), not
-// in the status report. 404 makes the card show its "—" placeholder.
-exports.getThumbnail = async () => {
-  const e = new Error("Bambu Lab print previews are not available to SnapCon");
-  e.status = 404;
-  throw e;
+
+// ---- camera ----
+// The printer advertises its own stream as ipcam.rtsp_url once LAN Only
+// Liveview is on ("disable" otherwise). Only its port and path are taken from
+// it — the host is always the one configured (and TLS-verified) here, never an
+// address out of a status message.
+function liveviewTarget(p) {
+  const c = p && p.id != null ? connections.get(String(p.id)) : null;
+  const url = c && c.haveBaseline && c.status && c.status.ipcam && c.status.ipcam.rtsp_url;
+  if (typeof url !== "string" || !/^rtsps:\/\//i.test(url)) return null;
+  let port = camera.CAMERA_PORT, path = camera.CAMERA_PATH;
+  try {
+    const u = new URL(url);
+    if (u.port) port = Number(u.port);
+    if (u.pathname && u.pathname !== "/") path = u.pathname;
+  } catch { /* keep the documented defaults */ }
+  return { port, path };
+}
+
+// Synchronous by contract (server.js builds fleet rows with it). Reads what
+// the printer's last report said about its camera.
+function getCapabilities(p) {
+  if (!liveviewTarget(p)) return exports.capabilities;
+  return { ...exports.capabilities, camera: true, cameraStream: true, cameraSnapshot: !!camera.ffmpegPath() };
+}
+exports.getCapabilities = getCapabilities;
+
+function defaultCameraTransport(cfg, port) {
+  return tls.connect({ ...tlsOptions(cfg), port });
+}
+let cameraTransportFactory = defaultCameraTransport;
+
+const relays = new Map(); // printer id -> CameraRelay
+function relayFor(p) {
+  const cfg = printerConfig(p);
+  if (cfg.error) throw Object.assign(new Error(cfg.error), { status: 400 });
+  const target = liveviewTarget(p);
+  if (!target) {
+    throw Object.assign(new Error("The camera is off — switch on \"LAN Only Liveview\" on the printer (Settings → Network / LAN Mode)."), { status: 404 });
+  }
+  const key = String(p.id);
+  const sig = cfg.sig + "|" + target.port + target.path;
+  let r = relays.get(key);
+  if (r && r.sig !== sig) { r.stop(); relays.delete(key); r = null; }
+  if (!r) {
+    const host = cfg.host.includes(":") ? "[" + cfg.host + "]" : cfg.host;
+    r = new camera.CameraRelay({
+      key, name: p.name,
+      createStream: () => cameraTransportFactory(cfg, target.port),
+      url: `rtsps://${host}:${target.port}${target.path}`,
+      username: MQTT_USER, password: cfg.code,
+      log
+    });
+    r.sig = sig;
+    relays.set(key, r);
+  }
+  return r;
+}
+
+// Live video for /api/camera-stream. `viewer` = { write(buf), end(err),
+// backlog() }; resolves once the first keyframe is on its way, with the codec
+// string the browser needs for its SourceBuffer.
+exports.openCameraStream = async (p, viewer) => relayFor(p).subscribe(viewer);
+
+// A still frame, for the snapshot modal and notification images. Only with
+// ffmpeg on the host (see connectors/bambu-camera.js).
+exports.getCameraSnapshot = async (p) => {
+  if (!camera.ffmpegPath()) throw Object.assign(new Error("Still frames from Bambu Lab cameras need ffmpeg on the SnapCon host"), { status: 501 });
+  const key = await relayFor(p).keyframe();
+  return { contentType: "image/jpeg", buffer: await camera.jpegFromKeyframe(key) };
+};
+
+// ---- job preview ----
+function defaultFtpControl(cfg) {
+  return tls.connect({ ...tlsOptions(cfg), port: FTP_PORT });
+}
+function defaultFtpData(cfg, port, session) {
+  return tls.connect({ ...tlsOptions(cfg), port, session });
+}
+let ftpTransportFactory = { control: defaultFtpControl, data: defaultFtpData };
+
+// `file` is the job name the card shows. The printer's own report adds which
+// plate is printing; for any other file, plate 1.
+exports.getThumbnail = async (p, file) => {
+  const cfg = printerConfig(p);
+  if (cfg.error) throw Object.assign(new Error(cfg.error), { status: 404 });
+  const c = p && p.id != null ? connections.get(String(p.id)) : null;
+  const st = (c && c.status) || {};
+  const current = String(st.subtask_name || "") === String(file || "") || basename(st.gcode_file) === String(file || "");
+  const png = await preview.getPreview({
+    printerKey: String(p.id != null ? p.id : cfg.sig),
+    jobName: file,
+    gcodeFile: current ? st.gcode_file : "",
+    connect: async () => {
+      const ftp = new FtpsClient({
+        connectControl: () => ftpTransportFactory.control(cfg),
+        connectData: (port, session) => ftpTransportFactory.data(cfg, port, session)
+      });
+      try { await ftp.connect(MQTT_USER, cfg.code); }
+      catch (e) { ftp.close(); throw e; }
+      return ftp;
+    }
+  }).catch((e) => { debugLog(p.name, "preview: " + e.message); return null; });
+  if (!png) throw Object.assign(new Error("No preview for " + file), { status: 404 });
+  return { contentType: "image/png", buffer: png };
 };
 
 // exported for tests only
@@ -818,6 +925,9 @@ exports._internal = {
   normalizeBambuState, decodeHeads, mergeReport, mapState, unpackTemp, formatPrintError, trackJob,
   printerConfig, describeError, handleMessage, newConn, connections, teardown, sweep,
   setTransportFactory(fn) { transportFactory = fn || defaultTransport; },
+  setCameraTransportFactory(fn) { cameraTransportFactory = fn || defaultCameraTransport; },
+  setFtpTransportFactory(f) { ftpTransportFactory = f || { control: defaultFtpControl, data: defaultFtpData }; },
+  relays, liveviewTarget,
   defaultTransport, tlsOptions,
   timings: { FIRST_REPORT_WAIT_MS, PUSHALL_MIN_GAP_MS, SILENCE_PUSHALL_MS, RESYNC_MS, STALE_MS, AUTH_RETRY_MS }
 };

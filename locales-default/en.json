@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 46,
+    "version": 48,
     "snapconVersion": "0.7.0",
     "updated": "2026-09-11"
   },
@@ -121,7 +121,10 @@
       "disabled_label": "Camera Disabled",
       "lan_only": "Camera available on local network only",
       "no_feed": "No Feed",
-      "retry_title": "Click to try again"
+      "retry_title": "Click to try again",
+      "live": "Live",
+      "stream_paused": "Live view paused — click to watch",
+      "stream_unsupported": "This browser cannot play this camera (it lacks H.264 Media Source support). Try a current Chrome, Edge, Firefox or Safari."
     },
     "error_panel": {
       "code_prefix": "Error Code: {code}",
@@ -1081,7 +1084,7 @@
       "transport_option_native": "FlashForge API (port 8898)",
       "transport_option_moonraker": "Moonraker (port 7125)",
       "transport_hint": "Stock firmware serves the FlashForge API on port 8898. A firmware mod such as ZMOD or Forge-X replaces it with Moonraker on port 7125. SnapCon normally detects which is live and re-checks if it changes — pin a specific one only if detection gets it wrong.",
-      "monitor_only_hint": "Monitoring only: SnapCon reads status, progress, temperatures and AMS slots over the printer's local connection and never sends it commands. Enter the printer's serial number and its 8-character LAN access code (on the printer: Settings → Network / LAN Only Mode). LAN Only Mode itself does not need to be switched on."
+      "monitor_only_hint": "Monitoring only: SnapCon reads status, progress, temperatures and AMS slots over the printer's local connection and never sends it commands. Enter the printer's serial number and its 8-character LAN access code (on the printer: Settings → Network / LAN Only Mode). LAN Only Mode itself does not need to be switched on. For the camera, switch on \"LAN Only Liveview\" on the printer; for job previews, turn on \"Store sent files on external storage\" with a USB drive or SD card inserted."
     },
     "firmware": {
       "get_button": "Refresh versions",

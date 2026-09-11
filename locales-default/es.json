@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 46,
+    "version": 48,
     "snapconVersion": "0.7.0",
     "updated": "2026-09-11"
   },
@@ -121,7 +121,10 @@
       "disabled_label": "Cámara desactivada",
       "lan_only": "Cámara disponible solo en la red local",
       "no_feed": "Sin señal",
-      "retry_title": "Haz clic para volver a intentar"
+      "retry_title": "Haz clic para volver a intentar",
+      "live": "En directo",
+      "stream_paused": "Vista en directo en pausa — haz clic para verla",
+      "stream_unsupported": "Este navegador no puede reproducir esta cámara (no admite H.264 con Media Source). Prueba con una versión actual de Chrome, Edge, Firefox o Safari."
     },
     "error_panel": {
       "code_prefix": "Código de error: {code}",
@@ -1081,7 +1084,7 @@
       "transport_option_native": "API de FlashForge (puerto 8898)",
       "transport_option_moonraker": "Moonraker (puerto 7125)",
       "transport_hint": "El firmware original ofrece la API de FlashForge en el puerto 8898. Un firmware modificado como ZMOD o Forge-X la sustituye por Moonraker en el puerto 7125. SnapCon detecta normalmente cuál está activo y vuelve a comprobarlo si cambia; fija uno concreto solo si la detección falla.",
-      "monitor_only_hint": "Solo supervisión: SnapCon lee el estado, el progreso, las temperaturas y las ranuras del AMS a través de la conexión local de la impresora y nunca le envía comandos. Introduce el número de serie de la impresora y su código de acceso LAN de 8 caracteres (en la impresora: Ajustes → Red / Modo solo LAN). No es necesario activar el Modo solo LAN."
+      "monitor_only_hint": "Solo supervisión: SnapCon lee el estado, el progreso, las temperaturas y las ranuras del AMS a través de la conexión local de la impresora y nunca le envía comandos. Introduce el número de serie de la impresora y su código de acceso LAN de 8 caracteres (en la impresora: Ajustes → Red / Modo solo LAN). No es necesario activar el Modo solo LAN. Para la cámara, activa «LAN Only Liveview» en la impresora; para las vistas previas de los trabajos, activa «Guardar archivos enviados en almacenamiento externo» con una memoria USB o tarjeta SD insertada."
     },
     "firmware": {
       "get_button": "Actualizar versiones",

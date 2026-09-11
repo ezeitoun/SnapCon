@@ -32,7 +32,8 @@ test("declares itself monitor-only and offers no control surface", () => {
     assert.equal(caps[k], false, k);
   }
   assert.equal(caps.filamentHeads, true, "AMS slots are status, and are shown");
-  assert.equal(caps.thumbnails, false, "no job preview is served");
+  assert.notEqual(caps.thumbnails, false, "job previews are served (read over FTPS)");
+  assert.equal(caps.cameraStream, false, "no camera until the printer reports LAN Only Liveview");
 });
 
 test("every control export refuses with the monitor-only error instead of acting", async () => {

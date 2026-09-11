@@ -474,6 +474,14 @@ the controls would be, and the server refuses print, pause/resume/cancel, E-Stop
 Printer Pool and queue requests for them. The connection is verified against Bambu Lab's own
 certificate authority and the printer's serial number before the access code is sent.
 
+- **Live camera.** With *LAN Only Liveview* switched on at the printer, the card gets a camera
+  button, Camera View shows the printer live and the camera window plays it live. SnapCon relays the
+  printer's RTSPS stream as fragmented MP4 that the browser decodes itself - no plugin, and it works
+  on a plain http:// LAN address. One camera session per printer, only while someone watches.
+  Notification pictures additionally need ffmpeg on the SnapCon host.
+- **Job preview.** The plate image is read from the job's .3mf on the printer (FTPS, ranged reads of
+  just the image). On H2 firmware this needs *Store sent files on external storage* with a USB drive
+  or SD card in the printer.
 - **Printer-reported remaining time.** A connector can now report the printer's own countdown,
   which the card, list view and queue view prefer over estimating it from elapsed time and progress.
 - **Named filament lanes.** A connector can label its slots the way the printer does (A1, HT1,

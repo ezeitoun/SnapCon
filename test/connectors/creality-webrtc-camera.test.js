@@ -227,7 +227,9 @@ test("every teardown path closes the session", () => {
   assert.match(appSrc, /if\(cached\)\{[\s\S]*?cached\.el\.remove\(\); closeCamRtc\(p\.id\);/);   // card rebuilt
   assert.match(appSrc, /if\(!seen\.has\(id\)\)\{ closeCamRtc\(id\);/);                        // deleted / offline / filtered
   assert.match(appSrc, /CARD_CACHE\.clear\(\); closeAllCamRtc\(\);/);                         // full rebuild
-  assert.match(appSrc, /if\(document\.hidden\)\{ closeAllCamRtc\(\); return; \}/);            // tab hidden
+  // tab hidden — the relayed-stream transport (Bambu) also drops the camera
+  // modal's session there, which closeAllCamRtc() deliberately leaves alone.
+  assert.match(appSrc, /if\(document\.hidden\)\{ closeAllCamRtc\(\);( closeAllCamStream\(true\);)? return; \}/);
   const cleanup = appSrc.match(/function camRtcCleanupEntry\([\s\S]*?\n\}/)[0];
   assert.match(cleanup, /entry\.pc\.close\(\)/);
   assert.match(cleanup, /entry\.video\.srcObject=null/);

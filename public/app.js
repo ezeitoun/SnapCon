@@ -521,12 +521,14 @@ function camRtcCleanupEntry(entry){
   if(entry.video){ try{ entry.video.srcObject=null; }catch{} }
 }
 function closeCamRtc(id){
+  closeCamStream(id); // the relayed-stream tile for this printer, if any — same lifecycle
   const entry=CAM_RTC.get(id);
   if(!entry) return;
   camRtcCleanupEntry(entry);
   CAM_RTC.delete(id);
 }
 function closeAllCamRtc(){
+  closeAllCamStream(false);
   for(const entry of CAM_RTC.values()) camRtcCleanupEntry(entry);
   CAM_RTC.clear();
 }
@@ -772,6 +774,226 @@ function camRtcObserver(){
 function observeCamRtc(video,id,url){
   video.dataset.camrtcurl=url;
   camRtcObserver().observe(video);
+}
+
+// ---- Relayed camera streams (a THIRD transport: server-relayed fMP4) ----
+//
+// Some printers stream H.264 over RTSP, which no browser can open (Bambu Lab
+// H2: RTSPS on port 322). SnapCon's server holds the one RTSP session and
+// re-wraps the video as fragmented MP4 (/api/camera-stream); the page plays
+// that byte stream through Media Source Extensions. MSE, not WebCodecs:
+// SnapCon is usually opened as plain http://<lan-ip>, which is not a secure
+// context, and WebCodecs only exists in secure contexts. The browser does all
+// the decoding; the server never touches a pixel.
+//
+// Sessions are keyed separately from printers so a Camera View tile and the
+// camera modal can watch the same printer at once (the server shares one
+// upstream between them). Tile keys are the printer id, the modal's is
+// "snap". Every path that retires a tile already calls closeCamRtc(), which
+// closes the tile's stream too — so both live transports share one lifecycle.
+const CAM_STREAM = new Map(); // key -> { video, abort, url, state, startedAt, pendingClose }
+// Browsers open at most 6 connections to one host over HTTP/1.1, and every
+// live view holds one for as long as it plays. Past this many live tiles the
+// fleet poll and thumbnails would queue behind video, so further tiles wait
+// behind a "click to watch" placeholder instead (the camera modal is extra).
+const CAM_STREAM_MAX_TILES = 3;
+function camStreamMediaSource(){ return window.ManagedMediaSource || window.MediaSource || null; }
+function camStreamCleanup(entry){
+  entry.state="closed";
+  clearTimeout(entry.pendingClose); entry.pendingClose=null;
+  try{ entry.abort.abort(); }catch{}
+  if(entry.video){ try{ entry.video.pause(); entry.video.removeAttribute("src"); entry.video.load(); }catch{} }
+  if(entry.url){ try{ URL.revokeObjectURL(entry.url); }catch{} }
+}
+// A Camera View tile is closed one tick late: a card rebuilt in the same
+// render pass (it re-renders on every layer change) mounts a new slot right
+// away, and mountCamStream adopts the running player into it instead of
+// reconnecting and showing black for a second. A real removal is simply
+// cleaned up on that next tick. The modal's session closes at once.
+function closeCamStream(key){
+  const entry=CAM_STREAM.get(key);
+  if(!entry) return;
+  if(key!=="snap"&&entry.state!=="closed"&&entry.video){
+    if(!entry.pendingClose) entry.pendingClose=setTimeout(()=>{ if(CAM_STREAM.get(key)===entry){ CAM_STREAM.delete(key); camStreamCleanup(entry); } },0);
+    return;
+  }
+  CAM_STREAM.delete(key);
+  camStreamCleanup(entry);
+}
+// Tiles only unless `all` — a full fleet re-render must not cut the camera
+// modal that is open on top of it.
+function closeAllCamStream(all){
+  for(const [key,entry] of [...CAM_STREAM]){
+    if(!all && key==="snap") continue;
+    CAM_STREAM.delete(key); camStreamCleanup(entry);
+  }
+}
+// Plays /api/camera-stream in `video` until the stream ends or the session is
+// closed. Resolves when it was closed on purpose; rejects when the camera, the
+// network or the decoder ended it, so the caller can show a retryable
+// placeholder instead of a frozen frame.
+async function openCamStream(key, printerId, video){
+  const prev=CAM_STREAM.get(key);
+  if(prev){ CAM_STREAM.delete(key); camStreamCleanup(prev); }
+  const entry={ video, abort:new AbortController(), url:null, state:"connecting", startedAt:Date.now(), pendingClose:null, failure:null };
+  CAM_STREAM.set(key, entry);
+  const fail=(err)=>{ if(entry.state!=="closed"&&!entry.failure){ entry.failure=err||new Error(t("fleet.camera.no_feed")); try{ entry.abort.abort(); }catch{} } };
+  try{
+    const r=await fetch("/api/camera-stream?printer="+printerId,{signal:entry.abort.signal, cache:"no-store"});
+    checkAuthFailure(r);
+    if(!r.ok){ let msg=""; try{ msg=(await r.json()).error||""; }catch{} throw new Error(msg||("HTTP "+r.status)); }
+    const codec=r.headers.get("X-SnapCon-Codec")||"avc1.640028";
+    const mime='video/mp4; codecs="'+codec+'"';
+    const MS=camStreamMediaSource();
+    if(!MS||!MS.isTypeSupported(mime)) throw new Error(t("fleet.camera.stream_unsupported"));
+    const ms=new MS();
+    video.disableRemotePlayback=true; // ManagedMediaSource (iOS/Safari) requires it
+    entry.url=URL.createObjectURL(ms);
+    video.src=entry.url;
+    video.addEventListener("error",()=>fail(),{once:true});
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error(t("fleet.camera.no_feed"))),5000);
+      ms.addEventListener("sourceopen",()=>{ clearTimeout(timer); resolve(); },{once:true});
+    });
+    ms.addEventListener("sourceended",()=>fail());
+    ms.addEventListener("sourceclose",()=>fail());
+    const sb=ms.addSourceBuffer(mime);
+    sb.mode="segments";
+    sb.addEventListener("error",()=>fail());
+    const queue=[];
+    let queuedBytes=0;
+    const pump=()=>{
+      if(entry.state==="closed"||entry.failure||sb.updating||!queue.length||ms.readyState!=="open") return;
+      const b=video.buffered;
+      // Keep the buffer short: this is a live picture, not a recording.
+      if(b.length&&video.currentTime-b.start(0)>20){ try{ sb.remove(b.start(0),video.currentTime-5); return; }catch{} }
+      try{
+        // Peek, append, then drop: a chunk refused with QuotaExceededError must
+        // be retried, not lost — chunks are arbitrary slices of one byte stream.
+        sb.appendBuffer(queue[0]);
+        queuedBytes-=queue[0].byteLength; queue.shift();
+      }catch(e){
+        if(e&&e.name==="QuotaExceededError"&&b.length&&video.currentTime-b.start(0)>1){ try{ sb.remove(b.start(0),video.currentTime-1); }catch{} return; }
+        fail(e);
+      }
+    };
+    sb.addEventListener("updateend",()=>{
+      const b=video.buffered;
+      if(b.length){
+        const end=b.end(b.length-1);
+        // Stay at the live edge: start at the first buffered frame, and jump
+        // forward whenever playback has fallen behind (a stall, a background tab).
+        if(video.currentTime<b.start(b.length-1)||end-video.currentTime>2.5) video.currentTime=Math.max(b.start(b.length-1),end-0.3);
+        if(video.paused) video.play().catch(()=>{});
+      }
+      if(entry.state==="connecting") entry.state="live";
+      pump();
+    });
+    const reader=r.body.getReader();
+    for(;;){
+      const { done, value }=await reader.read();
+      if(done||entry.state==="closed") break;
+      if(entry.failure) throw entry.failure;
+      queue.push(value); queuedBytes+=value.byteLength;
+      // A decoder that stopped consuming must not let the page buffer video forever.
+      if(queuedBytes>16*1024*1024) throw new Error(t("fleet.camera.no_feed"));
+      pump();
+    }
+  }catch(e){
+    if(entry.state==="closed") return; // closed on purpose (scrolled away, modal closed, view switched)
+    if(CAM_STREAM.get(key)===entry){ CAM_STREAM.delete(key); camStreamCleanup(entry); }
+    throw entry.failure||e;
+  }
+  if(entry.state==="closed") return;
+  if(CAM_STREAM.get(key)===entry){ CAM_STREAM.delete(key); camStreamCleanup(entry); }
+  throw entry.failure||new Error(t("fleet.camera.no_feed"));
+}
+// Same slot contract as mountCamShot/mountCamRtc. The session opens when the
+// tile scrolls into view and closes when it leaves, via the observer below.
+function mountCamStream(slot, id){
+  const running=CAM_STREAM.get(id);
+  if(running&&running.pendingClose&&running.video&&running.state!=="closed"){
+    // Adopt the player of the card this one replaces (see closeCamStream).
+    clearTimeout(running.pendingClose); running.pendingClose=null;
+    slot.replaceWith(running.video);
+    running.video.play().catch(()=>{});
+    return;
+  }
+  const video=document.createElement("video");
+  video.className="cam-shot cam-rtc cam-stream";
+  video.autoplay=true; video.playsInline=true; video.muted=true;
+  video.dataset.camstream=String(id);
+  slot.replaceWith(video);
+  camStreamObserver().observe(video);
+}
+function camStreamLiveTiles(){ return [...CAM_STREAM].filter(([k,e])=>k!=="snap"&&e.state!=="closed"&&!e.pendingClose); }
+// A tile that could not start because the live-tile limit is reached. Clicking
+// it frees the longest-running tile (which gets this placeholder in turn).
+function camStreamWaitingEl(id){
+  return camShotPlaceholderEl(t("fleet.camera.stream_paused"),function onClick(){
+    const ph=this instanceof Element?this:null;
+    const live=camStreamLiveTiles().sort((a,b)=>a[1].startedAt-b[1].startedAt);
+    if(live.length>=CAM_STREAM_MAX_TILES){
+      const [oldId,oldEntry]=live[0];
+      const oldVideo=oldEntry.video;
+      CAM_STREAM.delete(oldId); camStreamCleanup(oldEntry);
+      if(oldVideo&&oldVideo.isConnected){ if(CAM_STREAM_OBSERVER) CAM_STREAM_OBSERVER.unobserve(oldVideo); oldVideo.replaceWith(camStreamWaitingEl(oldId)); }
+    }
+    const target=ph||document.querySelector('.cam-shot-placeholder[data-camwait="'+id+'"]');
+    if(!target) return;
+    const slot=document.createElement("div");
+    target.replaceWith(slot);
+    mountCamStream(slot,id);
+  });
+}
+let CAM_STREAM_OBSERVER=null;
+function camStreamObserver(){
+  if(CAM_STREAM_OBSERVER) return CAM_STREAM_OBSERVER;
+  CAM_STREAM_OBSERVER=new IntersectionObserver(entries=>{
+    for(const e of entries){
+      const el=e.target, id=parseInt(el.dataset.camstream,10);
+      if(e.isIntersecting){
+        const cur=CAM_STREAM.get(id);
+        if(cur&&cur.video===el&&cur.state!=="closed"){ clearTimeout(cur.pendingClose); cur.pendingClose=null; continue; }
+        if(camStreamLiveTiles().length>=CAM_STREAM_MAX_TILES){
+          CAM_STREAM_OBSERVER.unobserve(el);
+          const wait=camStreamWaitingEl(id); wait.dataset.camwait=String(id);
+          el.replaceWith(wait);
+          continue;
+        }
+        openCamStream(id,id,el).catch(err=>{
+          if(!el.isConnected) return;
+          CAM_STREAM_OBSERVER.unobserve(el);
+          // Retryable: a camera that was switched off, or a printer that
+          // dropped off the network, can come back.
+          const ph=camShotPlaceholderEl(t("fleet.camera.no_feed"),()=>{
+            const slot=document.createElement("div");
+            ph.replaceWith(slot);
+            mountCamStream(slot,id);
+          });
+          ph.title=err&&err.message?err.message:t("fleet.camera.retry_title");
+          el.replaceWith(ph);
+        });
+      }else if(CAM_STREAM.get(id)&&CAM_STREAM.get(id).video===el){
+        closeCamStream(id);
+      }
+    }
+  },{root:null,rootMargin:"200px",threshold:0.01});
+  return CAM_STREAM_OBSERVER;
+}
+// Coming back to a hidden tab: every session was closed when it was hidden
+// (visibilitychange), but a tile whose card did not change is reused as-is and
+// the observer does not fire again for an element that never left the view.
+// Re-observing makes it report the current intersection, which reconnects the
+// visible tiles; an open camera modal reloads its stream the same way.
+function camStreamResume(){
+  if(CAM_STREAM_OBSERVER){
+    document.querySelectorAll("video[data-camstream]").forEach(v=>{ CAM_STREAM_OBSERVER.unobserve(v); CAM_STREAM_OBSERVER.observe(v); });
+  }
+  if($("snapmodal")&&$("snapmodal").classList.contains("show")&&SNAP_PRINTER!==null){
+    const p=FLEET.find(f=>f.id===SNAP_PRINTER);
+    if(p&&p.capabilities?.cameraStream&&!CAM_STREAM.has("snap")) loadSnapshot();
+  }
 }
 
 // ---- Fleet sort ----
@@ -1264,8 +1486,8 @@ async function init(){
     // A hidden tab has no visible camera tile, so nothing should be holding a
     // media session open. Coming back re-renders the fleet, which re-mounts
     // the tiles and lets the observer reconnect the ones actually on screen.
-    if(document.hidden){ closeAllCamRtc(); return; }
-    loadFiles(); loadFleet();
+    if(document.hidden){ closeAllCamRtc(); closeAllCamStream(true); return; }
+    loadFiles(); loadFleet(); camStreamResume();
   });
 }
 
@@ -5439,7 +5661,11 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
       // (no server-side snapshot) gets a live <video>, everything else
       // keeps the existing JPEG path untouched.
       if(slot){
-        if(p.capabilities?.cameraWebrtc && !p.capabilities?.cameraSnapshot && p.cameraWebrtcUrl) mountCamRtc(slot, p.id, p.cameraWebrtcUrl);
+        // A relayed stream wins over snapshots when a connector offers both
+        // (Bambu with ffmpeg on the host): live video costs the server nothing
+        // extra, while a snapshot per tile per refresh would spawn a decoder.
+        if(p.capabilities?.cameraStream) mountCamStream(slot, p.id);
+        else if(p.capabilities?.cameraWebrtc && !p.capabilities?.cameraSnapshot && p.cameraWebrtcUrl) mountCamRtc(slot, p.id, p.cameraWebrtcUrl);
         else mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
       }
     }
@@ -6872,6 +7098,7 @@ function closeSnapshot(){
   // Only a session this modal opened — a Camera View tile's session keeps
   // running behind the modal.
   if(SNAP_RTC_OWNED!=null){ closeCamRtc(SNAP_RTC_OWNED); SNAP_RTC_OWNED=null; }
+  closeCamStream("snap");
   SNAP_PRINTER=null;
 }
 // Gives the Snapshot modal something to capture from. In Camera View a tile
@@ -6915,6 +7142,24 @@ async function loadSnapshot(){
   const wrap=$("snapwrap");
   wrap.innerHTML='<span style="color:var(--ink-dim)">'+esc(t("fleet.modal.snapshot.loading"))+'</span>';
   $("snapts").textContent='';
+  // A relayed stream (Bambu Lab) is shown LIVE in the modal rather than as a
+  // still: the video is already the best picture there is, and a still frame
+  // would need ffmpeg on the server. Refresh reconnects it.
+  const streamPrinter=FLEET.find(f=>f.id===SNAP_PRINTER);
+  if(streamPrinter&&streamPrinter.capabilities?.cameraStream){
+    const video=document.createElement("video");
+    video.autoplay=true; video.playsInline=true; video.muted=true; video.controls=false;
+    video.style.cssText='max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto;background:#1b1e24;min-width:240px;min-height:135px';
+    wrap.innerHTML=''; wrap.appendChild(video);
+    $("snapts").textContent=t("fleet.camera.live");
+    const forPrinter=SNAP_PRINTER;
+    openCamStream("snap",forPrinter,video).catch(e=>{
+      if(SNAP_PRINTER!==forPrinter||!video.isConnected) return;
+      wrap.innerHTML='<span style="color:var(--ink-dim)">'+esc(e.message)+'</span>';
+      $("snapts").textContent='';
+    });
+    return;
+  }
   // A WebRTC-only camera has no /api/snapshot to call — the frame can only
   // come from a live session in this browser, so the modal grabs one from
   // the tile that is already streaming in Camera View.

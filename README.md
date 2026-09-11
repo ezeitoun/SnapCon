@@ -267,19 +267,22 @@ The Discover Button Scans the local network for supported printers and lets you 
 Each result shows the available printer details and an Add button. Printers already configured in SnapCon are marked as Added. During first-time setup, Add All & Save can be used to add all discovered printers at once.
 
 #### Bambu Lab H2 series (monitoring only)
-Bambu Lab H2D, H2D Pro, H2S and H2C printers can sit on the same dashboard as the rest of the farm. SnapCon **watches** them and never commands them: the card, list view, notifications and audit trail show their state, progress, the printer's own remaining-time estimate, layers, bed and active-nozzle temperatures, and every AMS / AMS HT / external-spool slot with its colour and material (named the way the printer names them: A1…D4, HT1, Ext-L / Ext-R). The action buttons are replaced by a *Monitoring only* note, and the server refuses print, pause/resume/cancel, E-Stop, bed-temperature and queue requests for these printers.
+Bambu Lab H2D, H2D Pro, H2S and H2C printers can sit on the same dashboard as the rest of the farm. SnapCon **watches** them and never commands them: the card, list view, notifications and audit trail show their state, progress, the printer's own remaining-time estimate, layers, bed and active-nozzle temperatures, and every AMS / AMS HT / external-spool slot with its colour and material (named the way the printer names them: A1…D4, HT1, Ext-L / Ext-R). On top of that come the printer's **live camera** and the **job preview image**. The action buttons are replaced by a *Monitoring only* note, and the server refuses print, pause/resume/cancel, E-Stop, bed-temperature and queue requests for these printers.
 
 To add one, choose **Bambu Lab H2D / H2S / H2C (monitoring only)** as the connector and enter:
-- **IP / hostname** of the printer (the port, 8883, is applied automatically)
+- **IP / hostname** of the printer (the ports are applied automatically)
 - **Serial number** — on the printer's screen or in Bambu Studio / Handy
 - **Access code** — the 8-character LAN access code, on the printer under *Settings → Network / LAN Only Mode*
 
 LAN Only Mode and Developer Mode do **not** need to be switched on: reading a printer's status over its local connection is not affected by Bambu's Authorization Control firmware, so the printer stays connected to Bambu's cloud and Handy app. **Test Connection** works before saving.
 
-How it works: SnapCon keeps one MQTT-over-TLS session per printer to the broker the printer runs on port 8883 and subscribes to its status reports. The only messages it ever sends are the two *report your status* requests Bambu Studio itself sends (`get_version`, `pushall`). The printer's certificate is verified against Bambu Lab's own CA and must name the configured serial number, so the access code is never handed to another device. If a future printer's certificate is not recognised, `SNAPCON_BAMBU_INSECURE_TLS=1` skips that check; `SNAPCON_BAMBU_DEBUG=1` logs the connection in detail.
+**Camera.** Switch on *LAN Only Liveview* on the printer (LAN Mode settings). The camera button then appears on the card, Camera View shows the printer live, and the camera window plays it live instead of a still. SnapCon opens one camera session per printer, only while someone is watching, and shares it between viewers. The page plays the video with the browser's own decoder, so it works on a plain `http://` LAN address; every current desktop browser and iOS 17.1+ can play it. Still frames (notification pictures) additionally need `ffmpeg` on the SnapCon host (on `PATH`, or `SNAPCON_FFMPEG=/path/to/ffmpeg`); without it, notifications for these printers are sent without a picture.
 
-Not available for Bambu printers yet: camera (the H2 camera is an RTSP video stream that needs a video decoder), print thumbnails, network discovery, and anything that sends the printer a command.
+**Job preview.** SnapCon reads the plate image from the job's `.3mf` on the printer, fetching only the few hundred KB it needs rather than the whole file. On H2 firmware the internal storage is not readable over the network: turn on *Store sent files on external storage* in the printer's print options, with a USB drive or SD card inserted. Without it the card shows "—" as before.
 
+How it works: SnapCon keeps one MQTT-over-TLS session per printer to the broker the printer runs on port 8883 and subscribes to its status reports; the only messages it ever sends are the two *report your status* requests Bambu Studio itself sends (`get_version`, `pushall`). The camera is read over RTSPS (port 322) and relayed as fragmented MP4; the preview is read over FTPS (port 990) with read-only commands. Every one of these connections is verified against Bambu Lab's own CA and must present a certificate naming the configured serial number before the access code is sent. If a future printer's certificate is not recognised, `SNAPCON_BAMBU_INSECURE_TLS=1` skips that check; `SNAPCON_BAMBU_DEBUG=1` logs the connection in detail.
+
+Not available for Bambu printers: network discovery, and anything that sends the printer a command.
 
 ## Users
 The Users tab controls authentication, account permissions, and one-time-code login.
