@@ -458,3 +458,73 @@ upgrading is recommended for anyone running SnapCon where more than one person c
   stopped responding could leave the most safety-critical action waiting indefinitely. Commands now
   fail in reasonable time, with deliberately longer allowances for the few operations that really do
   take minutes.
+
+0.7.1
+
+### Bambu Lab Support (Beta)
+SnapCon now speaks to Bambu Lab printers directly over your network â€” no cloud account, no Bambu
+Studio running in the background. Add one under Settings > Printers with its IP address, serial
+number and access code, all three of which are on the printer's own screen under Settings > Network.
+
+This is a **beta**. It was built and checked against one real printer, a P2S, and printing has not
+yet been run end to end by anyone but us. Treat the first few prints as a test, and keep an eye on
+the machine.
+
+**What you get**
+
+- **Live status** â€” state, progress, layer, nozzle and bed temperatures, and the printer's own error
+  codes with an explanation for the ones SnapCon recognises.
+- **The AMS on the card**, named the way the printer names it: A1 to A4, plus the external spool
+  holder as Ext. An empty tray shows as an empty slot rather than a spool that isn't there. The
+  external spool can be switched off per printer if you never load it.
+- **Live camera**, in Camera View and from the card's camera button. SnapCon connects to the
+  printer's camera itself and relays the picture to your browser, so it works without anything
+  installed on your machine. Still images for notifications need ffmpeg on the SnapCon host; live
+  video does not.
+- **Printing** â€” send a sliced `.3mf` or a `.gcode` from your library, choose which AMS tray feeds
+  each filament, and pause, resume or cancel. A multi-plate project asks which plate to print.
+- **The printer's own files** â€” press Print with nothing selected to browse what is already on the
+  machine and start it, with its colours read out of the file.
+- **Job thumbnails**, read from the file the printer is actually running.
+
+**Before it will print**
+
+Bambu printers only accept commands from third-party software when **Developer Mode** is on
+(Settings > Network on the printer, after LAN Only Mode). Without it SnapCon still shows everything
+â€” status, AMS, camera â€” and says so on the card instead of failing on every button. Turn it on and
+press **Check again**, and the controls come back.
+
+**Checks before a print goes out**
+
+SnapCon looks at the file and at what the printer has loaded, and says something before the machine
+heats up:
+
+- a `.3mf` that was never sliced cannot print, and Send is blocked
+- a file sliced for a different Bambu model, or for a different nozzle, is flagged
+- a filament with no tray of that material blocks the send, rather than starting a print that fails
+  a few layers in
+- trays are suggested by material first and colour second
+
+**Not in this beta**
+
+Queue Management and printer pools (a Bambu printer cannot be added to a pool yet), printing from
+the external spool, more than one AMS unit, and printer discovery by scan. Time remaining and fan
+speed are deliberately not shown: the printer reports values we have not been able to confirm the
+meaning of, and a wrong number is worse than none.
+
+### Also in this release
+
+- **Printer access codes are now treated as secrets.** The access code used by FlashForge and Bambu
+  Lab printers was sent to the browser and written back into the Settings field in clear text. It
+  now behaves like the API token: SnapCon says only whether one is configured, and offers Replace
+  and Clear. Existing codes keep working, and Test connection no longer needs you to retype one.
+- **The Send dialog's Upload button fills as the transfer runs**, as the card's own Upload button
+  always has. With several printers selected it shows the average across them.
+- **Controls a printer cannot perform now say so.** A disabled E-Stop or Eject explains itself
+  rather than failing when pressed, and a printer with no eject command of its own only offers the
+  button when SnapCon is actually holding a file for it.
+- **The file browser marks 3MF files**, and says when one has no sliced plate â€” the same extension
+  covers a printable plate and a project that was never sliced.
+- **A file cannot be sent to a printer that cannot print it.** SnapCon refuses before the upload
+  rather than after it.
+

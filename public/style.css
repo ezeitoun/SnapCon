@@ -148,6 +148,24 @@
   .job .jn{font-size:11.5px; font-weight:600; word-break:break-all; line-height:1.3;}
   .job .jm{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); letter-spacing:.02em; margin-top:4px;}
   .job .jm-path{color:var(--ink-faint); font-weight:500;}
+  /* File type, beside the size and date in a file row. Quiet by default — it
+     is a classification, not a warning — and switching to the warn colour
+     only when it says a file cannot be printed as it stands. */
+  /* A pre-send note on a Send-dialog row: quiet for a warning, red for a
+     problem that stops the send. Full-width so it reads as a sentence about the
+     row above it rather than another column. */
+  .send-issue{display:block; grid-column:1/-1; font-size:11px; line-height:1.35; margin-top:2px; color:var(--warn);}
+  .send-issue.err{color:var(--bad);}
+  .send-row.blocked{opacity:.75;}
+  .send-plate{display:flex; align-items:center; gap:10px; margin:10px 0 0; font-size:12.5px; color:var(--ink-dim);}
+  .send-plate select{max-width:180px;}
+  /* Card note for a printer SnapCon can watch but not drive. */
+  .card-note{font-size:11.5px; color:var(--ink-dim); margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .card-note .btn-chip{padding:2px 8px; font-size:11px;}
+  .file-kind{display:inline-block; font-family:var(--mono); font-size:9.5px; letter-spacing:.06em;
+    padding:1px 5px; margin-right:6px; border-radius:4px; vertical-align:1px;
+    color:var(--ink-dim); background:color-mix(in srgb, var(--ink-faint) 16%, transparent);}
+  .file-kind.warn{color:var(--warn); background:color-mix(in srgb, var(--warn) 16%, transparent);}
   .empty-list{padding:26px 18px; color:var(--ink-dim); font-size:13px; line-height:1.55;}
   .empty-list code{font-family:var(--mono); font-size:12px; color:var(--ink);}
   .main{padding:24px 26px 0; height:100vh; overflow:hidden; display:flex; flex-direction:column;}

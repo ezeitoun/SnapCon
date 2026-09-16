@@ -40,10 +40,31 @@ function extractFn(name) {
 }
 const sandbox = {};
 vm.createContext(sandbox);
+// canEject asks ejectUnsupported() whether the printer has an eject command of
+// its own (Bambu Lab has none), so both come into the sandbox together.
+vm.runInContext(extractFn("ejectUnsupported"), sandbox);
 vm.runInContext(extractFn("canEject"), sandbox);
 const canEject = p => vm.runInContext("canEject", sandbox)(p);
 
 const staged = { name: "Alicorn Dragon (19h24m).gcode", status: "ready", ts: 1 };
+
+// A printer with no eject command of its own. Verified live on a Bambu Lab
+// P2S: nothing sent to the machine clears a finished or cancelled job —
+// clean_print_error is accepted and changes nothing, print_clean is refused —
+// so its last job is history, not something SnapCon can eject. A file SnapCon
+// staged for it still is.
+const noEject = { capabilities: { eject: false } };
+
+test("a printer that cannot eject is not offered the button for its own last job", () => {
+  assert.equal(canEject({ ...noEject, state: "cancelled", filename: "ams.3mf" }), false,
+    "the button was previously shown disabled here, which read as broken");
+  assert.equal(canEject({ ...noEject, state: "complete", filename: "ams.3mf" }), false);
+});
+
+test("a printer that cannot eject still drops a file SnapCon staged for it", () => {
+  assert.equal(canEject({ ...noEject, state: "cancelled", filename: "ams.3mf", queuedFile: staged }), true,
+    "clearing SnapCon's own staged file is real work the button can still do");
+});
 
 test("Eject is offered for a Klipper-loaded file while the printer sits at standby", () => {
   assert.equal(canEject({ state: "standby", filename: "Beardie (7h35m).gcode" }), true,

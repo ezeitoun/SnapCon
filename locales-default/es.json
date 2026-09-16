@@ -3,9 +3,9 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 45,
-    "snapconVersion": "0.7.0",
-    "updated": "2026-09-10"
+    "version": 51,
+    "snapconVersion": "0.7.1",
+    "updated": "2026-09-12"
   },
   "printer_status": {
     "offline": "Sin conexión",
@@ -45,7 +45,12 @@
     "action_web_interface_alt": "Interfaz web",
     "action_plate": "Placa",
     "action_plate_title": "Placa {done}/{total}",
-    "action_estop_unsupported_title": "La parada de emergencia no está disponible en esta impresora: su firmware acepta el comando sin detenerse. Usa Cancelar o corta la alimentación de la impresora."
+    "action_estop_unsupported_title": "La parada de emergencia no está disponible en esta impresora: su firmware acepta el comando sin detenerse. Usa Cancelar o corta la alimentación de la impresora.",
+    "action_eject_unsupported_title": "Esta impresora no tiene comando de expulsión. Sigue mostrando el último trabajo hasta que empiece la siguiente impresión.",
+    "note_monitoring_only": "Solo monitorización. Activa el Modo desarrollador en la impresora (Ajustes → Red) para controlar las impresiones desde aquí.",
+    "note_check_again": "Comprobar de nuevo",
+    "note_checking": "Comprobando…",
+    "note_untested_model": "{model} aún no se ha probado con SnapCon; puede que falten algunos datos."
   },
   "fleet": {
     "estop_status_sending": "Enviando parada de emergencia…",
@@ -118,6 +123,8 @@
     "camera": {
       "disabled_label": "Cámara desactivada",
       "lan_only": "Cámara disponible solo en la red local",
+      "live": "En directo",
+      "stream_unsupported": "Este navegador no puede reproducir el formato de vídeo de la impresora",
       "no_feed": "Sin señal",
       "retry_title": "Haz clic para volver a intentar"
     },
@@ -273,7 +280,8 @@
         "idle_only": "Solo inactivas",
         "compatible_only": "Solo compatibles",
         "confirm_incompatible": "Una o más impresoras seleccionadas no coinciden con la marca detectada de este archivo. ¿Continuar?",
-        "upload_and_print": "Subir e imprimir"
+        "upload_and_print": "Subir e imprimir",
+        "deselect_all": "Deseleccionar todo"
       },
       "quickprint": {
         "title": "Opciones de impresión",
@@ -345,6 +353,16 @@
         "swatch_match_title": "{tag} → {color}",
         "swatch_invalid_title": "{tag} no se resuelve a un color — no teñirá la tarjeta"
       }
+    },
+    "send": {
+      "issue_not_sliced": "Este 3MF no tiene ninguna placa laminada, así que la impresora no tiene nada que imprimir. Lamínalo y exporta la placa desde tu laminador.",
+      "issue_model_mismatch": "Este archivo se laminó para otro modelo de Bambu Lab.",
+      "issue_model_unverified": "SnapCon no puede verificar que este archivo se laminara para esta impresora.",
+      "issue_nozzle_mismatch": "Laminado para una boquilla de {file} mm; esta impresora indica {printer} mm.",
+      "blocked_material": "Ninguna bandeja de esta impresora tiene {materials}. Cárgalo o elige otra impresora.",
+      "blocked_summary": "No enviado: {names} no puede imprimir este archivo tal como está.",
+      "plate_label": "Placa a imprimir",
+      "plate_option": "Placa {n}"
     }
   },
   "health": {
@@ -548,6 +566,10 @@
     "new_folder_modal_title": "Carpeta nueva",
     "new_folder_name_placeholder": "Nombre de la carpeta",
     "create_button": "Crear",
+    "kind_gcode_title": "G-code laminado",
+    "kind_3mf_title": "Proyecto 3MF laminado",
+    "kind_3mf_not_sliced_title": "Este 3MF no tiene ninguna placa laminada. Lamínalo y exporta la placa desde tu laminador.",
+    "kind_not_sliced": "Sin laminar",
     "empty_no_files_yet": "Todavía no hay archivos laminados aquí.",
     "empty_no_files_in_folder": "No hay archivos laminados en esta carpeta.",
     "empty_no_search_matches": "Ningún archivo laminado coincide con tu búsqueda.",
@@ -1035,6 +1057,8 @@
       "flow_cal_desc": "Ejecuta una pasada de calibración de caudal antes de cada impresión",
       "timelapse_label": "Time-lapse",
       "timelapse_desc": "Captura un vídeo time-lapse de cada impresión",
+      "external_spool_label": "Mostrar la bobina externa",
+      "external_spool_desc": "Añade el soporte de bobina externa de la impresora a la tarjeta, junto a las bandejas del AMS. Desactívalo si nunca lo usas.",
       "defaults_hint": "Son solo los valores predeterminados — tanto Imprimir como Enviar a impresoras permiten anularlos por trabajo.",
       "push_notify_label": "Notificaciones push",
       "push_notify_desc": "Incluir esta impresora en las alertas de inicio / pausa / error / finalización",

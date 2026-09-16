@@ -12,7 +12,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||t("fleet.error_panel.unknown_error_title")), description:(entry&&entry.d)||msg||code||'', url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -423,11 +423,29 @@ function estopUnsupported(p){
   return !!(p && p.capabilities && p.capabilities.estop === false);
 }
 
+// Same shape, same reasoning, for Eject. A Bambu printer has no "forget the
+// loaded file" command at all: its card sits at Cancelled until the next print
+// starts, and nothing SnapCon can send changes that. Shown disabled with a
+// title rather than hidden — the button is there on every other printer in the
+// same state, so its silent absence would read as a bug.
+//
+// Tested for === false: connectors that CAN eject never declare the flag.
+function ejectUnsupported(p){
+  return !!(p && p.capabilities && p.capabilities.eject === false);
+}
+
 function canEject(p){
   if(!p) return false;
   const st=p.state;
   if(st==='printing'||st==='paused') return false;
   if(!(st==='idle'||st==='standby'||st==='complete'||st==='cancelled')) return false;
+  // A printer with no eject command of its own (Bambu Lab: verified live that
+  // nothing clears a finished or cancelled job — it goes when the next print
+  // starts) can still be holding a file SnapCon staged for it, and dropping
+  // that is real work the button can do. Its own last job is history, not
+  // something to eject, so with nothing staged the button is not offered:
+  // showing it disabled just read as broken.
+  if(ejectUnsupported(p)) return !!(p.queuedFile&&p.queuedFile.status==='ready');
   return !!(p.filename||(p.queuedFile&&p.queuedFile.status==='ready'));
 }
 
@@ -744,6 +762,161 @@ function camRtcObserver(){
 function observeCamRtc(video,id,url){
   video.dataset.camrtcurl=url;
   camRtcObserver().observe(video);
+}
+
+// ---- Relayed camera (MSE) ----
+// The third transport, alongside the JPEG poll and WebRTC: SnapCon connects to
+// the printer's camera itself and relays it as fragmented MP4 (a Bambu Lab
+// printer serves RTSP over TLS, with credentials, on a port no browser speaks).
+// Same slot contract as mountCamShot/mountCamRtc — replace the placeholder,
+// open the session only while the tile is on screen.
+const CAM_STREAM=new Map(); // key (printer id, or "snap") -> { video, abort, url, state, pendingClose, failure }
+// Safari/iOS only allow a managed source; everything else has MediaSource.
+function camStreamMediaSource(){
+  return (typeof ManagedMediaSource!=="undefined"&&ManagedMediaSource)||(typeof MediaSource!=="undefined"&&MediaSource)||null;
+}
+function camStreamCleanup(entry){
+  if(!entry) return;
+  entry.state="closed";
+  if(entry.pendingClose){ clearTimeout(entry.pendingClose); entry.pendingClose=null; }
+  try{ entry.abort.abort(); }catch{}
+  if(entry.video){ try{ entry.video.removeAttribute("src"); entry.video.load(); }catch{} }
+  if(entry.url){ try{ URL.revokeObjectURL(entry.url); }catch{} }
+}
+// A tile is closed one tick late: a card rebuilt in the same render pass (it
+// re-renders on every layer change) mounts a new slot immediately, and
+// mountCamStream adopts the running player instead of reconnecting and showing
+// black for a second. A real removal is cleaned up on that next tick.
+function closeCamStream(key){
+  const entry=CAM_STREAM.get(key);
+  if(!entry) return;
+  if(key!=="snap"&&entry.state!=="closed"&&entry.video){
+    if(!entry.pendingClose) entry.pendingClose=setTimeout(()=>{ if(CAM_STREAM.get(key)===entry){ CAM_STREAM.delete(key); camStreamCleanup(entry); } },0);
+    return;
+  }
+  CAM_STREAM.delete(key);
+  camStreamCleanup(entry);
+}
+function closeAllCamStream(all){
+  for(const [key,entry] of [...CAM_STREAM]){
+    if(!all&&key==="snap") continue;   // a full re-render must not cut the modal
+    CAM_STREAM.delete(key); camStreamCleanup(entry);
+  }
+}
+// Plays /api/camera-stream into `video` until the stream ends or the session is
+// closed. Resolves when it was closed on purpose; rejects when the camera, the
+// network or the decoder ended it, so the caller can show a placeholder.
+async function openCamStream(key,printerId,video){
+  const prev=CAM_STREAM.get(key);
+  if(prev){ CAM_STREAM.delete(key); camStreamCleanup(prev); }
+  const entry={ video, abort:new AbortController(), url:null, state:"connecting", pendingClose:null, failure:null };
+  CAM_STREAM.set(key,entry);
+  const fail=(err)=>{ if(entry.state!=="closed"&&!entry.failure){ entry.failure=err||new Error(t("fleet.camera.no_feed")); try{ entry.abort.abort(); }catch{} } };
+  try{
+    const r=await fetch("/api/camera-stream?printer="+printerId,{signal:entry.abort.signal,cache:"no-store"});
+    checkAuthFailure(r);
+    if(!r.ok){ let msg=""; try{ msg=(await r.json()).error||""; }catch{} throw new Error(msg||("HTTP "+r.status)); }
+    const codec=r.headers.get("X-SnapCon-Codec")||"avc1.640028";
+    const mime='video/mp4; codecs="'+codec+'"';
+    const MS=camStreamMediaSource();
+    if(!MS||!MS.isTypeSupported(mime)) throw new Error(t("fleet.camera.stream_unsupported"));
+    const ms=new MS();
+    video.disableRemotePlayback=true;   // ManagedMediaSource requires it
+    entry.url=URL.createObjectURL(ms);
+    video.src=entry.url;
+    video.addEventListener("error",()=>fail(),{once:true});
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error(t("fleet.camera.no_feed"))),5000);
+      ms.addEventListener("sourceopen",()=>{ clearTimeout(timer); resolve(); },{once:true});
+    });
+    ms.addEventListener("sourceended",()=>fail());
+    ms.addEventListener("sourceclose",()=>fail());
+    const sb=ms.addSourceBuffer(mime);
+    sb.mode="segments";
+    sb.addEventListener("error",()=>fail());
+    const queue=[]; let queuedBytes=0;
+    const pump=()=>{
+      if(entry.state==="closed"||entry.failure||sb.updating||!queue.length||ms.readyState!=="open") return;
+      const b=video.buffered;
+      // Keep the buffer short: this is a live picture, not a recording.
+      if(b.length&&video.currentTime-b.start(0)>20){ try{ sb.remove(b.start(0),video.currentTime-5); return; }catch{} }
+      try{
+        // Peek, append, then drop: a chunk refused with QuotaExceededError has
+        // to be retried, not lost — chunks are arbitrary slices of one stream.
+        sb.appendBuffer(queue[0]);
+        queuedBytes-=queue[0].byteLength; queue.shift();
+      }catch(e){
+        if(e&&e.name==="QuotaExceededError"&&b.length&&video.currentTime-b.start(0)>1){ try{ sb.remove(b.start(0),video.currentTime-1); }catch{} return; }
+        fail(e);
+      }
+    };
+    sb.addEventListener("updateend",()=>{
+      const b=video.buffered;
+      if(b.length){
+        const end=b.end(b.length-1);
+        // Stay at the live edge: jump forward whenever playback has fallen
+        // behind (a stall, a backgrounded tab).
+        if(video.currentTime<b.start(b.length-1)||end-video.currentTime>2.5) video.currentTime=Math.max(b.start(b.length-1),end-0.3);
+        if(video.paused) video.play().catch(()=>{});
+      }
+      if(entry.state==="connecting") entry.state="live";
+      pump();
+    });
+    const reader=r.body.getReader();
+    for(;;){
+      const { done, value }=await reader.read();
+      if(done||entry.state==="closed") break;
+      if(entry.failure) throw entry.failure;
+      queue.push(value); queuedBytes+=value.byteLength;
+      // A decoder that stopped consuming must not buffer video in the page forever.
+      if(queuedBytes>16*1024*1024) throw new Error(t("fleet.camera.no_feed"));
+      pump();
+    }
+  }catch(e){
+    if(entry.state==="closed") return;   // closed on purpose
+    if(CAM_STREAM.get(key)===entry){ CAM_STREAM.delete(key); camStreamCleanup(entry); }
+    throw entry.failure||e;
+  }
+  if(entry.state==="closed") return;
+  if(CAM_STREAM.get(key)===entry){ CAM_STREAM.delete(key); camStreamCleanup(entry); }
+  throw entry.failure||new Error(t("fleet.camera.no_feed"));
+}
+function mountCamStream(slot,id){
+  const running=CAM_STREAM.get(id);
+  if(running&&running.pendingClose&&running.video&&running.state!=="closed"){
+    clearTimeout(running.pendingClose); running.pendingClose=null;
+    slot.replaceWith(running.video);
+    running.video.play().catch(()=>{});
+    return;
+  }
+  const video=document.createElement("video");
+  video.className="cam-shot cam-rtc cam-stream";
+  video.autoplay=true; video.playsInline=true; video.muted=true;
+  video.dataset.camstream=String(id);
+  slot.replaceWith(video);
+  camStreamObserver().observe(video);
+}
+let CAM_STREAM_OBSERVER=null;
+function camStreamObserver(){
+  if(CAM_STREAM_OBSERVER) return CAM_STREAM_OBSERVER;
+  CAM_STREAM_OBSERVER=new IntersectionObserver(entries=>{
+    for(const e of entries){
+      const el=e.target, id=parseInt(el.dataset.camstream,10);
+      if(e.isIntersecting){
+        if(el.dataset.camstreamfailed==="1") continue;   // reported once, no retry loop
+        if(CAM_STREAM.get(id)&&CAM_STREAM.get(id).state!=="closed") continue;
+        openCamStream(id,id,el).catch(err=>{
+          el.dataset.camstreamfailed="1";
+          const ph=camShotPlaceholderEl((err&&err.message)||t("fleet.camera.no_feed"));
+          el.replaceWith(ph);
+          CAM_STREAM_OBSERVER.unobserve(el);
+        });
+      }else{
+        closeCamStream(id);
+      }
+    }
+  },{root:null,rootMargin:"200px",threshold:0.01});
+  return CAM_STREAM_OBSERVER;
 }
 
 // ---- Fleet sort ----
@@ -2325,13 +2498,20 @@ function wireUI(){
   $("doUpload").addEventListener("click", ()=>doSendUpload(false));
   $("doUploadPrint").addEventListener("click", ()=>doSendUpload(true));
   $("sendSelectAll").addEventListener("click",()=>{
-    document.querySelectorAll(".send-chk").forEach(c=>c.checked=true);
+    // Toggles rather than always selecting: the modal opens with the idle
+    // printers already ticked, so "select all" alone left no way back without
+    // unticking rows one at a time.
+    const boxes=[...document.querySelectorAll(".send-chk")];
+    const target=!boxes.every(c=>c.checked);
+    boxes.forEach(c=>{ c.checked=target; });
+    syncSendSelectAll();
   });
   $("sendSelectIdle").addEventListener("click",()=>{
     document.querySelectorAll(".send-chk").forEach(c=>{
       const row=FLEET.find(p=>p.id===c.dataset.id);
       c.checked=isIdle(row);
     });
+    syncSendSelectAll();
   });
   $("sendSelectCompatible").addEventListener("click",()=>{
     const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
@@ -2565,6 +2745,23 @@ function colorTagSwatchHtml(rawTagsStr){
   return `<span class="tag-color-swatch invalid" title="${esc(t("fleet.modal.tags.swatch_invalid_title",{tag:bad.tag}))}">!</span>`;
 }
 
+// A file's type, and whether it can be printed at all. The name cannot answer
+// either question: .3mf covers a sliced plate (printable) and a project that
+// was never sliced (not), and the same extension is FlashForge's format too.
+// The server decides — it opens the archive — and this only renders what it
+// says. A deliberate, called-out exception to the "never show the extension"
+// rule (CLAUDE.md section 5): the visible name still loses its extension, and
+// this badge carries the one distinction that matters.
+function fileKindBadge(f){
+  const is3mf=/\.3mf$/i.test(f.name||"");
+  if(!is3mf) return `<span class="file-kind" title="${esc(t("files.kind_gcode_title"))}">GCODE</span>`;
+  // sliced is only reported for files SnapCon can look inside; absent means
+  // "another vendor's .3mf", which is left exactly as it always was.
+  const notSliced=f.sliced===false;
+  return `<span class="file-kind${notSliced?" warn":""}" title="${esc(notSliced?t("files.kind_3mf_not_sliced_title"):t("files.kind_3mf_title"))}">3MF</span>`+
+    (notSliced?`<span class="file-kind warn">${esc(t("files.kind_not_sliced"))}</span>`:"");
+}
+
 function renderList(){
   const list=$("list");
   list.innerHTML="";
@@ -2597,8 +2794,8 @@ function renderList(){
     b.draggable=true; b.dataset.file=filePath;
     b.tabIndex=0; b.setAttribute("role","button");
     const fsBadge=(SELECTED===filePath&&MAP&&MAP.isFS)?` <img src="/fs-badge.svg" class="fs-badge" title="${esc(t("files.full_spectrum_title"))}">`:``;
-    b.innerHTML=`<div class="jn">${esc(stripExt(f.name))}${fsBadge}</div>`+
-      `<div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
+    b.innerHTML=`<div class="jn" title="${esc(f.name)}">${esc(stripExt(f.name))}${fsBadge}</div>`+
+      `<div class="jm">${fileKindBadge(f)} ${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
     b.addEventListener("click",e=>fileRowClick(e,filePath,shownPaths));
     b.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); fileRowClick(e,filePath,shownPaths); } });
     list.appendChild(b);
@@ -4608,7 +4805,7 @@ async function uploadLocalFiles(fileList){
 }
 
 async function selectFile(name){
-  SELECTED=name; MAPSEL={}; renderList();
+  SELECTED=name; MAPSEL={}; SEND_PLATE=1; renderList();
   // Orca mode hides this section permanently (init() sets it inline) — don't
   // fight that override here.
   if(!URL_PRINTER_FILTER) $("jobsechead").style.display="";
@@ -4620,6 +4817,20 @@ async function selectFile(name){
     if(m.error){ MAP=null; if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none"; return; }
     MAP=m; renderJob(); renderList(); renderFleet();
   }catch(e){ $("jobloading").classList.remove("show"); if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none"; }
+}
+
+// Re-reads a file's colours for a different plate of a multi-plate project.
+// Each plate is sliced separately and can use entirely different filaments, so
+// the palette, the mapping rows and the thumbnail all have to follow the
+// choice.
+async function loadMap(name,{plate}={}){
+  if(!name) return;
+  try{
+    const m=await getJSON("/api/map?file="+encodeURIComponent(name)+(plate?"&plate="+plate:""));
+    if(m.error) return;
+    MAP=m; MAPSEL={};
+    renderJob(); renderFleet(); renderSendList();
+  }catch{ /* the previous plate's data stays on screen */ }
 }
 
 function neededColors(){ return MAP ? MAP.palette.filter(s=>s.used) : []; }
@@ -4679,6 +4890,50 @@ function isCompatiblePrinter(detectedBrand, printerBrand){
   // same as a missing one above.
   if(!isKnownConnectorBrand(printerBrand)) return null;
   return detectedBrand===printerBrand;
+}
+
+// ---- Pre-send checks for a Bambu .3mf ----
+// What SnapCon can tell an operator before a print goes out, from the file and
+// what the printer reports about itself. A wasted Bambu print costs a heat-up,
+// a purge and an unattended machine sitting idle, so these are worth showing —
+// but only where there is real evidence: a check that has to guess says
+// "can't verify" instead of inventing a mismatch (CLAUDE.md section 2).
+//
+// "error" = cannot work, Send is blocked. "warn" = may not be what you meant.
+//
+// Only models SnapCon has actually been run against are compared. The code the
+// file carries (printer_model_id, e.g. "N7") is Bambu's internal one, and
+// mapping it to a product name is only known where it has been seen.
+const BAMBU_MODEL_CODES = { "Bambu Lab P2S": "N7" };
+function bambuSendIssues(file, printer){
+  const out=[];
+  if(!file) return out;
+  if(file.notSliced){
+    out.push({ level:"error", text:t("fleet.send.issue_not_sliced") });
+  }
+  const printerCode=BAMBU_MODEL_CODES[(printer&&printer.capabilities&&printer.capabilities.model)||""];
+  const fileCode=file.printerModelId||null;
+  if(printerCode&&fileCode){
+    if(printerCode!==fileCode) out.push({ level:"warn", text:t("fleet.send.issue_model_mismatch") });
+  } else if(fileCode||printerCode||printer){
+    out.push({ level:"warn", text:t("fleet.send.issue_model_unverified") });
+  }
+  // Only when the printer actually reports a nozzle: comparing against a value
+  // we never received would flag every file.
+  const printerNozzle=printer&&typeof printer.nozzleDiameter==="number"?printer.nozzleDiameter:null;
+  if(printerNozzle&&file.nozzle&&Math.abs(printerNozzle-file.nozzle)>0.001){
+    out.push({ level:"warn", text:t("fleet.send.issue_nozzle_mismatch",{file:file.nozzle,printer:printerNozzle}) });
+  }
+  // Refusals first: a blocking problem must not sit below two warnings.
+  return out.sort((a,b)=>(a.level==="error"?0:1)-(b.level==="error"?0:1));
+}
+// Two filaments are the same material or they are not — an empty or unknown
+// value on either side is not a match. Used to pair a file's filament with an
+// AMS tray before colour is even considered: PETG fed from a PLA tray prints at
+// the wrong temperature and fails a few layers in.
+function materialMatches(a,b){
+  const x=String(a||"").trim().toLowerCase(), y=String(b||"").trim().toLowerCase();
+  return !!x&&!!y&&x===y;
 }
 
 function renderJob(){
@@ -4965,7 +5220,13 @@ function afcLanesHtml(heads,activeExt,printerId,canUnload,finished){
     const active=loaded&&activeExt===i;
     const color=esc((h&&h.hex)||'#383a4a');
     const material=h&&h.material||'—';
-    const label=headLabel(i);
+    // A connector may name its own lanes: Bambu's AMS slots are A1-A4 and its
+    // external holder "Ext" on the printer's own screen, and numbering them
+    // T1-T5 here would invent a fifth toolhead that does not exist. Every other
+    // connector supplies no label and keeps headLabel()'s numbering untouched
+    // (CLAUDE.md section 5 — this extends that mapping rather than adding a
+    // third one).
+    const label=(h&&h.label)||headLabel(i);
     const uid=`${printerId}-${i}`;
     const cardStyle=active?`style="border:2px solid ${color}bb;box-shadow:inset 0 0 20px ${color}28,inset 0 0 6px ${color}18;background:${color}14"`:'';
     const hdrStyle=active?`style="color:${color}ee;background:${color}22;border-bottom-color:${color}33"`:'';
@@ -4982,10 +5243,10 @@ function afcLanesHtml(heads,activeExt,printerId,canUnload,finished){
     // was never clickable. An empty head has nothing to act on regardless of
     // permission — the dialog never opens for it at all.
     const spool=(canUnload&&loaded)
-      ? `<span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="${esc(headLabel(i))}">${spoolInner}</span>`
-      : `<span title="${headLabel(i)}">${spoolInner}</span>`;
+      ? `<span class="spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="${esc(label)}">${spoolInner}</span>`
+      : `<span title="${esc(label)}">${spoolInner}</span>`;
     return `<div class="afc-lane-card ${active?'active':loaded?'idle':'empty'}" ${cardStyle}>
-      <div class="afc-lane-hdr" ${hdrStyle}>T${i+1}${material&&material!=='—'?' '+esc(material):''}</div>
+      <div class="afc-lane-hdr" ${hdrStyle}>${esc(label)}${material&&material!=='—'?' '+esc(material):''}</div>
       <div class="afc-spool-area">
         ${spool}
         ${active?`<div class="afc-active-label" style="color:${color}cc">${esc(finished?t('fleet.card.afc_last_used'):t('fleet.card.afc_active'))}</div>`:''}
@@ -5149,6 +5410,44 @@ function cardSignature(p){
     statusOverride:STATUS_OVERRIDE.get(String(p.id))||null
   });
 }
+// "Check again" on the monitoring-only note. The operator has just switched
+// something on at the printer; this asks the server for a fresh read rather
+// than waiting for whatever the connector happens to notice. Deliberately does
+// NOT send the printer a command to test with — a refused command is harmless,
+// but sending one uninvited is not SnapCon's call (see the connector's own
+// Developer Mode notes).
+async function recheckPrinterControl(printerId, btn){
+  if(btn){ btn.disabled=true; btn.textContent=t("printer.note_checking"); }
+  try{ await postJSON("/api/printer-control-recheck",{printer:printerId}); }
+  catch{ /* the fleet refresh below is what actually updates the card */ }
+  await loadFleet();
+  if(btn){ btn.disabled=false; btn.textContent=t("printer.note_check_again"); }
+}
+
+// A line under a card saying why it is not behaving as a fully supported
+// printer. Two cases today, both from the Bambu beta:
+//
+//  - control is switched off AT THE PRINTER (Developer Mode). The buttons are
+//    disabled and this says what to do about it. "Check again" exists because
+//    the operator fixes it on the machine, and nothing would otherwise tell
+//    SnapCon to look — one status request is cheaper than making them restart
+//    or re-save the printer.
+//  - a model this beta has never been run against. Everything is offered, but
+//    the card says so rather than implying it was tested (CLAUDE.md section 2).
+function printerNoteHtml(p){
+  const caps=p&&p.capabilities;
+  if(!caps) return "";
+  const notes=[];
+  if(caps.developerMode==="off"){
+    notes.push(`<span>${esc(t("printer.note_monitoring_only"))}</span>`
+      +`<button class="btn-chip" data-devcheck="${p.id}">${esc(t("printer.note_check_again"))}</button>`);
+  }
+  if(caps.verifiedModel===false){
+    notes.push(`<span>${esc(t("printer.note_untested_model",{model:caps.model||""}))}</span>`);
+  }
+  return notes.length?`<div class="card-note">${notes.join("")}</div>`:"";
+}
+
 // Builds one printer's card element. `need` (neededColors()) and
 // `dragEnabled` are per-render-pass context, not per-card state — see
 // reconcileFleetCards(), which computes them once and passes them down.
@@ -5180,8 +5479,22 @@ function buildCardHtml(p, need, dragEnabled){
       // "pick which loaded head feeds this print", so fall back to one
       // unnamed slot standing in for the whole file (see neededColorsOrSlot()).
       const cmapNeed=neededColorsOrSlot();
-      const dft=defaultMapping(cmapNeed, heads);
-      const allHeads=Array.from({length:4},(_,i)=>({hi:i,h:heads[i]||null}));
+      // Material first, colour second: defaultMapping() pairs on colour alone,
+      // so a file's PETG could be pre-assigned to a PLA tray that happens to be
+      // the same shade. Anything the printer cannot supply the material for is
+      // left unassigned rather than pre-filled with a tray that would fail.
+      const dft=defaultMapping(cmapNeed, heads.map(h=>(h&&h.mappable===false)?null:h));
+      for(const n of cmapNeed){
+        const h=heads[dft[n.i]];
+        if(n.type&&h&&h.material&&!materialMatches(n.type,h.material)) delete dft[n.i];
+      }
+      // Slots a print can actually be fed from. A connector may mark one it
+      // reports but cannot print from (a Bambu external spool holder, whose
+      // protocol is unverified) with mappable:false — offering it would let
+      // someone choose a slot the connector then refuses. Everything else keeps
+      // the original four-slot picker exactly as it was.
+      const mappable=heads.map((h,i)=>({hi:i,h})).filter(x=>!(x.h&&x.h.mappable===false));
+      const allHeads=(mappable.length?mappable:Array.from({length:4},(_,i)=>({hi:i,h:heads[i]||null}))).slice(0,4);
       if(allHeads.some(x=>x.h&&x.h.loaded)){
         const rows=cmapNeed.map(n=>{
           const saved=MAPSEL[p.id+":"+n.i];
@@ -5193,13 +5506,15 @@ function buildCardHtml(p, need, dragEnabled){
             const bg=esc(loaded?(h.hex||'#3a3f49'):'#2a2d36');
             const hDark=needsDarkText(loaded?h.hex:null);
             return `<button class="hs-sq${isSel?' selected':''}${loaded?'':' empty'}${hDark?' light-bg':''}" style="background:${bg}" data-card="${p.id}" data-pi="${n.i}" data-hi="${hi}"${loaded?'':' disabled'}>` +
-                   `<span class="hs-lbl">T${hi+1}</span>` +
+                   `<span class="hs-lbl">${esc((h&&h.label)||("T"+(hi+1)))}</span>` +
                    `<span class="hs-mat">${esc(loaded&&h.material?h.material:'')}</span></button>`;
           }).join("");
           const info=[n.type, n.wt?Math.ceil(parseFloat(n.wt))+'g':''].filter(Boolean).join(', ');
           const fDark=needsDarkText(n.hex);
-          const assignedH=chosen!==""?allHeads[parseInt(chosen)]?.h:null;
-          const matMismatch=!!(n.type&&assignedH?.material&&n.type.trim().toLowerCase()!==assignedH.material.trim().toLowerCase());
+          const assignedH=chosen!==""?allHeads.find(x=>String(x.hi)===String(chosen))?.h:null;
+          // Same rule the Send dialog blocks on: a tray of a different material
+          // prints at the wrong temperature and fails a few layers in.
+          const matMismatch=!!(n.type&&assignedH?.material&&!materialMatches(n.type,assignedH.material));
           return `<div class="cmaprow">` +
                  `<div class="fsq${fDark?' light-bg':''}" style="background:${esc(n.hex||'#3a3f49')}"><span class="fsq-t">T${n.i+1}</span>${info?`<span class="fsq-info">${esc(info)}</span>`:''}</div>` +
                  `<span class="arrow">${matMismatch?'❌':'➜'}</span><div class="head-btns">${hbtns}</div></div>`;
@@ -5309,6 +5624,7 @@ function buildCardHtml(p, need, dragEnabled){
       })():""}
       ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'):''}
       ${mapHtml}
+      ${printerNoteHtml(p)}
       <div class="foot${busy?'':' foot-idle'}">
         ${busy
           ? (p.state==="paused"
@@ -5384,7 +5700,7 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
         // Step the cursor off this node BEFORE detaching it: insertBefore()
         // against a reference node that is no longer a child throws.
         if(cursor===cached.el) cursor=cursor.nextSibling;
-        cached.el.remove(); closeCamRtc(p.id);
+        cached.el.remove(); closeCamRtc(p.id); closeCamStream(p.id);
       }
       CARD_CACHE.set(p.id, { sig, el });
     }
@@ -5394,7 +5710,11 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
       // (no server-side snapshot) gets a live <video>, everything else
       // keeps the existing JPEG path untouched.
       if(slot){
-        if(p.capabilities?.cameraWebrtc && !p.capabilities?.cameraSnapshot && p.cameraWebrtcUrl) mountCamRtc(slot, p.id, p.cameraWebrtcUrl);
+        // Three transports, one slot. A relayed stream (SnapCon connects to the
+        // camera itself) and a WebRTC camera both get a live <video>; everything
+        // else keeps the existing JPEG path untouched.
+        if(p.capabilities?.cameraStream) mountCamStream(slot, p.id);
+        else if(p.capabilities?.cameraWebrtc && !p.capabilities?.cameraSnapshot && p.cameraWebrtcUrl) mountCamRtc(slot, p.id, p.cameraWebrtcUrl);
         else mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
       }
     }
@@ -5981,6 +6301,8 @@ function wireFleetCardEvents(){
     if(estopBtn){ doEstop(parseInt(estopBtn.dataset.estop,10)); return; }
     const preheatBtn=e.target.closest("button[data-preheat]");
     if(preheatBtn){ openPreheat(parseInt(preheatBtn.dataset.preheat,10)); return; }
+    const devCheckBtn=e.target.closest("button[data-devcheck]");
+    if(devCheckBtn){ recheckPrinterControl(parseInt(devCheckBtn.dataset.devcheck,10), devCheckBtn); return; }
     const reprintBtn=e.target.closest("button[data-reprint]");
     if(reprintBtn){ doReprint(parseInt(reprintBtn.dataset.reprint,10)); return; }
     // Card selection (camera view only — the checkbox only renders there):
@@ -6098,7 +6420,9 @@ async function applyPrinterOrder(order){
 let PUSHES=0;
 // extraUI (optional): {statusEl, fillEl} — a row in the send-to-printers modal
 // that should mirror this job's progress alongside the fleet card/button.
-async function pushTo(printer, start, extraUI, prefs){
+// `plate` is only meaningful for a multi-plate project (a Bambu .3mf); every
+// other file has exactly one, and the server ignores it.
+async function pushTo(printer, start, extraUI, prefs, onProgress, plate){
   if(!SELECTED){ return false; }
   const map={};
   if(ALLOW_MAPPING) neededColorsOrSlot().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
@@ -6113,7 +6437,7 @@ async function pushTo(printer, start, extraUI, prefs){
   PUSHES++;
   let ok=false;
   try{
-    const r=await postJSON("/api/print",{file:SELECTED,printer,start,map,prefs});
+    const r=await postJSON("/api/print",{file:SELECTED,printer,start,map,prefs,plate});
     const d=await r.json(); if(!r.ok||d.error||(!d.jobId&&d.mode!=="pending")) throw new Error(d.error||("HTTP "+r.status));
     if(d.mode==="pending"){
       // Printer's busy — server queued the file instead of racing an upload
@@ -6124,7 +6448,7 @@ async function pushTo(printer, start, extraUI, prefs){
       if(progressBtn){ progressBtn.style.background=''; progressBtn.disabled=false; }
       ok=true;
     } else {
-      ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI, prefs, printer);
+      ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI, prefs, printer, onProgress);
     }
   }catch(e){
     if(st){ st.className="pstatus err"; st.textContent=e.message; }
@@ -6138,6 +6462,15 @@ async function pushTo(printer, start, extraUI, prefs){
 function setBtnFill(btn, pct){
   if(!btn) return;
   btn.style.background=`linear-gradient(to right, rgba(167,139,250,0.55) ${pct}%, rgba(167,139,250,0.13) ${pct}%)`;
+}
+// One number for a button that stands for several transfers at once (the Send
+// modal uploads to every checked printer from a single click). The MEAN, not
+// the furthest ahead: a button sitting at 100% while a second printer is still
+// at 10% would say the upload had finished when it had not.
+function aggregateFillPct(byPrinter){
+  const vals=[...byPrinter.values()];
+  if(!vals.length) return 0;
+  return Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
 }
 // Mirrors upload/print progress onto a send-modal row: fill width + status text/color.
 function setRowUI(extraUI, pct, cls, txt){
@@ -6193,7 +6526,9 @@ function makePhaseOverride(printerId, onChange){
     get phase(){ return phase; }
   };
 }
-async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId){
+// `onProgress(pct)` lets a caller driving several uploads at once (the Send
+// modal) show them as one figure; the per-printer button and row keep their own.
+async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId, onProgress){
   const ov=makePhaseOverride(printerId);
   const setOverride=(phase,badge)=>ov.set(phase,badge);
   const clearOverride=()=>ov.clear();
@@ -6216,6 +6551,7 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId)
       if(d.phase==="upload" && d.total){
         const pct=Math.min(100,Math.round(d.sent/d.total*100));
         setBtnFill(btn, pct);
+        if(onProgress) onProgress(pct);
         if(extraUI) setRowUI(extraUI, pct, "work", t("fleet.print.status_uploading_pct",{pct}));
       }
       else if(d.phase==="mapping"){
@@ -6308,6 +6644,67 @@ function openSendModal(){
 }
 function closeSendModal(){ $('sendmodal').classList.remove('show'); }
 
+// Delegated: the rows are rebuilt by renderSendList(), so a listener bound to
+// each checkbox would be lost on the next render.
+document.addEventListener("change",e=>{
+  if(e.target&&e.target.classList&&e.target.classList.contains("send-chk")) syncSendSelectAll();
+});
+
+// Keeps the Select all / Deselect all button honest. Called after every path
+// that can change the selection - the three buttons, a manual tick, and the
+// initial render - because a label that says "Select all" while a click would
+// clear the list is worse than having no button at all.
+function syncSendSelectAll(){
+  const btn=$("sendSelectAll");
+  if(!btn) return;
+  const boxes=[...document.querySelectorAll(".send-chk")];
+  const allOn=boxes.length>0&&boxes.every(c=>c.checked);
+  const key=allOn?"fleet.modal.send.deselect_all":"fleet.toolbar.select_all";
+  btn.textContent=t(key);
+  // data-i18n drives the live language switch, so it has to move with the
+  // label or switching language mid-modal would restore the wrong word.
+  btn.setAttribute("data-i18n",key);
+}
+
+// Which plate of a multi-plate project to print. One plate is not a choice, so
+// nothing is shown for the usual file.
+let SEND_PLATE=1;
+function sendPlatePickerHtml(){
+  const plates=(MAP&&Array.isArray(MAP.plates))?MAP.plates:[];
+  if(plates.length<2) return "";
+  const opts=plates.map(n=>`<option value="${n}"${n===SEND_PLATE?" selected":""}>${esc(t("fleet.send.plate_option",{n}))}</option>`).join("");
+  return `<label class="send-plate"><span>${esc(t("fleet.send.plate_label"))}</span><select class="field" data-plate>${opts}</select></label>`;
+}
+
+// Everything that should stop, or qualify, sending THIS file to THIS printer.
+// The file-shape checks come from bambuSendIssues; the filament check is here
+// because it depends on the trays this particular printer has loaded right now.
+function sendIssuesFor(p){
+  const issues=(MAP&&p&&p.capabilities&&Array.isArray(p.capabilities.fileTypes)&&p.capabilities.fileTypes.includes("3mf")&&/\.3mf$/i.test(SELECTED||""))
+    ? bambuSendIssues(MAP,p) : [];
+  const unmatched=unmatchedFilaments(p);
+  if(unmatched.length){
+    issues.push({ level:"error", text:t("fleet.send.blocked_material",{materials:unmatched.join(", ")}) });
+  }
+  return issues;
+}
+
+// Materials the file needs that none of this printer's loaded trays can supply.
+// Only asked of a printer that maps filaments to trays at all — everything else
+// prints whatever its own file says.
+function unmatchedFilaments(p){
+  if(!MAP||!p||!p.capabilities||!p.capabilities.headMapping) return [];
+  if(!/\.3mf$/i.test(SELECTED||"")) return [];   // a plain gcode carries its own assignment
+  const heads=(p.heads||[]).filter(h=>h&&h.loaded&&h.mappable!==false);
+  if(!heads.length) return [];
+  const missing=[];
+  for(const n of neededColors()){
+    if(!n.type) continue;                         // nothing to compare — not a mismatch
+    if(!heads.some(h=>materialMatches(n.type,h.material))&&!missing.includes(n.type)) missing.push(n.type);
+  }
+  return missing;
+}
+
 function renderSendList(){
   const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
   $('sendlist').innerHTML=urlFilterFleet(FLEET).map(p=>{
@@ -6315,14 +6712,27 @@ function renderSendList(){
     const dot=p.online?(idle?'var(--ok)':'var(--busy)'):'var(--idle)';
     const {statusTxt}=statusColorText(p);
     const incompatible=isCompatiblePrinter(detectedBrand,p.brand)===false;
-    return `<label class="send-row">
+    // What the file itself says about this printer: an unsliced project it
+    // cannot start, a plate sliced for another model, a nozzle that does not
+    // match. A blocking problem unticks the row and disables it — there is no
+    // point uploading megabytes to a printer that will refuse them.
+    const issues=sendIssuesFor(p);
+    const blocked=issues.some(i=>i.level==="error");
+    const notes=issues.map(i=>`<span class="send-issue ${i.level==="error"?"err":"warn"}">${esc(i.text)}</span>`).join("");
+    return `<label class="send-row${blocked?' blocked':''}">
       <div class="send-row-fill" data-fill="${esc(p.id)}"></div>
-      <input type="checkbox" class="send-chk checkbox-input" data-id="${esc(p.id)}" ${idle?'checked':''}>
+      <input type="checkbox" class="send-chk checkbox-input" data-id="${esc(p.id)}" ${idle&&!blocked?'checked':''} ${blocked?'disabled':''}>
       <span class="send-dot" style="background:${dot}"></span>
       <span class="send-name${incompatible?' incompatible':''}">${esc(p.name)}</span>
       <span class="send-status-txt" data-rst="${esc(p.id)}">${esc(statusTxt)}</span>
+      ${notes}
     </label>`;
   }).join('');
+  $('sendPlatePick').innerHTML=sendPlatePickerHtml();
+  $('sendPlatePick').querySelectorAll("[data-plate]").forEach(el=>{
+    el.addEventListener("change",()=>{ SEND_PLATE=parseInt(el.value,10)||1; loadMap(SELECTED,{plate:SEND_PLATE}); });
+  });
+  syncSendSelectAll();
 }
 
 function setSendBtnsDisabled(dis){
@@ -6339,6 +6749,15 @@ function sendRowUI(id){
 async function doSendUpload(start){
   const checked=[...document.querySelectorAll('.send-chk:checked')].map(c=>c.dataset.id);
   if(!checked.length){ $('sendFooterStatus').textContent=t("fleet.modal.send.select_one"); return; }
+  // Belt and braces: the rows for these are already disabled, but a checkbox
+  // can be ticked before a fleet poll changes what a printer has loaded.
+  const blockers=checked
+    .map(id=>({ p:FLEET.find(f=>f.id===id), id }))
+    .filter(x=>x.p&&sendIssuesFor(x.p).some(i=>i.level==="error"));
+  if(blockers.length){
+    $('sendFooterStatus').textContent=t("fleet.send.blocked_summary",{names:blockers.map(x=>x.p.name).join(", ")});
+    return;
+  }
   const detectedBrand=MAP?detectPrinterBrand(MAP.printerModel,MAP.printerSettingsId):null;
   const hasIncompatible=checked.some(id=>{
     const row=FLEET.find(p=>p.id===id);
@@ -6347,11 +6766,20 @@ async function doSendUpload(start){
   if(hasIncompatible && !confirm(t("fleet.modal.send.confirm_incompatible"))) return;
   setSendBtnsDisabled(true);
   $('sendFooterStatus').textContent='';
+  // The clicked button fills as the transfer runs, the same way a card's own
+  // Upload button does. It cannot be found by printer id — it belongs to all of
+  // them — so progress is collected here and shown as one figure.
+  const fillBtn=$(start?'doUploadPrint':'doUpload');
+  const pcts=new Map(checked.map(id=>[id,0]));
+  const report=(id,pct)=>{ pcts.set(id,pct); setBtnFill(fillBtn, aggregateFillPct(pcts)); };
   // Explicit values, straight from whatever's currently checked — see
   // SEND_PREFS's own comment for why this never falls back to a per-printer
   // default the way pfilemodal does.
-  const results=await Promise.all(checked.map(id=>pushTo(id,start,sendRowUI(id),SEND_PREFS)));
+  const results=await Promise.all(checked.map(id=>pushTo(id,start,sendRowUI(id),SEND_PREFS,pct=>report(id,pct),SEND_PLATE)));
   const ok=results.filter(Boolean).length;
+  // Cleared however it ended: a button left holding a half-drawn gradient reads
+  // as an upload still in flight.
+  if(fillBtn) fillBtn.style.background='';
   $('sendFooterStatus').textContent=t(ok===checked.length ? "fleet.modal.send.done_summary" : "fleet.modal.send.error_summary", {ok, total:checked.length});
   setSendBtnsDisabled(false);
 }
@@ -6820,6 +7248,9 @@ function closeSnapshot(){
   // Only a session this modal opened — a Camera View tile's session keeps
   // running behind the modal.
   if(SNAP_RTC_OWNED!=null){ closeCamRtc(SNAP_RTC_OWNED); SNAP_RTC_OWNED=null; }
+  // The modal's own relayed session, if it opened one. A Camera View tile's
+  // session is keyed by printer id and keeps running behind the modal.
+  closeCamStream("snap");
   SNAP_PRINTER=null;
 }
 // Gives the Snapshot modal something to capture from. In Camera View a tile
@@ -6866,7 +7297,24 @@ async function loadSnapshot(){
   // A WebRTC-only camera has no /api/snapshot to call — the frame can only
   // come from a live session in this browser, so the modal grabs one from
   // the tile that is already streaming in Camera View.
-  const rtcPrinter=FLEET.find(f=>f.id===SNAP_PRINTER);
+  const snapPrinter=FLEET.find(f=>f.id===SNAP_PRINTER);
+  // A relayed camera with no server-side still (no ffmpeg on the host) shows
+  // the live picture here instead: the modal is opened from the card's camera
+  // button, and a "still frames need ffmpeg" error would be all it ever showed.
+  if(snapPrinter&&snapPrinter.capabilities?.cameraStream&&!snapPrinter.capabilities?.cameraSnapshot){
+    const video=document.createElement("video");
+    video.autoplay=true; video.playsInline=true; video.muted=true;
+    video.style.cssText='max-width:100%;max-height:65vh;border-radius:8px;display:block;margin:0 auto';
+    wrap.innerHTML=''; wrap.appendChild(video);
+    $("snapts").textContent=t("fleet.camera.live");
+    openCamStream("snap",SNAP_PRINTER,video).catch(e=>{
+      if(SNAP_PRINTER===null) return;   // modal already closed
+      wrap.innerHTML='<span style="color:var(--ink-dim)">'+esc((e&&e.message)||t("fleet.camera.no_feed"))+'</span>';
+      $("snapts").textContent='';
+    });
+    return;
+  }
+  const rtcPrinter=snapPrinter;
   if(rtcPrinter&&rtcPrinter.capabilities?.cameraWebrtc&&!rtcPrinter.capabilities?.cameraSnapshot){
     try{
       if(!camRtcContextSupported()) throw new Error(t("fleet.camera.lan_only"));
@@ -8370,6 +8818,15 @@ async function doOtpTest(){
 // nothing to persist a choice FOR — when it arrives it gets the relative
 // path and revalidates it server-side anyway.
 let SELECTED_FIRMWARE=null;   // { name, path } — path is relative to the firmware folder
+// Component version strings from a Creality run to ~50 characters
+// ("341a2c18-dirty-20230717_153001-cxsw-virtual-machine"). Truncate the
+// visible text and keep the whole value in a title — the same rule filenames
+// follow. The leading characters are the distinguishing part (a git hash or
+// a v0.11.0-style tag), so the tail is what goes.
+function shortVersion(v,max=18){
+  const s=String(v||"—");
+  return s.length>max ? s.slice(0,max-1)+"…" : s;
+}
 function fmtFileSize(bytes){
   if(!(bytes>=0)) return "";
   if(bytes<1024) return bytes+" B";
@@ -10048,9 +10505,12 @@ async function loadConfigUI(){
 // applyI18nToDom() re-translates it in place on a live locale switch — same
 // reasoning as switchHtml()'s labelKey/descKey. Callers that don't pass it
 // keep working exactly as before.
-function secretFieldHtml(cls,hasValue,placeholder,placeholderKey){
+// `attrs` is appended to the input itself (e.g. maxlength) — a secret with a
+// known length should refuse the extra characters here rather than let the
+// server truncate them silently.
+function secretFieldHtml(cls,hasValue,placeholder,placeholderKey,attrs){
   return `<div class="secret-field" data-cleared="0">`+
-    `<input type="password" class="field secret-input ${cls}" style="${hasValue?"display:none":""}" placeholder="${esc(placeholder||"")}"${placeholderKey?` data-i18n-placeholder="${esc(placeholderKey)}"`:''} autocomplete="off">`+
+    `<input type="password" class="field secret-input ${cls}" style="${hasValue?"display:none":""}" placeholder="${esc(placeholder||"")}"${placeholderKey?` data-i18n-placeholder="${esc(placeholderKey)}"`:''}${attrs?" "+attrs:""} autocomplete="off">`+
     `<div class="secret-chip" style="${hasValue?"":"display:none"}">`+
       `<span class="status-badge" style="--status-color:var(--ok)" data-i18n="common.secret_configured">${t("common.secret_configured")}</span>`+
       `<button type="button" class="btn ghost secret-replace" data-i18n="common.secret_replace">${t("common.secret_replace")}</button>`+
@@ -10213,9 +10673,9 @@ function serializeRowForDiff(row){
     ip:row.querySelector(".pip").value.trim(),
     port:row.querySelector(".pport").value.trim(),
     connector:row.querySelector(".pconnector").value,
-    token:secretFieldValue(row.querySelector(".secret-field")),
+    token:secretFieldValue(row.querySelector(".ptoken").closest(".secret-field")),
     serial:row.querySelector(".pserial").value.trim(),
-    verificationCode:row.querySelector(".pvcode").value.trim(),
+    verificationCode:secretFieldValue(row.querySelector(".pvcode").closest(".secret-field")),
     purchaseDate:row.querySelector(".pdate").value,
     costKwh:row.querySelector(".pkwh").value.trim(),
     autoLevel:row.querySelector('[id^="pautolevel-"]').checked,
@@ -10223,6 +10683,7 @@ function serializeRowForDiff(row){
     timelapse:row.querySelector('[id^="ptimelapse-"]').checked,
     pushNotify:row.querySelector('[id^="ppushnotify-"]').checked,
     forceDefaults:row.querySelector('[id^="pforcedefaults-"]').checked,
+    externalSpool:row.querySelector('[id^="pextspool-"]').checked,
     filamentMode:row.querySelector(".pfilmode").value,
     transport:row.querySelector(".ptransport").value,
     tags:row.querySelector(".ptags").value.trim(),
@@ -10237,7 +10698,7 @@ function serializeRowForDiff(row){
 // load.
 function renderPrinterRowsFromConfig(){
   $("setPrinters").innerHTML="";
-  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,transport:p.transport,serial:p.serial,verificationCode:p.verificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
+  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,transport:p.transport,serial:p.serial,hasVerificationCode:p.hasVerificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
   baselinePrintersDirty();
 }
 // Settings > Printers shows at most one expanded row: opening one collapses
@@ -10447,7 +10908,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_connector">${t("settings.printers.field_connector")}</label><select class="field pconnector">`+
     CONNECTOR_TYPES.map(c=>`<option value="${esc(c.type)}">${esc(c.label||c.type)}</option>`).join("")+
     `</select></div>`+
-    `<div class="maint-field"><label class="fl">${t("settings.printers.field_api_token")} <span class="hint" data-i18n="settings.printers.field_api_token_hint">${t("settings.printers.field_api_token_hint")}</span></label>${secretFieldHtml("ptoken",!!opts.hasToken,t("settings.printers.secret_optional_placeholder"),"settings.printers.secret_optional_placeholder")}</div>`+
+    `<div class="maint-field ptoken-field"><label class="fl">${t("settings.printers.field_api_token")} <span class="hint" data-i18n="settings.printers.field_api_token_hint">${t("settings.printers.field_api_token_hint")}</span></label>${secretFieldHtml("ptoken",!!opts.hasToken,t("settings.printers.secret_optional_placeholder"),"settings.printers.secret_optional_placeholder")}</div>`+
     `</div>`+
     `<div class="prow-test-row">`+
     `<button type="button" class="btn ghost ptest" data-i18n="settings.printers.test_connection_button">${t("settings.printers.test_connection_button")}</button>`+
@@ -10458,7 +10919,7 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="prow-section"><div class="prow-section-title" data-i18n="settings.printers.section_hardware">${t("settings.printers.section_hardware")}</div>`+
     `<div class="maint-row2">`+
     `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_serial">${t("settings.printers.field_serial")}</label><input class="field pserial" placeholder="${esc(t("settings.printers.field_serial_placeholder"))}" data-i18n-placeholder="settings.printers.field_serial_placeholder" value="${esc(opts.serial||"")}"></div>`+
-    `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_access_code">${t("settings.printers.field_access_code")}</label><input class="field pvcode" placeholder="XXXX" maxlength="8" value="${esc(opts.verificationCode||"")}"></div>`+
+    `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_access_code">${t("settings.printers.field_access_code")}</label>${secretFieldHtml("pvcode",!!opts.hasVerificationCode,"XXXX",null,'maxlength="8"')}</div>`+
     `</div>`+
     `<div class="maint-row2" style="margin-top:10px">`+
     `<div class="maint-field"><label class="fl" data-i18n="settings.printers.field_purchased">${t("settings.printers.field_purchased")}</label><input class="field pdate" type="date" value="${esc(opts.purchaseDate||"")}"></div>`+
@@ -10497,6 +10958,9 @@ function addPrinterRow(name,url,opts,autoOpen){
     `<div class="timelapse-wrap" style="margin-bottom:10px">`+
     switchHtml("ptimelapse-"+uid,!!opts.timelapse,t("settings.printers.timelapse_label"),t("settings.printers.timelapse_desc"),false,"settings.printers.timelapse_label","settings.printers.timelapse_desc")+
     `</div>`+
+    `<div class="extspool-wrap" style="margin-bottom:10px">`+
+    switchHtml("pextspool-"+uid,opts.externalSpool!==false,t("settings.printers.external_spool_label"),t("settings.printers.external_spool_desc"),false,"settings.printers.external_spool_label","settings.printers.external_spool_desc")+
+    `</div>`+
     `<div class="hint" style="margin-bottom:10px" data-i18n="settings.printers.defaults_hint">${t("settings.printers.defaults_hint")}</div>`+
     switchHtml("ppushnotify-"+uid,!!opts.pushNotify,t("settings.printers.push_notify_label"),t("settings.printers.push_notify_desc"),false,"settings.printers.push_notify_label","settings.printers.push_notify_desc")+
     `</div>`+
@@ -10530,6 +10994,7 @@ function addPrinterRow(name,url,opts,autoOpen){
   const filModeWrap=row.querySelector(".filmode-wrap"), filModeEl=row.querySelector(".pfilmode");
   filModeEl.value=(opts.filamentMode==="cfs")?"cfs":"single";
   const transportWrap=row.querySelector(".transport-wrap"), transportEl=row.querySelector(".ptransport");
+  const tokenField=row.querySelector(".ptoken-field");
   transportEl.value=(opts.transport==="native"||opts.transport==="moonraker")?opts.transport:"auto";
   const syncPrintPrefVisibility=()=>{
     const caps=connectorCaps(connectorEl.value);
@@ -10553,6 +11018,20 @@ function addPrinterRow(name,url,opts,autoOpen){
     const isFlashForge=connectorEl.value==="flashforge-ad5x"||connectorEl.value==="flashforge-adventurer";
     transportWrap.style.display=isFlashForge?"":"none";
     if(!isFlashForge) transportEl.value="auto";
+    // Some printers have no Moonraker API token to give (a Bambu Lab printer
+    // authenticates with its serial and the access code on its screen), and a
+    // field that can only ever be empty is a control that does nothing.
+    // Tested for === false like capabilities.estop: every connector that DOES
+    // take a token omits the flag entirely, and a truthiness check here would
+    // hide the field across the whole fleet. Hidden, never removed — the save
+    // and dirty-diff paths read this field by class.
+    tokenField.style.display=caps.apiToken===false?"none":"";
+    // Only a printer that actually has an external spool holder gets the
+    // switch that hides its lane.
+    const extWrap=row.querySelector(".extspool-wrap");
+    const hasExt=!!caps.externalSpoolOption;
+    extWrap.style.display=hasExt?"":"none";
+    if(!hasExt) row.querySelector('[id^="pextspool-"]').checked=true;
   };
   const brandEl=row.querySelector(".pbrand");
   // Brand is editable for generic Klipper only (see the derivedBrand comment
@@ -10643,7 +11122,9 @@ function addPrinterRow(name,url,opts,autoOpen){
     if(["http","https"].includes(parsed.scheme)) row.dataset.scheme=parsed.scheme!==spec.scheme?parsed.scheme:"";
     ipEl.dispatchEvent(new Event("input",{bubbles:true}));
   });
-  wireSecretField(row.querySelector(".secret-field"));
+  // Two of them now (API token, access code) — wiring only the first would
+  // leave the other's Replace/Clear buttons dead.
+  row.querySelectorAll(".secret-field").forEach(wireSecretField);
   const tagsEl=row.querySelector(".ptags"), tagsSwatch=row.querySelector(".tags-row-swatch");
   if(tagsEl&&tagsSwatch) tagsEl.addEventListener("input",()=>{ tagsSwatch.innerHTML=colorTagSwatchHtml(tagsEl.value); });
 
@@ -10774,10 +11255,14 @@ function addPrinterRow(name,url,opts,autoOpen){
       // of Test is to check a printer before committing it. serial/
       // verificationCode are what FlashForge authenticates with; omitting
       // them made every FlashForge test fail with "SN is different".
+      // The access code is masked, so an untouched field sends undefined —
+      // the row's own id lets the server fall back to the code already saved
+      // for THAT printer rather than making the admin retype it.
       const r=await (await postJSON("/api/test-connection",{
         url:u, connector:connectorEl.value, name:nameEl.value.trim(),
+        id:opts.id||undefined,
         serial:row.querySelector(".pserial").value.trim(),
-        verificationCode:row.querySelector(".pvcode").value.trim()
+        verificationCode:secretFieldValue(row.querySelector(".pvcode").closest(".secret-field"))
       })).json();
       if(r.error) throw new Error(r.error);
       const parts=[t("settings.printers.test_connection_label_state",{value:r.state||"unknown"})];
@@ -11179,6 +11664,10 @@ function gatherPrinters(){
     // typeof === "boolean", and collapsing false to undefined here would
     // break that (this switch defaults to true, unlike the others).
     forceDefaults:r.querySelector('[id^="pforcedefaults-"]').checked,
+    // Real boolean like forceDefaults above: the server tells "switched off"
+    // from "field never sent" with typeof === "boolean", and this switch also
+    // defaults to true.
+    externalSpool:r.querySelector('[id^="pextspool-"]').checked,
     connector:r.querySelector(".pconnector").value,
     // Sent for every row, honored by the server only for the connector whose
     // Brand field is editable (BRAND_EDITABLE_CONNECTOR) — for the rest it's
@@ -11190,8 +11679,10 @@ function gatherPrinters(){
     // as undefined rather than stored.
     transport:(v=>v==="native"||v==="moonraker"?v:undefined)(r.querySelector(".ptransport").value),
     serial:r.querySelector(".pserial").value.trim()||undefined,
-    verificationCode:r.querySelector(".pvcode").value.trim()||undefined,
-    token:secretFieldValue(r.querySelector(".secret-field")),
+    // Both secrets read from their OWN field: a bare ".secret-field" lookup
+    // would return whichever comes first in the row (the token's) for both.
+    verificationCode:secretFieldValue(r.querySelector(".pvcode").closest(".secret-field")),
+    token:secretFieldValue(r.querySelector(".ptoken").closest(".secret-field")),
     tags:r.querySelector(".ptags").value.split(",").map(t=>t.trim()).filter(Boolean),
     allowedGroups:[...r.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value)
   })).filter(p=>p.url);
@@ -11369,7 +11860,6 @@ async function saveConfig(){
     const c=await (await postJSON("/api/config",body)).json();
     if(c.error) throw new Error(c.error);
     // The response already reflects server.js's post-save loadConfig() reload
-
     // (a real re-read of the just-written, definitely-valid file, not an
     // optimistic client-side assumption) — re-render so the warning banner
     // actually clears, matching what its own text claims.

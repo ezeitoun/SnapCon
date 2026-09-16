@@ -16,6 +16,7 @@ const REGISTRY = {
   "creality-klipper": () => require("./creality-klipper"),
   "flashforge-adventurer": () => require("./flashforge-adventurer"),
   "flashforge-ad5x": () => require("./flashforge-ad5x"),
+  "bambu-lab": () => require("./bambu-lab"),
   "simulator": () => require("./dummy-simulator")
 };
 

@@ -99,7 +99,13 @@ test("/api/test-connection caps verificationCode at the same 8 chars sanitizePri
 test("the Test connection click handler sends the row's serial and verificationCode", () => {
   const at = clientSrc.indexOf('postJSON("/api/test-connection"');
   assert.ok(at !== -1, "the client must POST, matching the route");
-  const call = clientSrc.slice(at, at + 400);
+  const call = clientSrc.slice(at, at + 500);
   assert.match(call, /serial:row\.querySelector\("\.pserial"\)\.value\.trim\(\)/);
-  assert.match(call, /verificationCode:row\.querySelector\("\.pvcode"\)\.value\.trim\(\)/);
+  // The access code moved to the masked-secret control, so it is read with
+  // secretFieldValue() rather than straight off an input — an untouched field
+  // sends undefined and the route falls back to the code stored for this
+  // printer id (see printerAccessCodeSecret.test.js). What this test still
+  // guards is that the credential reaches the route at all, which is the
+  // FlashForge regression it was written for.
+  assert.match(call, /verificationCode:secretFieldValue\(row\.querySelector\("\.pvcode"\)\.closest\("\.secret-field"\)\)/);
 });

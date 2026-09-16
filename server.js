@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v0.7.0
+// server.js — SnapCon  ·  v0.7.1
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 
 const express = require("express");
 const fs = require("fs");
@@ -13,6 +13,7 @@ const os = require("os");
 const crypto = require("crypto");
 const readline = require("readline");
 const { parseGcodeMap, parseGcodeMapLines } = require("./parser");
+const threemf = require("./threemf");
 const auth = require("./auth");
 const { getConnector, listConnectorTypes, getCapabilities, getAddress, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
 const { isValidHost, normalizePort, parseAddressUrl, composeAddressUrl } = require("./connectors/address");
@@ -477,7 +478,16 @@ app.get("/api/files", requireAuth, (req, res) => {
       .map(e => {
         const fp = path.join(dir, e.name);
         const st = fs.statSync(fp);
-        return { name: e.name, size: st.size, mtime: st.mtimeMs };
+        const row = { name: e.name, size: st.size, mtime: st.mtimeMs };
+        // A .3mf tells the library nothing by its name: the same extension
+        // covers a printable sliced plate and a project that was never sliced.
+        // Read once per listing, cached on size+mtime, so the row can say which
+        // it is instead of letting someone send a file no printer can start.
+        if (/\.3mf$/i.test(e.name)) {
+          const info = threemfInfoCached(fp, st);
+          if (info.isBambu) { row.kind = "bambu-3mf"; row.sliced = info.sliced; }
+        }
+        return row;
       })
       .sort((a, b) => b.mtime - a.mtime);
     res.json({ folder: dir, sub, folders, files });
@@ -492,6 +502,23 @@ app.get("/api/files", requireAuth, (req, res) => {
 // gcodeFolder). Resolves the same way loadConfig() resolves gcodeFolder
 // (relative to BASE_DIR, same as a relative "./gcode" in config.json would
 // be) and counts the same sliced-file extensions /api/files does.
+// Opening a zip for every row of a folder listing, on every poll, would be
+// pointless work: a file that has not changed cannot have become sliced. Keyed
+// on path + size + mtime, so replacing a file with a sliced version of itself
+// is picked up immediately. Bounded, because a big library would otherwise keep
+// an entry per file forever.
+const THREEMF_CACHE = new Map();
+const THREEMF_CACHE_MAX = 2000;
+function threemfInfoCached(fp, stat) {
+  const key = fp + "|" + stat.size + "|" + stat.mtimeMs;
+  const hit = THREEMF_CACHE.get(key);
+  if (hit) return hit;
+  const info = threemf.read(fp);
+  if (THREEMF_CACHE.size >= THREEMF_CACHE_MAX) THREEMF_CACHE.clear();
+  THREEMF_CACHE.set(key, info);
+  return info;
+}
+
 app.get("/api/check-folder", requireAdmin, (req, res) => {
   const raw = String(req.query.path || "").trim();
   if (!raw) return res.json({ ok: false, error: "Enter a path" });
@@ -1194,6 +1221,32 @@ app.get("/api/map", requireAuth, async (req, res) => {
   const fp = safePath(req.query.file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
   try {
+    // A Bambu .3mf is a zip: its sliced gcode — with the ordinary header
+    // comments this parser already reads — is one entry inside it. Read as
+    // text it produced "no colours" and nothing else, silently, which left the
+    // Job card blank and the filament mapping impossible to choose.
+    //
+    // Only a Bambu .3mf takes this path: .3mf is also FlashForge's AD5X format
+    // and those files keep the behaviour they have always had.
+    const info = /\.3mf$/i.test(fp) ? threemf.read(fp) : null;
+    if (info && info.isBambu) {
+      if (!info.sliced) {
+        return res.json({ ...parseGcodeMap("", { scanBody: false }), notSliced: true, printerModel: info.printerModel });
+      }
+      const plate = Math.max(1, parseInt(req.query.plate, 10) || info.plates[0] || 1);
+      const result = parseGcodeMap(threemf.plateGcode(fp, plate), { scanBody: false });
+      return res.json({
+        ...result,
+        printerModel: result.printerModel || info.printerModel,
+        // What the Send dialog needs on top of the palette: which plates this
+        // file holds, and what it was sliced for.
+        plates: info.plates,
+        plate,
+        printerModelId: info.printerModelId,
+        nozzle: info.nozzle,
+        trayInfoIdx: info.filaments.map(f => f.trayInfoIdx)
+      });
+    }
     // The Orca config block (colours + "filament used [g]") lives at the END of
     // the file, so read just the tail — turns a 200MB read into ~2MB and skips
     // the body scan entirely. Fall back to the whole file only if the colour
@@ -1229,6 +1282,19 @@ app.get("/api/local-thumbnail", requireAuth, (req, res) => {
   const fp = safePath(req.query.file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).send("Not found");
   try {
+    // A Bambu .3mf keeps its preview as a real PNG inside the archive rather
+    // than base64 in a gcode comment.
+    if (/\.3mf$/i.test(fp)) {
+      const info = threemf.read(fp);
+      if (info.isBambu) {
+        const plate = Math.max(1, parseInt(req.query.plate, 10) || info.plates[0] || 1);
+        const png = threemf.plateThumbnail(fp, plate);
+        if (!png) return res.status(404).send("No thumbnail");
+        res.set("Content-Type", "image/png");
+        res.set("Cache-Control", "public, max-age=3600");
+        return res.send(png);
+      }
+    }
     const HEAD = 2 * 1024 * 1024;
     const size = fs.statSync(fp).size;
     let text;
@@ -1291,6 +1357,27 @@ const wantsAnyPref = prefs => !!(prefs && (prefs.autoLevel || prefs.flowCalibrat
 // flowCalibrate:true by default and the caller sent no override for it.
 const printerHasAnyDefaultPref = p => !!(p.autoLevel || p.flowCalibrate || p.timelapse);
 
+// Which file types a connector accepts. Declared as capabilities.fileTypes;
+// ABSENT means the whole set SnapCon's library has always offered, so no
+// existing connector changes behaviour.
+//
+// This exists because the two mistakes are silent: plain gcode sent to a Bambu
+// Lab printer is uploaded happily and then cannot be started (that firmware
+// only runs a sliced .3mf project), and a .3mf sent to a Klipper printer is a
+// zip it will never execute. Both surfaced at the machine, if at all.
+//
+// Returns a sentence to refuse with, or null when the file is fine.
+const DEFAULT_FILE_TYPES = ["gcode", "gco", "g", "gx", "3mf"];
+function fileTypeRefusal(capabilities, name, printerName) {
+  const accepted = (capabilities && Array.isArray(capabilities.fileTypes) && capabilities.fileTypes.length)
+    ? capabilities.fileTypes
+    : DEFAULT_FILE_TYPES;
+  const ext = String(name || "").toLowerCase().split(".").pop();
+  if (ext && String(name).includes(".") && accepted.some(t => t.toLowerCase() === ext)) return null;
+  const list = accepted.map(t => "." + t).join(", ");
+  return `${printerName} cannot print "${name}". It accepts ${list}.`;
+}
+
 app.post("/api/print", requireRegular, async (req, res) => {
   const { file, printer, start, map, prefs } = req.body || {};
   const p = PRINTERS[printer];
@@ -1299,6 +1386,10 @@ app.post("/api/print", requireRegular, async (req, res) => {
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
   const fp = safePath(file);
   if (!fp || !fs.existsSync(fp)) return res.status(404).json({ error: "File not found" });
+  // Before anything is uploaded: a file this printer could never start is
+  // refused here rather than after a multi-megabyte transfer.
+  const typeRefusal = fileTypeRefusal(getCapabilities(p.connector, p), path.basename(fp), p.name);
+  if (typeRefusal) return res.status(400).json({ error: typeRefusal });
 
   // map is { logicalToolIndex: physicalHeadIndex }. Reject two tools → same head —
   // but only when actually starting a print. A plain upload just stages the file
@@ -1417,12 +1508,36 @@ app.get("/api/print-status", requireAuth, (req, res) => {
   res.json(out);
 });
 
+// A printer whose CONTROLS are switched off at the machine (a Bambu Lab
+// printer without Developer Mode) reports that to SnapCon, and SnapCon
+// remembers it so the buttons are disabled with a reason instead of failing on
+// every press. That memory has to be droppable, or an operator who fixes it on
+// the printer stays locked out until SnapCon restarts. This is the card's
+// "Check again": it asks the connector to forget what it learned, nothing more.
+app.post("/api/printer-control-recheck", requireRegular, async (req, res) => {
+  const p = PRINTERS[req.body && req.body.printer];
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  const c = getConnector(p.connector);
+  if (!c.recheckControl) return res.json({ ok: true, unsupported: true });
+  try {
+    res.json({ ok: true, ...(await c.recheckControl(p)) });
+  } catch (e) {
+    res.status(502).json({ error: e.message });
+  }
+});
+
 // ---- Files stored on a printer + start one directly ----
 app.get("/api/printer-files", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  // Optional, like every other connector extra: a connector that cannot browse
+  // the printer's own storage says so, rather than the route calling a method
+  // that isn't there and reporting a TypeError as if the printer were
+  // unreachable.
+  const c = getConnector(p.connector);
+  if (!c.listFiles) return res.status(400).json({ error: p.name + " cannot list the files stored on it. Send a file from SnapCon's library instead." });
   try {
-    res.json({ files: await getConnector(p.connector).listFiles(p) });
+    res.json({ files: await c.listFiles(p) });
   } catch (e) {
     res.status(502).json({ error: "Could not reach " + p.name + ": " + e.message });
   }
@@ -1493,6 +1608,12 @@ app.post("/api/printfile", requireRegular, (req, res) => {
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
   if (!filename || /["\r\n]/.test(filename)) return res.status(400).json({ error: "Bad filename" });
+  // The file is already on the printer, but it may still be one this printer
+  // cannot start (its storage holds timelapse videos too).
+  {
+    const why = fileTypeRefusal(getCapabilities(p.connector, p), filename, p.name);
+    if (why) return res.status(400).json({ error: why });
+  }
 
   // Same head-mapping macros as the upload flow (map = { paletteIdx: headIdx }).
   let tools = [];
@@ -2061,6 +2182,12 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
     if (idx === -1 || !printerVisibleTo(req.user, PRINTERS[idx])) return res.status(400).json({ error: "Unknown printer: " + printer });
     const p = PRINTERS[idx];
     const name = outputname || path.basename(filename || "upload.gcode");
+    // The slicer hook can push any file at any printer. One this printer could
+    // never start is refused before the bytes are written to disk.
+    {
+      const why = fileTypeRefusal(getCapabilities(p.connector, p), name, p.name);
+      if (why) return res.status(400).json({ error: why });
+    }
     fs.mkdirSync(NOTIFY_TMP_DIR, { recursive: true });
     const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
     const tmpFile = path.join(NOTIFY_TMP_DIR, "push-" + Date.now() + "-" + Math.random().toString(16).slice(2) + "-" + safeName);
@@ -2095,6 +2222,10 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
   // outputname is used exactly as given — it's what the file is uploaded and
   // displayed as. The file actually read off disk is always absFile.
   const name = outputname ? outputname.trim() : path.basename(absFile);
+  {
+    const why = fileTypeRefusal(getCapabilities(p.connector, p), name, p.name);
+    if (why) return res.status(400).json({ error: why });
+  }
 
   // Same-machine CLI call (--load, no --snapcon) — no browser session exists
   // to attribute this to, so it's labeled as coming from the CLI itself.
@@ -2171,14 +2302,72 @@ app.get("/api/snapshot", requireAuth, async (req, res) => {
   }
 });
 
+// ---- Live camera: relay one printer's video to a browser ----
+// For cameras SnapCon has to connect to itself rather than let the browser do
+// it: a Bambu Lab printer serves RTSP over TLS, with credentials, on a port no
+// browser speaks. The connector holds ONE session per printer and fans it out
+// to every viewer, so ten open tabs are still one connection to the machine.
+//
+// Same access rules as /api/snapshot above — video from a printer is exactly as
+// sensitive as a still from it. A viewer that goes away unsubscribes, or the
+// printer would keep streaming to nobody; one that stops reading is dropped by
+// the relay (see `backlog`) rather than buffering video in SnapCon's memory.
+app.get("/api/camera-stream", requireAuth, async (req, res) => {
+  const p = PRINTERS[parseInt(req.query.printer, 10)];
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
+  const c = getConnector(p.connector);
+  if (!c.openCameraStream || !getCapabilities(p.connector, p).cameraStream) {
+    return res.status(400).json({ error: p.name + " has no live camera stream" });
+  }
+  let sub = null, ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    if (sub) sub.unsubscribe();
+    if (!res.writableEnded) res.end();
+  };
+  // Bytes can arrive (the init segment, then a buffered group of pictures)
+  // before openCameraStream resolves with the codec the headers need — hold
+  // them until the headers have gone out.
+  let pendingWrites = [];
+  const viewer = {
+    write: (buf) => { if (ended) return; if (pendingWrites) pendingWrites.push(buf); else res.write(buf); },
+    end: () => finish(),
+    backlog: () => res.writableLength || 0
+  };
+  req.on("close", finish);
+  try {
+    sub = await c.openCameraStream(p, viewer);
+  } catch (e) {
+    pendingWrites = null;
+    if (!ended) res.status(e.status || 502).json({ error: e.message });
+    ended = true;
+    return;
+  }
+  if (ended) { sub.unsubscribe(); return; }
+  res.writeHead(200, {
+    "Content-Type": "video/mp4",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "X-SnapCon-Codec": sub.codec || ""
+  });
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
+  const queued = pendingWrites; pendingWrites = null;
+  for (const b of queued) res.write(b);
+});
+
 // ---- Thumbnail proxy: fetch gcode thumbnail from Moonraker ----
 app.get("/api/thumbnail", requireAuth, async (req, res) => {
   const p = PRINTERS[req.query.printer];
   if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
   const file = req.query.file;
   if (!file) return res.status(400).json({ error: "Missing file" });
+  // Optional: a connector with no way to fetch a preview answers 404 (the card
+  // simply shows no thumbnail) rather than crashing the route.
+  const conn = getConnector(p.connector);
+  if (!conn.getThumbnail) return res.status(404).json({ error: p.name + " does not provide job previews" });
   try {
-    const { contentType, buffer } = await getConnector(p.connector).getThumbnail(p, file);
+    const { contentType, buffer } = await conn.getThumbnail(p, file);
     res.set("Content-Type", contentType);
     // Effectively permanent: the client puts a per-job token in the URL, so a
     // new print job (even of a re-sliced same-name file) is a new cache entry —
@@ -2798,7 +2987,16 @@ function publicCfg(role) {
     // it visually client-side" behavior. hasToken tells the UI whether to
     // show the "Configured" state; the value itself never leaves the server
     // unless it's actively being replaced (see POST /api/config below).
-    printers: PRINTERS.map(p => ({ ...p, token: undefined, hasToken: !!p.token })),
+    // The printer's access code gets the same treatment for the same reason:
+    // it is the credential a FlashForge authenticates every call with, and on a
+    // Bambu Lab printer with Developer Mode on it is full control of the
+    // machine. It used to round-trip in clear text and be written straight back
+    // into the Settings input's value.
+    printers: PRINTERS.map(p => ({
+      ...p,
+      token: undefined, hasToken: !!p.token,
+      verificationCode: undefined, hasVerificationCode: !!p.verificationCode
+    })),
     // The Resend API key never round-trips to the browser, even for Admin —
     // unlike printer tokens (which do, into a masked <input>), this secret
     // gets the stricter treatment since leaking it is exactly what this
@@ -2979,6 +3177,15 @@ async function buildPrinterRecord(p, existing) {
   } else if (existing && existing.forceDefaults === false) {
     o.forceDefaults = false;
   }
+  // Same convention for the external spool lane (Bambu Lab, see that
+  // connector's externalSpoolOption): default on, stored only when switched
+  // off, and a save that doesn't mention it carries the existing choice
+  // forward rather than turning the lane back on.
+  if (typeof p.externalSpool === "boolean") {
+    if (!p.externalSpool) o.externalSpool = false;
+  } else if (existing && existing.externalSpool === false) {
+    o.externalSpool = false;
+  }
   o.connector = connector;
   // Brand is derived from the connector for every connector except generic
   // Klipper (Moonraker) — that one is a protocol many vendors speak, so
@@ -2998,9 +3205,6 @@ async function buildPrinterRecord(p, existing) {
   // not a passthrough — anything else, absent included, means auto.
   if (p.transport === "native" || p.transport === "moonraker") o.transport = p.transport;
   if (p.serial) o.serial = String(p.serial);
-  // Was capped at 4 chars (Snapmaker's pairing code length) — widened
-  // for FlashForge's checkCode, documented as 4-5 digits.
-  if (p.verificationCode) o.verificationCode = String(p.verificationCode).slice(0, 8);
   o.id = (existing && existing.id) || newPrinterId();
   // Printer Pool assignment is changed only via the dedicated
   // /api/printer-pool route (it also has to update QueueStore's
@@ -3017,6 +3221,15 @@ async function buildPrinterRecord(p, existing) {
   o.token = (typeof p.token === "string" && p.token.trim())
     ? p.token.trim()
     : (p.token === "" ? undefined : ((existing && existing.token) || undefined));
+  // Identical convention for the access code, now that it is masked too: a
+  // value replaces, "" (the control's Clear) removes, absent keeps what is on
+  // file. Absent is the NORMAL case — the browser no longer has the value to
+  // send back — so the old `if (p.verificationCode)` would have wiped the
+  // stored code on every unrelated settings save. Still capped at 8 chars:
+  // widened from Snapmaker's 4-char pairing code for FlashForge's checkCode.
+  o.verificationCode = (typeof p.verificationCode === "string" && p.verificationCode.trim())
+    ? p.verificationCode.trim().slice(0, 8)
+    : (p.verificationCode === "" ? undefined : ((existing && existing.verificationCode) || undefined));
   // Tags can also be written via POST /api/printer-tags (the Camera View's
   // bulk "Edit Tags" modal) — an array here (even empty, meaning the user
   // cleared every tag in this row) is this save's authoritative value;
@@ -3905,6 +4118,20 @@ app.post("/api/printer-pool", requireAdmin, (req, res) => {
   } else {
     const pool = (CFG.printerPools || []).find(x => x.id === printerPoolId);
     if (!pool) return res.status(400).json({ error: "Unknown printer pool", code: "unknown_pool" });
+    // A pool sends one file to every printer in it (print-on-all, distribute)
+    // without asking what each can print. A printer with its own file types —
+    // a Bambu Lab printer takes .3mf and .gcode, not the whole gcode family —
+    // would be handed files it cannot start, at dispatch, unattended. Refused
+    // until Queue Management understands per-printer file types (docs/TODO.md
+    // section 13). Leaving a pool is always allowed: the branch above returns
+    // before this.
+    const caps = getCapabilities(p.connector, p);
+    if (Array.isArray(caps.fileTypes) && caps.fileTypes.length) {
+      return res.status(400).json({
+        error: p.name + " cannot be added to a pool yet: it prints " + caps.fileTypes.map(t => "." + t).join(", ") + ", and pools send the same file to every printer in them.",
+        code: "incompatible_file_types"
+      });
+    }
     p.printerPoolId = printerPoolId;
     queueStore.assignPool(p.id);
   }
@@ -4805,6 +5032,15 @@ app.post("/api/test-connection", requireAdmin, async (req, res) => {
   // Same 8-char cap sanitizePrinter() applies, so a code that would be
   // truncated on save can't quietly pass the test at full length.
   if (b.verificationCode) p.verificationCode = String(b.verificationCode).slice(0, 8);
+  // The access code is masked in Settings, so an untouched field sends nothing
+  // — without this, Test connection would fail on every saved printer whose
+  // code the admin hadn't just retyped. Only ever the code already on file for
+  // the printer this row IS (matched by its own id, never by a client-supplied
+  // url), and only when the row didn't carry one.
+  else if (b.id) {
+    const saved = PRINTERS.find(x => x.id === b.id);
+    if (saved && saved.verificationCode) p.verificationCode = saved.verificationCode;
+  }
   try {
     const st = await conn.probe(p);
     if (!st.online) return res.status(502).json({ error: st.error || "Could not reach printer" });

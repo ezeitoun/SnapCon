@@ -3,9 +3,9 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 45,
-    "snapconVersion": "0.7.0",
-    "updated": "2026-09-10"
+    "version": 51,
+    "snapconVersion": "0.7.1",
+    "updated": "2026-09-12"
   },
   "printer_status": {
     "offline": "Offline",
@@ -45,7 +45,12 @@
     "action_web_interface_alt": "Web Interface",
     "action_plate": "Plate",
     "action_plate_title": "Plate {done}/{total}",
-    "action_estop_unsupported_title": "Emergency stop is not available on this printer — its firmware acknowledges the command without halting. Use Cancel, or cut power to the printer."
+    "action_estop_unsupported_title": "Emergency stop is not available on this printer — its firmware acknowledges the command without halting. Use Cancel, or cut power to the printer.",
+    "action_eject_unsupported_title": "This printer has no eject command. It keeps showing the last job until the next print starts.",
+    "note_monitoring_only": "Monitoring only. Turn on Developer Mode on the printer (Settings → Network) to control prints from here.",
+    "note_check_again": "Check again",
+    "note_checking": "Checking…",
+    "note_untested_model": "{model} has not been tested with SnapCon yet — some readings may be missing."
   },
   "fleet": {
     "estop_status_sending": "Sending emergency stop…",
@@ -118,6 +123,8 @@
     "camera": {
       "disabled_label": "Camera Disabled",
       "lan_only": "Camera available on local network only",
+      "live": "Live",
+      "stream_unsupported": "This browser cannot play the printer's video format",
       "no_feed": "No Feed",
       "retry_title": "Click to try again"
     },
@@ -273,7 +280,8 @@
         "idle_only": "Idle only",
         "compatible_only": "Compatible only",
         "confirm_incompatible": "One or more selected printers don't match this file's detected brand. Continue?",
-        "upload_and_print": "Upload & Print"
+        "upload_and_print": "Upload & Print",
+        "deselect_all": "Deselect all"
       },
       "quickprint": {
         "title": "Print options",
@@ -345,6 +353,16 @@
         "swatch_match_title": "{tag} → {color}",
         "swatch_invalid_title": "{tag} doesn't resolve to a color — it won't tint the card"
       }
+    },
+    "send": {
+      "issue_not_sliced": "This 3MF has no sliced plate, so the printer has nothing to print. Slice it and export the plate from your slicer.",
+      "issue_model_mismatch": "This file was sliced for a different Bambu Lab model.",
+      "issue_model_unverified": "SnapCon can't verify this file was sliced for this printer.",
+      "issue_nozzle_mismatch": "Sliced for a {file} mm nozzle; this printer reports {printer} mm.",
+      "blocked_material": "No tray on this printer holds {materials}. Load it, or choose another printer.",
+      "blocked_summary": "Not sent: {names} cannot print this file as it stands.",
+      "plate_label": "Plate to print",
+      "plate_option": "Plate {n}"
     }
   },
   "health": {
@@ -548,6 +566,10 @@
     "new_folder_modal_title": "New folder",
     "new_folder_name_placeholder": "Folder name",
     "create_button": "Create",
+    "kind_gcode_title": "Sliced G-code",
+    "kind_3mf_title": "Sliced 3MF project",
+    "kind_3mf_not_sliced_title": "This 3MF has no sliced plate. Slice it and export the plate from your slicer.",
+    "kind_not_sliced": "Not sliced",
     "empty_no_files_yet": "No sliced files here yet.",
     "empty_no_files_in_folder": "No sliced files in this folder.",
     "empty_no_search_matches": "No sliced files match your search.",
@@ -1035,6 +1057,8 @@
       "flow_cal_desc": "Run a flow-rate calibration pass before each print",
       "timelapse_label": "Time-lapse",
       "timelapse_desc": "Capture a time-lapse video of each print",
+      "external_spool_label": "Show the external spool",
+      "external_spool_desc": "Adds the printer's external spool holder to the card next to the AMS trays. Turn it off if you never load it.",
       "defaults_hint": "These are just the defaults — Print and Send-to-Printers both let you override them per job.",
       "push_notify_label": "Push notifications",
       "push_notify_desc": "Include this printer in start / pause / error / complete alerts",

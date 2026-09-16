@@ -76,7 +76,10 @@ function harness() {
     buildCardHtml: p => { counts.builds++; return makeEl(p.id, wrap, counts); },
     updateFleetCardLiveValues: () => { counts.liveUpdates++; },
     closeCamRtc: id => { counts.closes.push(id); },
-    mountCamShot: () => {}, mountCamRtc: () => {},
+    // A removed card releases every camera transport it might have been using;
+    // the relayed one (Bambu) is closed alongside WebRTC.
+    closeCamStream: () => {},
+    mountCamShot: () => {}, mountCamRtc: () => {}, mountCamStream: () => {},
     Set, Map, JSON
   };
   vm.createContext(sandbox);

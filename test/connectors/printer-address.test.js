@@ -275,7 +275,17 @@ test("the save path composes the url before the blank-url filter and the identit
 });
 
 test("publicCfg still sends the whole printer record, so ip/port reach the Settings rows", () => {
-  assert.ok(serverSrc.includes("printers: PRINTERS.map(p => ({ ...p, token: undefined, hasToken: !!p.token }))"));
+  // Spread first, then strip the secrets: ip/port/scheme have to survive, or
+  // the Settings rows lose the address they were split into. Asserted on the
+  // spread rather than the exact line — which secrets get stripped alongside
+  // the token is printerAccessCodeSecret.test.js's business, not this file's.
+  assert.match(serverSrc, /printers: PRINTERS\.map\(p => \(\{\s*\.\.\.p,/);
+  const at = serverSrc.indexOf("printers: PRINTERS.map(p => ({");
+  const mapExpr = serverSrc.slice(at, serverSrc.indexOf("}))", at));
+  for (const f of ["ip", "port", "scheme"]) {
+    assert.doesNotMatch(mapExpr, new RegExp("\\b" + f + ":\\s*undefined"),
+      f + " must reach the Settings row");
+  }
 });
 
 // ---------------------------------------------------------------------------
