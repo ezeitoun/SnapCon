@@ -176,6 +176,31 @@ test("asking for a stream from a printer whose camera is off explains how to swi
     e => { assert.match(e.message, /Liveview/i); assert.equal(e.status, 404); return true; });
 });
 
+// ---- the remaining-time unit check ---------------------------------------------
+
+test("a printer whose countdown failed the unit check shows no remaining time", async (t) => {
+  const { broker, p } = await withPrinter(t);
+  await bambu.probe(p);                       // the connection the pushes ride on
+  broker.push({ gcode_state: "RUNNING", mc_percent: 10, mc_remaining_time: 120 }, { full: false });
+  await new Promise(r => setTimeout(r, 80));
+  assert.equal((await bambu.probe(p)).remaining, 120 * 60, "trusted until something says otherwise");
+  // What the check does when the file's own estimate disagrees by 60x.
+  bambu._internal.connFor(p).remainingUnit = "suspect";
+  assert.equal((await bambu.probe(p)).remaining, null, "better nothing than a countdown 60x out");
+});
+
+test("the check runs once per job, not once per status message", async (t) => {
+  const { broker, p } = await withPrinter(t);
+  await bambu.probe(p);
+  const c = bambu._internal.connFor(p);
+  for (let i = 0; i < 4; i++) {
+    broker.push({ gcode_state: "RUNNING", subtask_name: "ams", mc_percent: 10 + i, mc_remaining_time: 120 }, { full: false });
+    await new Promise(r => setTimeout(r, 30));
+  }
+  assert.equal(c.remainingUnitJob, ["ams", c.status.gcode_file, c.status.task_id].join("|"),
+    "one check, pinned to the job it was made for");
+});
+
 // ---- one connection per printer ----------------------------------------------
 
 test("repeated probes reuse the one connection", async (t) => {

@@ -295,7 +295,28 @@ function basename(p) {
 }
 
 // The merged report -> SnapCon's normalized status. Pure.
-function normalizeBambuState(p, print, { printer = p } = {}) {
+// `mc_remaining_time` is MINUTES. That is not our finding — the value read 0
+// for the whole print we watched, because it paused seconds in — but Joel's
+// driver, SnapCon PR #9 and ha-bambulab all read it the same way, three
+// implementations arrived at independently.
+//
+// Three agreeing sources is better evidence than the one that told us Bambu
+// could not print gcode (a single source, scoped to a different model family,
+// which this plan over-generalised). It is still not OUR evidence, so the first
+// reading of every print is checked against the slicer's own estimate, which
+// travels inside the file. Minutes and seconds are a factor of 60 apart; no
+// estimate is ever that wrong. A reading that fails the check is dropped rather
+// than shown, because the fleet card, the notifications and the queue all read
+// this number.
+const REMAINING_UNIT_TOLERANCE = 8;   // an estimate may be badly out; 8x is not a bad estimate
+function sanityCheckRemaining(reportedMinutes, fileSeconds) {
+  const mins = toNum(reportedMinutes), secs = toNum(fileSeconds);
+  if (!mins || !secs || mins <= 0 || secs <= 0) return "unknown";
+  const ratio = (mins * 60) / secs;
+  return (ratio > REMAINING_UNIT_TOLERANCE || ratio < 1 / REMAINING_UNIT_TOLERANCE) ? "suspect" : "ok";
+}
+
+function normalizeBambuState(p, print, { printer = p, remainingUnitSuspect = false } = {}) {
   print = print || {};
   const gs = String(print.gcode_state || "").toUpperCase();
   const printError = toNum(print.print_error) || 0;
@@ -320,6 +341,19 @@ function normalizeBambuState(p, print, { printer = p } = {}) {
   const total = toNum(print.total_layer_num);
   const layerNum = toNum(print.layer_num);
 
+  // Minutes from the printer, seconds for SnapCon. Only while a job is running
+  // or paused: an idle printer keeps the last job's value, like its progress.
+  function remaining() {
+    if (!busy || remainingUnitSuspect) return null;
+    const mins = toNum(print.mc_remaining_time);
+    if (mins == null || mins < 0) return null;
+    return Math.round(mins * 60);
+  }
+
+  // The printer reports its fans on a 0-15 scale — established here by watching
+  // one wind down 15, 14, 13, 11, 0.
+  const fanRaw = toNum(print.cooling_fan_speed);
+
   return {
     name: p.name, online: true,
     state,
@@ -328,20 +362,15 @@ function normalizeBambuState(p, print, { printer = p } = {}) {
     filename: String(print.subtask_name || basename(print.gcode_file) || ""),
     progress,
     elapsed: null,
-    // mc_remaining_time read 0 for the whole verified print, so nothing
-    // confirms whether it counts minutes or seconds. Reporting it in the wrong
-    // unit would drive notifications and the queue off a wrong number; absent
-    // is honest (CLAUDE.md section 2). Enable once it has been watched on a
-    // print that actually progresses.
-    remaining: null,
+    remaining: remaining(),
     filamentUsed: null,
     bed: bedTemps(print),
     hotend: activeHotend(print),
     layer: busy && total && total > 0 ? { current: Math.max(0, layerNum || 0), total } : null,
     speed: toNum(print.spd_mag),
-    // No chamber temperature: the P2S reports device.ctc.info.temp and
+    // Still no chamber temperature: the P2S reports device.ctc.info.temp and
     // info.temp, neither confirmed to be the chamber.
-    fanPct: null,
+    fanPct: fanRaw != null ? Math.round(Math.max(0, Math.min(15, fanRaw)) / 15 * 100) : null,
     activeExt,
     plate: null,
     heads
@@ -498,6 +527,10 @@ function newConn(name, cfg) {
     version: null,
     devMode: "unknown",
     hint: null,
+    // "unknown" until a job's countdown has been checked against the file's own
+    // estimate; "suspect" hides the reading (see maybeCheckRemainingUnit).
+    remainingUnit: "unknown",
+    remainingUnitJob: null,
     lastError: null,
     authFailed: false,
     connectedAt: 0, lastReportAt: 0, lastPushallAt: 0, lastProbedAt: Date.now(),
@@ -550,6 +583,10 @@ function handleMessage(c, topic, payload) {
       if (c.devMode === "off" && c.hint === "off" && hint === "on") c.devMode = "unknown";
       c.hint = hint;
     }
+    // First real countdown of a new job: check the unit against the slicer's
+    // own estimate inside the file. Once per job, best effort, and never in the
+    // way of the status it rode in on.
+    maybeCheckRemainingUnit(c);
     if (!c.haveBaseline && c.status.gcode_state != null) {
       c.haveBaseline = true;
       // Only a session that actually delivered status counts as a success:
@@ -579,6 +616,54 @@ function handleMessage(c, topic, payload) {
     };
     wake(c);
   }
+}
+
+// Is this printer's countdown believable? Asked once per job, the first time it
+// reports a non-zero remaining time while actually printing.
+//
+// The comparison is against the estimate the slicer wrote into the file, read
+// from the printer over FTPS — one short session per job, the same cost the job
+// preview already pays. If the two disagree by an order of magnitude the unit
+// assumption is wrong on this model, the reading is dropped fleet-wide for this
+// printer, and it says so in the log rather than counting down nonsense.
+function maybeCheckRemainingUnit(c) {
+  if (c.remainingUnit === "checking" || c.remainingUnitJob === jobKeyOf(c.status)) return;
+  const mins = toNum(c.status.mc_remaining_time);
+  const printing = ["RUNNING", "PAUSE"].includes(String(c.status.gcode_state || "").toUpperCase());
+  if (!printing || !mins || mins <= 0) return;
+  const file = String(c.status.subtask_name || "");
+  if (!file) return;
+  c.remainingUnitJob = jobKeyOf(c.status);
+  c.remainingUnit = "checking";
+  const cfg = c.cfg;
+  (async () => {
+    const ftp = ftpsFor(cfg);
+    try {
+      await ftp.connect(MQTT_USER, cfg.code);
+      // The printer reports the job by name; the file it came from keeps its
+      // extension on the printer's storage.
+      const names = [file, file + ".3mf", file + ".gcode.3mf"];
+      for (const name of names) {
+        const size = await ftp.size(name).catch(() => null);
+        if (size == null) continue;
+        const info = await readSliceInfo(ftp, name, size).catch(() => null);
+        const verdict = sanityCheckRemaining(mins, info && info.prediction);
+        c.remainingUnit = verdict;
+        if (verdict === "suspect") {
+          console.log(`[Bambu] ${c.name} reported ${mins} as its remaining time while the file estimates ${info.prediction}s — the unit is not what SnapCon expects, so no remaining time is shown for this printer.`);
+        }
+        return;
+      }
+      c.remainingUnit = "unknown";
+    } catch {
+      c.remainingUnit = "unknown";   // could not read the file; assume nothing
+    } finally {
+      ftp.close();
+    }
+  })();
+}
+function jobKeyOf(print) {
+  return [print && print.subtask_name, print && print.gcode_file, print && print.task_id].join("|");
 }
 
 function scheduleReconnect(c) {
@@ -750,7 +835,9 @@ async function probe(p) {
     if (!c.haveBaseline && (c.state === "connecting" || (c.state === "ready" && Date.now() - c.connectedAt < FIRST_REPORT_WAIT_MS))) {
       await waitForBaseline(c, FIRST_REPORT_WAIT_MS);
     }
-    if (c.state === "ready" && c.haveBaseline) return normalizeBambuState(p, c.status);
+    if (c.state === "ready" && c.haveBaseline) {
+      return normalizeBambuState(p, c.status, { remainingUnitSuspect: c.remainingUnit === "suspect" });
+    }
     return {
       name, online: false,
       error: c.lastError || (c.state === "ready"
@@ -1214,7 +1301,7 @@ module.exports.getFirmwareInfo = async function getFirmwareInfo(p) {
 };
 
 module.exports._internal = {
-  toNum, unpackTemp, trayHex, formatPrintError, describePrintError, mapState,
+  toNum, unpackTemp, trayHex, formatPrintError, describePrintError, mapState, sanityCheckRemaining,
   decodeHeads, activeSlotIndex, activeHotend, bedTemps, normalizeBambuState,
   mergeReport, printerConfig, tlsOptions, describeError,
   setTransportFactory(fn) { transportFactory = fn || defaultTransport; },

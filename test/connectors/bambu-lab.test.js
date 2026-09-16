@@ -155,12 +155,81 @@ test("layer and progress are shown while a print is running", () => {
   assert.deepEqual(st.layer, { current: 42, total: 94 });
 });
 
-test("remaining time is reported as unavailable until its unit is verified", () => {
-  // mc_remaining_time read 0 for the whole verified print, so nothing confirms
-  // whether it counts minutes or seconds. An absent value is honest; a wrong
-  // one would drive notifications and the queue (CLAUDE.md section 2).
+test("remaining time is reported in seconds, from the printer's own minutes", () => {
+  // mc_remaining_time is minutes. Not our finding — the value read 0 for the
+  // whole verified print, because it paused seconds in — but three independent
+  // implementations (Joel's driver, SnapCon PR #9, ha-bambulab) all read it the
+  // same way, and sanityCheckRemaining below is what catches it if they are all
+  // wrong on this model.
   const st = norm({ ...IDLE_REPORT, gcode_state: "RUNNING", mc_remaining_time: 17 });
+  assert.equal(st.remaining, 17 * 60);
+});
+
+test("remaining time is only shown while a print is actually running", () => {
+  assert.equal(norm({ ...IDLE_REPORT, gcode_state: "FINISH", mc_remaining_time: 17 }).remaining, null);
+  assert.equal(norm({ ...IDLE_REPORT, gcode_state: "IDLE", mc_remaining_time: 17 }).remaining, null);
+  assert.equal(norm({ ...IDLE_REPORT, gcode_state: "PAUSE", mc_remaining_time: 17 }).remaining, 17 * 60,
+    "a paused print still has a remaining time worth showing");
+});
+
+test("a negative or absent remaining time is not turned into a number", () => {
+  assert.equal(norm({ ...IDLE_REPORT, gcode_state: "RUNNING", mc_remaining_time: -1 }).remaining, null);
+  assert.equal(norm({ ...IDLE_REPORT, gcode_state: "RUNNING", mc_remaining_time: undefined }).remaining, null);
+});
+
+// ---- the unit check ----
+// The file carries the slicer's own estimate, so the first reading of a print
+// can be compared against it. Minutes and seconds differ by 60x, which no
+// estimate is ever wrong by — if they disagree by that much, the assumption is
+// wrong on this model and SnapCon says so rather than counting down nonsense.
+
+test("a first reading that matches the file's estimate confirms minutes", () => {
+  // The captured PETG plate: prediction 9778 s (2h43m) = 163 minutes.
+  assert.equal(bambu._internal.sanityCheckRemaining(163, 9778), "ok");
+});
+
+test("a first reading 60x out is caught rather than trusted", () => {
+  // What it would look like if the field were really seconds.
+  assert.equal(bambu._internal.sanityCheckRemaining(9778, 9778), "suspect");
+});
+
+test("a rough estimate still counts as agreement", () => {
+  // Slicer estimates and the printer's own countdown routinely differ; only a
+  // whole order of magnitude means the unit is wrong.
+  assert.equal(bambu._internal.sanityCheckRemaining(140, 9778), "ok");
+  assert.equal(bambu._internal.sanityCheckRemaining(200, 9778), "ok");
+});
+
+test("nothing to compare against is not a failure", () => {
+  assert.equal(bambu._internal.sanityCheckRemaining(163, null), "unknown");
+  assert.equal(bambu._internal.sanityCheckRemaining(null, 9778), "unknown");
+  assert.equal(bambu._internal.sanityCheckRemaining(0, 9778), "unknown");
+});
+
+test("a printer whose reading failed the check reports no remaining time at all", () => {
+  // Better nothing than a countdown that is 60x wrong: notifications and the
+  // queue both read this.
+  const st = norm({ ...IDLE_REPORT, gcode_state: "RUNNING", mc_remaining_time: 17 }, { remainingUnitSuspect: true });
   assert.equal(st.remaining, null);
+});
+
+// ---- fans ----
+
+test("fan speed is reported as a percentage of the printer's own 0-15 scale", () => {
+  // Our own evidence: chasing an exhaust fan left running after a cancel, the
+  // readings stepped 15, 14, 13, 11, 0 — a 0-15 scale, which is what PR #9
+  // assumed too.
+  assert.equal(norm({ ...IDLE_REPORT, cooling_fan_speed: "15" }).fanPct, 100);
+  assert.equal(norm({ ...IDLE_REPORT, cooling_fan_speed: "0" }).fanPct, 0);
+  assert.equal(norm({ ...IDLE_REPORT, cooling_fan_speed: "8" }).fanPct, 53);
+});
+
+test("a fan the printer does not report is left absent", () => {
+  assert.equal(norm({ ...IDLE_REPORT, cooling_fan_speed: undefined }).fanPct, null);
+});
+
+test("a fan reading outside the scale is clamped rather than shown as over 100%", () => {
+  assert.equal(norm({ ...IDLE_REPORT, cooling_fan_speed: "255" }).fanPct, 100);
 });
 
 test("temperatures come from the fields the P2S actually reports", () => {

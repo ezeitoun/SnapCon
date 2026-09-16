@@ -528,3 +528,22 @@ meaning of, and a wrong number is worse than none.
 - **A file cannot be sent to a printer that cannot print it.** SnapCon refuses before the upload
   rather than after it.
 
+
+0.7.2
+
+### Bambu Lab: time remaining and fan speed
+Both were deliberately blank in 0.7.1 — the printer reports them, but SnapCon had no way to confirm
+what the numbers meant, and a wrong countdown is worse than none.
+
+- **Time remaining** now shows. The printer reports it in minutes, which is how Joel's
+  print-farm-manager, the Bambu connector proposed in SnapCon PR #9 and the Home Assistant
+  integration all read it — three implementations that arrived at it separately.
+- **It checks itself on the first print.** Every sliced file carries the slicer's own estimate, so
+  the first countdown of each job is compared against it. Minutes and seconds are a factor of sixty
+  apart, and no estimate is ever that wrong: if they disagree by that much, SnapCon hides the
+  remaining time for that printer and says so in the log rather than counting down a wrong number.
+- **Fan speed** now shows as a percentage. Bambu reports fans on a 0-15 scale, which was established
+  by watching one wind down step by step on a real printer.
+
+Chamber temperature is still not shown. The printer reports two readings that might be it, and
+neither has been confirmed.
