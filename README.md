@@ -1,3 +1,10 @@
+Version 0.7.2 includes a beta connector for Bambu Lab printers:
+
+* On the printer: Settings → Network → LAN Only Mode on, then Developer Mode on. Without Developer Mode you get everything except printing, and the card tells you so.
+* In SnapCon: Settings → Printers → add one, connector Bambu Lab (beta), then IP, serial and access code from that same printer screen. Test connection should report the model and firmware.
+* Point Settings → General at a folder holding a sliced file, pick it, press Send, choose which AMS tray feeds each filament, then Upload & Print.
+
+
 # SnapCon
 SnapCon is a local-first fleet management platform built primarily for Snapmaker U1 print farms.
 
