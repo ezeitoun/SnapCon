@@ -447,6 +447,31 @@ const syncEngine = createSyncEngine({ baseDir: BASE_DIR, getConnector, fileIO: {
   noteError: (p, e) => netfs.noteError(p, e),
 } });
 
+// Nightly copies of audit.db and sync.db (AuditLog/SyncStore backup(): the
+// Library's runBackup with their own prefix). Same rule as the Library's own
+// backups: due once the newest copy is 24 h old, checked hourly and once a
+// minute after start, so a restart neither skips a day nor doubles one up.
+// Small databases, so this runs on the main thread, like the Library's
+// pre-migration snapshot; the time each copy took is logged.
+const { backupDue } = require("./library/LibraryStore");
+const DB_BACKUP_EVERY_MS = 24 * 60 * 60 * 1000;
+function backupStoreIfDue(name, store, category) {
+  if (!store.isAvailable() || !backupDue(store.listBackups(), Date.now(), DB_BACKUP_EVERY_MS)) return;
+  try {
+    const r = store.backup({ reason: "nightly" });
+    if (r) console.log(`[${name}] backup ${r.file}: ${r.bytes} bytes in ${r.ms} ms`);
+  } catch (e) {
+    console.warn(`[${name}] backup failed: ${e.message}`);
+    auditLog.log({ category, event: "backup-failed", detail: { database: name + ".db", message: e.message } });
+  }
+}
+function backupDatabasesIfDue() {
+  backupStoreIfDue("audit", auditLog, "admin");
+  backupStoreIfDue("sync", syncEngine.store, "sync");
+}
+setTimeout(backupDatabasesIfDue, 60 * 1000).unref();
+setInterval(backupDatabasesIfDue, 60 * 60 * 1000).unref();
+
 // Never attributes an action to the implicit admin (usersEnabled:false) —
 // there's no real account behind it, just the historical "everyone's an
 // admin" back-compat behavior. A route firing while usersEnabled is off logs

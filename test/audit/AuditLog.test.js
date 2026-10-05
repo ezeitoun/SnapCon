@@ -126,3 +126,40 @@ test("AuditLog: degrades to a safe no-op (never throws) when the base directory 
   assert.deepEqual(result.rows, []);
   assert.doesNotThrow(() => audit.prune(90));
 });
+
+// ---- nightly backups (backup(): the Library's runBackup with prefix "audit") ----
+
+test("AuditLog: backup() is a complete copy, including writes still only in the WAL, and keeps seven", () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "snapcon-audit-test-"));
+  const audit = createAuditLog({ baseDir });
+  for (let i = 0; i < 5; i++) audit.log({ category: "job", event: "print-started", printerName: "U1 #" + i });
+  let clock = Date.now();
+  const tick = () => (clock += 1000);
+  const r = audit.backup({ now: tick });
+  assert.match(r.file, /^audit-\d{8}-\d{6}-nightly\.db$/);
+  const { DatabaseSync } = require("node:sqlite");
+  const copy = new DatabaseSync(path.join(baseDir, "audit-data", "backups", r.file));
+  assert.equal(copy.prepare("SELECT COUNT(*) AS n FROM audit_log").get().n, 5);
+  copy.close();
+  for (let i = 0; i < 9; i++) audit.backup({ now: tick });
+  assert.equal(audit.listBackups().length, 7);
+});
+
+test("AuditLog: a failed backup throws for the caller to report, and leaves the log working", () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "snapcon-audit-test-"));
+  const audit = createAuditLog({ baseDir });
+  fs.writeFileSync(path.join(baseDir, "audit-data", "backups"), "not a folder");
+  assert.throws(() => audit.backup(), /EEXIST|ENOTDIR|not a directory/i);
+  assert.deepEqual(audit.listBackups(), []);
+  audit.log({ category: "job", event: "print-started" });
+  assert.equal(audit.query({}).total, 1);
+});
+
+test("AuditLog: backup() is a no-op when the audit log is unavailable", () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "snapcon-audit-test-"));
+  fs.writeFileSync(path.join(baseDir, "audit-data"), "a file where the folder should be");
+  const audit = createAuditLog({ baseDir });
+  assert.equal(audit.isAvailable(), false);
+  assert.equal(audit.backup(), null);
+  assert.deepEqual(audit.listBackups(), []);
+});

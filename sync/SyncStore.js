@@ -12,8 +12,12 @@
 // SQLite makes both an indexed lookup instead.
 const fs = require("fs");
 const path = require("path");
+const { runBackup, listBackups } = require("../library/LibraryStore");
 
 function createSyncStore({ baseDir }) {
+  const dir = path.join(baseDir, "sync-data");
+  const dbPath = path.join(dir, "sync.db");
+  const backupsDir = path.join(dir, "backups");
   let db = null;
   let DatabaseSyncCtor = null;
   let unavailable = false;
@@ -29,9 +33,8 @@ function createSyncStore({ baseDir }) {
 
   if (!unavailable) {
     try {
-      const dir = path.join(baseDir, "sync-data");
       fs.mkdirSync(dir, { recursive: true });
-      db = new DatabaseSyncCtor(path.join(dir, "sync.db"));
+      db = new DatabaseSyncCtor(dbPath);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec(`
         CREATE TABLE IF NOT EXISTS synced_files (
@@ -113,8 +116,20 @@ function createSyncStore({ baseDir }) {
     }
   }
 
+  // A consistent copy of the database in sync-data/backups/, made with the
+  // Library's runBackup(): an integrity check first (a damaged database never
+  // pushes good copies out), VACUUM INTO under a temporary name, then rename,
+  // keeping the newest seven. A file copy of the live database is not safe:
+  // in WAL mode recent writes may still be in sync.db-wal. Throws on failure
+  // (the caller reports it); null when the store is unavailable.
+  function backup({ reason = "nightly", now = Date.now } = {}) {
+    if (unavailable) return null;
+    return runBackup({ DatabaseSync: DatabaseSyncCtor, dbPath, backupsDir, reason, now, prefix: "sync" });
+  }
+
   return {
-    getEntry, recordSynced, listDownloaded, deleteEntry,
+    getEntry, recordSynced, listDownloaded, deleteEntry, backup,
+    listBackups: () => listBackups(backupsDir, "sync"),
     isAvailable: () => !unavailable,
     unavailableReason: () => unavailableReason
   };

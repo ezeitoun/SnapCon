@@ -79,6 +79,22 @@ function stamp(ms) {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+// Whether a routine backup is due: the newest one (pre-migration snapshots
+// don't count) is at least `everyMs` old, or there is none. `backups` is
+// listBackups()'s answer, newest first; its stamps are local time.
+function backupDue(backups, nowMs, everyMs) {
+  const newest = backups.find(b => b.reason !== "pre-migration");
+  if (!newest) return true;
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(newest.stamp);
+  const at = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : 0;
+  return nowMs - at >= everyMs;
+}
+
+// A prefix becomes part of a file name and a regular expression: letters only.
+function checkPrefix(prefix) {
+  if (!/^[a-z]+$/.test(prefix)) throw new Error("invalid backup prefix: " + prefix);
+}
+
 function isCorruption(e) {
   return !!e && (SQLITE_CORRUPT.has(e.errcode) || /file is not a database|malformed/i.test(e.message || ""));
 }
@@ -89,7 +105,10 @@ function isCorruption(e) {
 // that fails its integrity check, so a damaged file never pushes the last good
 // copies out of rotation. Used on the main thread for pre-migration snapshots
 // (before anything else runs) and from the indexer worker for the nightly one.
-function runBackup({ DatabaseSync, dbPath, backupsDir, reason, keep = BACKUP_KEEP, now = Date.now }) {
+// `prefix` names the files (library-…db); the audit and sync stores reuse this
+// for their own databases with their own prefix.
+function runBackup({ DatabaseSync, dbPath, backupsDir, reason, keep = BACKUP_KEEP, now = Date.now, prefix = "library" }) {
+  checkPrefix(prefix);
   const t0 = Date.now();
   fs.mkdirSync(backupsDir, { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -100,28 +119,30 @@ function runBackup({ DatabaseSync, dbPath, backupsDir, reason, keep = BACKUP_KEE
       e.code = "LIBRARY_DB_CORRUPT";
       throw e;
     }
-    const name = `library-${stamp(now())}-${reason}.db`;
+    const name = `${prefix}-${stamp(now())}-${reason}.db`;
     const tmp = path.join(backupsDir, name + ".partial");
     fs.rmSync(tmp, { force: true });
     db.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
     fs.renameSync(tmp, path.join(backupsDir, name));
-    if (reason !== "pre-migration") rotateBackups(backupsDir, keep);
+    if (reason !== "pre-migration") rotateBackups(backupsDir, keep, prefix);
     return { file: name, bytes: fs.statSync(path.join(backupsDir, name)).size, ms: Date.now() - t0 };
   } finally { db.close(); }
 }
 
 // Keeps the newest `keep` routine backups. Pre-migration snapshots are few and
 // are never rotated away: they are the way back from a failed upgrade.
-function rotateBackups(backupsDir, keep = BACKUP_KEEP) {
-  const routine = listBackups(backupsDir).filter(b => b.reason !== "pre-migration");
+function rotateBackups(backupsDir, keep = BACKUP_KEEP, prefix = "library") {
+  const routine = listBackups(backupsDir, prefix).filter(b => b.reason !== "pre-migration");
   for (const b of routine.slice(keep)) fs.rmSync(path.join(backupsDir, b.file), { force: true });
 }
 
-function listBackups(backupsDir) {
+function listBackups(backupsDir, prefix = "library") {
+  checkPrefix(prefix);
+  const re = new RegExp("^" + prefix + "-(\\d{8}-\\d{6})-([a-z-]+)\\.db$");
   let names = [];
   try { names = fs.readdirSync(backupsDir); } catch { return []; }
   return names
-    .map(n => /^library-(\d{8}-\d{6})-([a-z-]+)\.db$/.exec(n))
+    .map(n => re.exec(n))
     .filter(Boolean)
     .map(m => ({ file: m[0], stamp: m[1], reason: m[2], bytes: fs.statSync(path.join(backupsDir, m[0])).size }))
     .sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : 0));
@@ -362,4 +383,4 @@ function createLibraryStore({ baseDir, now = Date.now, log = console, schema = S
   return api;
 }
 
-module.exports = { createLibraryStore, runBackup, rotateBackups, listBackups, MIGRATIONS, BACKUP_KEEP };
+module.exports = { createLibraryStore, runBackup, rotateBackups, listBackups, backupDue, MIGRATIONS, BACKUP_KEEP };

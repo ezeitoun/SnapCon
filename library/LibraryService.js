@@ -7,7 +7,7 @@
 "use strict";
 const path = require("path");
 const crypto = require("crypto");
-const { createLibraryStore } = require("./LibraryStore");
+const { createLibraryStore, backupDue: isBackupDue } = require("./LibraryStore");
 const { createAuthorizer } = require("./permissions");
 const { createWorkerHost } = require("./WorkerHost");
 const { normalizeLocation, comparisonKey, overlaps, checkReachable } = require("./locations");
@@ -535,11 +535,7 @@ function createLibraryService({
   }
 
   function backupDue() {
-    const newest = store.listBackups().find(b => b.reason !== "pre-migration");
-    if (!newest) return true;
-    const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(newest.stamp);
-    const at = m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() : 0;
-    return now() - at >= BACKUP_EVERY_MS;
+    return isBackupDue(store.listBackups(), now(), BACKUP_EVERY_MS);
   }
 
   function tick() {

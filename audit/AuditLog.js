@@ -7,10 +7,14 @@
 // over an additive feature.
 const fs = require("fs");
 const path = require("path");
+const { runBackup, listBackups } = require("../library/LibraryStore");
 
 const ALLOWED_COLUMNS = new Set(["category", "event", "userId", "printerId"]);
 
 function createAuditLog({ baseDir, retentionDaysFn = () => 90 }) {
+  const dir = path.join(baseDir, "audit-data");
+  const dbPath = path.join(dir, "audit.db");
+  const backupsDir = path.join(dir, "backups");
   let db = null;
   let DatabaseSyncCtor = null;
   let unavailable = false;
@@ -26,9 +30,8 @@ function createAuditLog({ baseDir, retentionDaysFn = () => 90 }) {
 
   if (!unavailable) {
     try {
-      const dir = path.join(baseDir, "audit-data");
       fs.mkdirSync(dir, { recursive: true });
-      db = new DatabaseSyncCtor(path.join(dir, "audit.db"));
+      db = new DatabaseSyncCtor(dbPath);
       db.exec("PRAGMA journal_mode = WAL");
       db.exec(`
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -133,8 +136,20 @@ function createAuditLog({ baseDir, retentionDaysFn = () => 90 }) {
     }
   }
 
+  // A consistent copy of the database in audit-data/backups/, made with the
+  // Library's runBackup(): an integrity check first (a damaged database never
+  // pushes good copies out), VACUUM INTO under a temporary name, then rename,
+  // keeping the newest seven. A file copy of the live database is not safe:
+  // in WAL mode recent writes may still be in audit.db-wal. Throws on failure
+  // (the caller reports it); null when the store is unavailable.
+  function backup({ reason = "nightly", now = Date.now } = {}) {
+    if (unavailable) return null;
+    return runBackup({ DatabaseSync: DatabaseSyncCtor, dbPath, backupsDir, reason, now, prefix: "audit" });
+  }
+
   return {
-    log, query, prune, events,
+    log, query, prune, events, backup,
+    listBackups: () => listBackups(backupsDir, "audit"),
     isAvailable: () => !unavailable,
     unavailableReason: () => unavailableReason
   };

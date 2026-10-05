@@ -7,7 +7,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
-const { createLibraryStore, runBackup, listBackups } = require("../../library/LibraryStore");
+const { createLibraryStore, runBackup, listBackups, backupDue } = require("../../library/LibraryStore");
 const schema = require("../../library/schema");
 
 const quiet = { log() {}, warn() {}, error() {} };
@@ -201,6 +201,29 @@ test("backups: VACUUM INTO copies, seven routine ones kept, pre-migration snapsh
   const copy = new DatabaseSync(path.join(backupsDir, all[0].file));
   assert.equal(copy.prepare("SELECT name FROM models").get().name, "Beardie", "a backup is a complete, openable database");
   copy.close();
+});
+
+test("backups with another prefix (the audit and sync stores) never list or rotate the Library's", () => {
+  const base = tmpBase();
+  const s = open(base); seed(s.db); s.close();
+  const dbPath = path.join(base, "library-data", "library.db"), backupsDir = path.join(base, "library-data", "backups");
+  runBackup({ DatabaseSync, dbPath, backupsDir, reason: "nightly", now: tick });
+  for (let i = 0; i < 9; i++) runBackup({ DatabaseSync, dbPath, backupsDir, reason: "nightly", now: tick, prefix: "audit" });
+  assert.equal(listBackups(backupsDir).length, 1, "the Library's one backup, unchanged by the other prefix's rotation");
+  assert.equal(listBackups(backupsDir, "audit").length, 7);
+  assert.ok(listBackups(backupsDir, "audit").every(b => b.file.startsWith("audit-")));
+  assert.throws(() => listBackups(backupsDir, "a.*"), /invalid backup prefix/);
+});
+
+test("backupDue: none yet, or the newest routine backup 24 h old; pre-migration snapshots don't count", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const at = new Date(2026, 9, 5, 2, 30, 0).getTime();   // stamps are local time
+  const b = (stamp, reason = "nightly") => ({ stamp, reason });
+  assert.equal(backupDue([], at, DAY), true);
+  assert.equal(backupDue([b("20261005-023000", "pre-migration")], at, DAY), true);
+  assert.equal(backupDue([b("20261004-023001")], at, DAY), false, "a second short of a day");
+  assert.equal(backupDue([b("20261004-023000")], at, DAY), true);
+  assert.equal(backupDue([b("20261005-020000", "pre-migration"), b("20261003-010000")], at, DAY), true);
 });
 
 test("a damaged database is never backed up over the good copies", () => {
