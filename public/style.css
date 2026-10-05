@@ -890,9 +890,20 @@
   .prog-track.red{background:rgba(255,79,79,0.08);border:1px solid rgba(255,79,79,0.12);}
   /* Shimmer duration is matched by a wall-clock animation-delay set inline in
      renderFleet, so the frequent card rebuilds resume the animation mid-phase
-     instead of restarting it. */
-  .prog-fill{position:absolute;left:0;top:0;height:100%;border-radius:6px;animation:progshimmer 8s linear infinite;}
-  .prog-fill.cyan{background:linear-gradient(90deg,var(--violet),#00e5ff,#bf5af2);background-size:200% 100%;box-shadow:0 0 10px rgba(0,229,255,0.55);}
+     instead of restarting it. The delay sits on .prog-fill and the ::after
+     inherits it.
+     The shimmer moves a layer (transform) instead of the fill's
+     background-position, so it runs on the compositor and no longer repaints
+     every printing card's bar on every frame. The layer is four fills wide
+     and tiles the gradient every two fills (background-size:50%), exactly as
+     the old 200% background did; sliding it left by one tile (-50%) over 8s
+     is the old 0% -> 200% background-position sweep. The fill clips it, and
+     keeps its own glow and rounded corners. */
+  .prog-fill{position:absolute;left:0;top:0;height:100%;border-radius:6px;}
+  .prog-fill.cyan{overflow:hidden;box-shadow:0 0 10px rgba(0,229,255,0.55);}
+  .prog-fill.cyan::after{content:"";position:absolute;left:0;top:0;height:100%;width:400%;
+    background:linear-gradient(90deg,var(--violet),#00e5ff,#bf5af2);background-size:50% 100%;background-repeat:repeat-x;
+    animation:progshimmer 8s linear infinite;animation-delay:inherit;will-change:transform;}
   .prog-fill.amber{background:linear-gradient(90deg,#d97706,#fbbf24);box-shadow:0 0 10px rgba(245,158,11,0.45);animation:none;}
   .prog-fill.red{background:linear-gradient(90deg,#ff4f4f,#ff8c6b);box-shadow:0 0 10px rgba(255,79,79,0.5);animation:none;}
   .prog-fill.green{background:var(--ok);box-shadow:0 0 6px color-mix(in srgb,var(--ok) 30%,transparent);animation:none;}
@@ -904,7 +915,7 @@
   [data-theme="light"] .prog-time-val{color:var(--ink);}
   .prog-time-sep{width:1px;height:26px;background:rgba(255,255,255,0.06);margin:0 10px;}
   [data-theme="light"] .prog-time-sep{background:var(--line);}
-  @keyframes progshimmer{0%{background-position:0% 0}100%{background-position:200% 0}}
+  @keyframes progshimmer{from{transform:translateX(0)}to{transform:translateX(-50%)}}
   .skel-block{padding:10px 0 4px;}
   .skel-line{height:9px;border-radius:5px;background:linear-gradient(90deg,var(--panel-2) 25%,var(--line) 50%,var(--panel-2) 75%);background-size:400% 100%;animation:skelshimmer 1.5s ease infinite;}
   @keyframes skelshimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
@@ -2092,7 +2103,8 @@
   .list-progress-pct{font-family:var(--mono); font-size:11px; font-weight:700; flex:none; width:30px;}
   .list-progress-pct.cyan{color:#fff;} .list-progress-pct.amber{color:#fcd34d;} .list-progress-pct.red{color:#ff8c6b;} .list-progress-pct.green{color:var(--ok);}
   .list-progress-track{flex:1; height:5px;}
-  .list-progress-fill{animation:none !important;}
+  .list-progress-fill, .list-progress-fill::after{animation:none !important;}
+  .list-progress-fill::after{will-change:auto;}   /* static here: no layer needed */
   .list-progress-meta{font-size:10.5px; color:var(--ink-dim); font-family:var(--mono);}
   /* min-width sized to "9999 / 9999" (4 digits each side — the widest
      realistic value, tabular numerals) at this font: measures 72.578px via
@@ -2122,7 +2134,7 @@
     .health-card-flash{animation:none;}
     .splash img{animation:none;}
     .jobloading .jlfill{animation:none;}
-    .prog-fill{animation:none;}
+    .prog-fill.cyan::after{animation:none;will-change:auto;}
     /* The firmware sweep too — the row's elapsed clock still ticks, so the
        "something is happening" signal survives without the movement. */
     .prog-fill.working::after{animation:none; opacity:.3;}
