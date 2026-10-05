@@ -41,7 +41,7 @@ function extractFn(name) {
 
 // Both client-only stores cardSignature() consults: the phase badge and the
 // result line a print/upload action last wrote (see setCardStatus).
-const sandbox = { STATUS_OVERRIDE: new Map(), CARD_STATUS: new Map(), UPLOAD_CANCEL: new Map(), JSON };
+const sandbox = { STATUS_OVERRIDE: new Map(), CARD_STATUS: new Map(), UPLOAD_CANCEL: new Map(), SEND_FILL: new Map(), JSON };
 vm.createContext(sandbox);
 // cardSignature resolves the displayed file through the same helper the card
 // and list view use, so the real one comes along rather than a stand-in that
@@ -154,6 +154,17 @@ test("a cancellable upload invalidates the signature, so its button appears and 
   finally { sandbox.UPLOAD_CANCEL.clear(); }
 });
 
+test("a send starting or ending rebuilds the card; its percentage does not", () => {
+  const before = sigOf(BASE());
+  sandbox.SEND_FILL.set("3", { start: false, pct: 10 });
+  try {
+    const during = sigOf(BASE());
+    assert.notEqual(during, before);
+    sandbox.SEND_FILL.set("3", { start: false, pct: 90 });
+    assert.equal(sigOf(BASE()), during, "progress is patched in place, never a rebuild per tick");
+  } finally { sandbox.SEND_FILL.clear(); }
+});
+
 test("the remaining structural fields all still invalidate the signature", () => {
   const base = sigOf(BASE());
   for (const [field, value] of [
@@ -172,11 +183,11 @@ test("exactly four fields are absent from the signature — nothing else silentl
   const sig = JSON.parse(cardSignature(BASE()));
   const keys = Object.keys(sig).sort();
   assert.deepEqual(keys, [
-    // cardStatus, statusOverride and uploadCancel are the client-only stores:
+    // cardStatus, statusOverride, uploadCancel and sendFill are the client-only stores:
     // all are rendered into the card, so all must force the rebuild that shows them.
     "activeExt", "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
     "filamentUsed", "filename", "forceDefaults", "heads", "layer", "message", "name",
-    "online", "plate", "queuedFile", "state", "statusOverride", "stem", "tags",
+    "online", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
     "transport", "uploadCancel", "url"
   ]);
   for (const gone of ["progress", "elapsed", "bed", "hotend"]) {

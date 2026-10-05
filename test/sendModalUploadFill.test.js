@@ -1,8 +1,8 @@
 // test/sendModalUploadFill.test.js — the Send modal's Upload button fills as
 // the transfer runs, the same way the card's own Upload button always has.
 //
-// The card button fills because pushTo() finds it by printer id
-// (button[data-id][data-start]) and hands it to pollJob. The modal's buttons
+// The card button fills from SEND_FILL, state its own render reads (see
+// test/cardSendFill.test.js). The modal's buttons
 // carry no such attributes — they belong to no single printer — so they were
 // never filled, while each printer ROW in the modal filled instead. One click
 // there can upload to several printers at once, so the button shows the
@@ -53,12 +53,11 @@ test("the modal passes its own button so the fill has something to paint", () =>
   assert.match(fn, /aggregateFillPct|onProgress/, "and progress reaches it");
 });
 
-test("the card's own Upload button keeps filling exactly as before", () => {
-  // The mechanism the card relies on: found by printer id, handed to pollJob.
+test("the card's own Upload button still fills: pushTo feeds SEND_FILL through pollJob", () => {
   const fn = appSrc.slice(appSrc.indexOf("async function pushTo("),
                           appSrc.indexOf("\n}", appSrc.indexOf("async function pushTo(")));
-  assert.match(fn, /button\[data-id="\$\{printer\}"\]\[data-start="\$\{start\?'1':'0'\}"\]/);
-  assert.match(fn, /pollJob\(/);
+  assert.match(fn, /pollJob\([^)]*pct=>setSendFill\(printer, start, pct\)/);
+  assert.match(fn, /finally\{[^}]*setSendFill\(printer, start, null\)/, "and always ends it");
 });
 
 test("the button is left clean when the upload ends", () => {

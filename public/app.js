@@ -394,6 +394,33 @@ function setCardStatus(printerId, cls, txt){
   // the action it describes.
   renderFleet({incremental:true});
 }
+// The card's Upload or Print button doubles as the progress bar while a send
+// runs: String(printer id) -> { start, pct }. Kept as state and baked into the
+// card's HTML (sendBtnAttrs), like the Health page's sync buttons, because the
+// card is rebuilt during a send (the "Uploading" badge alone does that) and a
+// button captured before the rebuild is no longer on screen.
+const SEND_FILL = new Map();
+function fillBackground(pct){
+  return `linear-gradient(to right, rgba(167,139,250,0.55) ${pct}%, rgba(167,139,250,0.13) ${pct}%)`;
+}
+// The Upload (start=false) or Print (start=true) button's disabled state and,
+// while that button's send runs, its fill.
+function sendBtnAttrs(p, start, enabled){
+  const f=SEND_FILL.get(String(p.id));
+  if(f && f.start===start) return `disabled style="background:${fillBackground(f.pct)}"`;
+  return enabled ? "" : "disabled";
+}
+// pct null ends the send. Starting or ending re-renders the card (its
+// signature carries which button is filling); a new percentage is written
+// straight onto the button on screen now.
+function setSendFill(printerId, start, pct){
+  const key=String(printerId), prev=SEND_FILL.get(key);
+  if(pct==null){ if(prev){ SEND_FILL.delete(key); renderFleet({incremental:true}); } return; }
+  SEND_FILL.set(key, { start, pct });
+  if(!prev || prev.start!==start){ renderFleet({incremental:true}); return; }
+  document.querySelectorAll(`#fleet button[data-id="${key}"][data-start="${start?"1":"0"}"]`).forEach(b=>{ b.style.background=fillBackground(pct); });
+}
+
 // Uploads that can still be cancelled: String(printer id) -> job id. Set and
 // cleared by pollJob() as the server reports `cancellable`; rendered as a
 // "Cancel upload" button in the card's status line (cardStatusHtml), so it
@@ -5936,7 +5963,9 @@ function cardSignature(p){
     // Same reasoning as statusOverride: client-only state the card renders,
     // so a new result message has to force the rebuild that displays it.
     cardStatus:CARD_STATUS.get(String(p.id))||null,
-    uploadCancel:UPLOAD_CANCEL.get(String(p.id))||null
+    uploadCancel:UPLOAD_CANCEL.get(String(p.id))||null,
+    // Which button is filling, not how far: the percentage is patched in place.
+    sendFill:SEND_FILL.has(String(p.id)) ? SEND_FILL.get(String(p.id)).start : null
   });
 }
 // "Check again" on the monitoring-only note. The operator has just switched
@@ -6164,8 +6193,8 @@ function buildCardHtml(p, need, dragEnabled){
             + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""><span>${esc(t("common.cancel"))}</span></button>`
             + (p.capabilities?.excludeObject&&p.plate&&p.plate.total>1?`<button class="btn-chip" ${canAct()?"":"disabled"} data-plate="${p.id}" title="${esc(t("printer.action_plate_title",{done:p.plate.total-p.plate.excluded,total:p.plate.total}))}"><img src="/plate-icon.svg" alt=""><span>${esc(t("printer.action_plate"))}</span></button>`:"")
             + `<button class="btn-chip danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""><span>${esc(t("printer.action_estop"))}</span></button>`
-          : `<button class="btn-chip" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
-            + `<button class="btn-chip" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
+          : `<button class="btn-chip" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
+            + `<button class="btn-chip" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
             + `<button class="btn-chip" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
             + (p.state==='complete'&&p.filename?`<button class="btn-chip" ${canAct()?"":"disabled"} data-reprint="${p.id}" title="${esc(t("printer.action_reprint_title",{filename:p.filename}))}"><img src="/reprint-icon.svg" alt=""><span>${esc(t("printer.action_reprint"))}</span></button>`:"")
         }
@@ -6545,8 +6574,8 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
             : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""></button>`)
         + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""></button>`
         + `<button class="btn-chip icon-only danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
-      : `<button class="btn-chip icon-only" ${canSend&&canAct()?"":"disabled"} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
-        + `<button class="btn-chip icon-only" ${p.online&&!busy&&!maintMode&&canAct()?"":"disabled"} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
+      : `<button class="btn-chip icon-only" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
+        + `<button class="btn-chip icon-only" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
         + `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""></button>`;
     const tr=document.createElement("tr");
     tr.className="list-row"+(p.online?"":" offline");
@@ -6960,10 +6989,8 @@ async function pushTo(printer, start, extraUI, prefs, onProgress, plate){
   const st=(cls,txt)=>setCardStatus(printer,cls,txt);
   st("pstatus","");
   if(extraUI) setRowUI(extraUI, 0, "", t("fleet.print.status_uploading"));
-  // Capture the clicked button to animate its background as a fill bar
-  const progressBtn=document.querySelector(`button[data-id="${printer}"][data-start="${start?'1':'0'}"]`);
-  const btnOrigBg=progressBtn?progressBtn.style.background:'';
-  if(progressBtn) progressBtn.disabled=true;
+  // The clicked button (Upload or Print) fills as the progress bar: see SEND_FILL.
+  setSendFill(printer, start, 0);
   PUSHES++;
   let ok=false;
   try{
@@ -6979,23 +7006,21 @@ async function pushTo(printer, start, extraUI, prefs, onProgress, plate){
       // and renders the existing "ready to print" banner once it lands.
       st("pstatus ok", t("fleet.print.status_queued_will_upload"));
       if(extraUI) setRowUI(extraUI, 100, "ok", t("fleet.print.status_queued_short"));
-      if(progressBtn){ progressBtn.style.background=''; progressBtn.disabled=false; }
       ok=true;
     } else {
-      ok=await pollJob(d.jobId, st, start, mapped, progressBtn, extraUI, prefs, printer, onProgress);
+      ok=await pollJob(d.jobId, st, start, mapped, pct=>setSendFill(printer, start, pct), extraUI, prefs, printer, onProgress);
     }
   }catch(e){
     st("pstatus err", e.message);
     if(extraUI) setRowUI(extraUI, 100, "err", e.message);
-    if(progressBtn){ progressBtn.style.background=btnOrigBg; progressBtn.disabled=false; }
   }
-  finally{ PUSHES=Math.max(0,PUSHES-1); }
+  finally{ PUSHES=Math.max(0,PUSHES-1); setSendFill(printer, start, null); }
   loadFleet();
   return ok;
 }
 function setBtnFill(btn, pct){
   if(!btn) return;
-  btn.style.background=`linear-gradient(to right, rgba(167,139,250,0.55) ${pct}%, rgba(167,139,250,0.13) ${pct}%)`;
+  btn.style.background=fillBackground(pct);
 }
 // One number for a button that stands for several transfers at once (the Send
 // modal uploads to every checked printer from a single click). The MEAN, not
@@ -7068,7 +7093,10 @@ function makePhaseOverride(printerId, onChange){
 // badge clears. A card caller must pass the callback (see setCardStatus);
 // handing over the element would be handing over something about to be
 // destroyed.
-async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId, onProgress){
+// onFill (optional): called with the progress percentage, and with null once
+// the job ends; pushTo() uses it to fill the card's Upload/Print button.
+async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printerId, onProgress){
+  const fill=pct=>{ if(onFill) onFill(pct); };
   const ov=makePhaseOverride(printerId);
   const setOverride=(phase,badge)=>ov.set(phase,badge);
   const clearOverride=()=>ov.clear();
@@ -7092,7 +7120,7 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
         clearOverride();
         setStatus("pstatus err", msg);
         if(extraUI) setRowUI(extraUI, 100, "err", msg);
-        if(btn){ btn.style.background=''; btn.disabled=false; }
+        fill(null);
         return false;
       }
       // The button itself fills as the upload progress bar — no bar below.
@@ -7102,13 +7130,13 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
       if(d.phase==="upload") setOverride("upload",{statusColor:"var(--busy)",statusTxt:t("printer_status.uploading")});
       if(d.phase==="upload" && d.total){
         const pct=Math.min(100,Math.round(d.sent/d.total*100));
-        setBtnFill(btn, pct);
+        fill(pct);
         if(onProgress) onProgress(pct);
         if(extraUI) setRowUI(extraUI, pct, "work", t("fleet.print.status_uploading_pct",{pct}));
       }
       else if(d.phase==="mapping"){
         const mapTxt=mappingPhaseText(mapped, prefs);
-        setStatus("pstatus work", mapTxt); setBtnFill(btn,100);
+        setStatus("pstatus work", mapTxt); fill(100);
         if(extraUI) setRowUI(extraUI, 100, "work", mapTxt);
         // Klipper's own reported state stays "standby"/idle for the whole
         // physical leveling/calibration pass (see mappingPhaseBadge's own
@@ -7121,13 +7149,13 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
         // shared poller is ready when the connector starts reporting it, and
         // costs one branch. No 9e behaviour is implemented anywhere.
         const prepTxt=t("printer_status.preparing");
-        setStatus("pstatus work", prepTxt); setBtnFill(btn,100);
+        setStatus("pstatus work", prepTxt); fill(100);
         if(extraUI) setRowUI(extraUI, 100, "work", prepTxt);
         setOverride("preparing",{statusColor:"var(--busy)",statusTxt:prepTxt});
       }
       else if(d.phase==="starting"){
         clearOverride();
-        setStatus("pstatus work", t("fleet.queued.starting_print_status")); setBtnFill(btn,100);
+        setStatus("pstatus work", t("fleet.queued.starting_print_status")); fill(100);
         if(extraUI) setRowUI(extraUI, 100, "work", t("fleet.queued.starting_print_status"));
       }
       if(d.done){
@@ -7143,7 +7171,7 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
               : t(mapped?"fleet.print.status_uploaded_mapped":"fleet.print.status_uploaded"));
         setStatus("pstatus ok", doneTxt);
         if(extraUI) setRowUI(extraUI, 100, "ok", doneTxt);
-        if(btn){ btn.style.background=''; btn.disabled=false; }
+        fill(null);
         return true;
       }
     }
