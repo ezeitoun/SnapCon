@@ -1041,7 +1041,7 @@ function applyFilesOpen(){
     // the Fleet content area these two belong to, so they'd otherwise
     // reappear stacked on top of it instead of the Fleet grid they expect.
     const show=FILES_OPEN&&!!MAP&&!$("queueDashboard").classList.contains("show");
-    $("jobsechead").style.display=show?"":"none";
+    $("jobsechead").classList.toggle("show",show);
     $("jobcard").classList.toggle("show",show);
   }
   syncTopbarActive();
@@ -3309,11 +3309,11 @@ function updateMultiSelectUI(){
     if($("sendToQueueBtn")) $("sendToQueueBtn").style.display=QUEUE_MANAGEMENT_ENABLED?"":"none";
     $("jobcard").classList.remove("show");
     $("jobloading").classList.remove("show");
-    if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none";
+    $("jobsechead").classList.remove("show");
   } else {
     bar.style.display="none";
     if(SELECTED&&MAP){
-      if(!URL_PRINTER_FILTER) $("jobsechead").style.display="";
+      if(!URL_PRINTER_FILTER) $("jobsechead").classList.add("show");
       $("jobcard").classList.add("show");
     }
   }
@@ -5276,15 +5276,15 @@ async function selectFile(name, source){
   SELECTED=name; SEND_SOURCE=source||null; MAPSEL={}; SEND_PLATE=1; renderList();
   // Orca mode hides this section permanently (init() sets it inline) — don't
   // fight that override here.
-  if(!URL_PRINTER_FILTER) $("jobsechead").style.display="";
+  if(!URL_PRINTER_FILTER) $("jobsechead").classList.add("show");
   $("jlname").textContent=t("files.opening_status",{name});
   $("jobloading").classList.add("show");
   $("jobcard").classList.remove("show");
   try{ const m=await getJSON("/api/map?file="+encodeURIComponent(name)+sendRootQ());
     $("jobloading").classList.remove("show");
-    if(m.error){ MAP=null; if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none"; return; }
+    if(m.error){ MAP=null; $("jobsechead").classList.remove("show"); return; }
     MAP=m; if(m.plate) SEND_PLATE=m.plate; renderJob(); renderList(); renderFleet();
-  }catch(e){ $("jobloading").classList.remove("show"); if(!URL_PRINTER_FILTER) $("jobsechead").style.display="none"; }
+  }catch(e){ $("jobloading").classList.remove("show"); $("jobsechead").classList.remove("show"); }
 }
 
 // Re-reads a file's colours for a different plate of a multi-plate project.
@@ -7123,7 +7123,7 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
 function clearJobSelection(){
   SELECTED=null; SEND_SOURCE=null; MAP=null; MAPSEL={};
   $('jobcard').classList.remove('show');
-  $('jobsechead').style.display='none';
+  $('jobsechead').classList.remove('show');
   $('needcount').textContent='';
   document.querySelectorAll('.job.active').forEach(el=>el.classList.remove('active'));
   // mapHtml (the whole T1->color mapping row, including the swatches'
