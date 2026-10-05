@@ -3,9 +3,9 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 75,
+    "version": 77,
     "snapconVersion": "0.8.0",
-    "updated": "2026-10-04"
+    "updated": "2026-10-05"
   },
   "printer_status": {
     "offline": "Sin conexión",
@@ -82,7 +82,6 @@
     "ctl_status_working_resume": "Reanudando…",
     "ctl_status_working_cancel": "Cancelando…",
     "ctl_status_done_resume": "Reanudado",
-    "section_title": "Flota",
     "job": {
       "section_title": "Modelo seleccionado",
       "preview_alt": "Vista previa",
@@ -144,11 +143,10 @@
       "printing_status": "Imprimiendo {filename}"
     },
     "status": {
-      "connecting_short": "conectando…",
+      "connecting_short": "Conectando…",
       "connecting_badge": "Conectando…",
-      "reconnecting": "reconectando…",
-      "unreachable": "No se puede conectar con la flota.",
-      "count_online": "{online}/{total} en línea"
+      "reconnecting": "Reconectando…",
+      "unreachable": "No se puede conectar con la flota."
     },
     "list": {
       "col_file": "Archivo",
@@ -676,7 +674,16 @@
       "brand_single_printer": "Mostrando una sola impresora",
       "update_tooltip": "SnapCon v{latest} está disponible. Tienes v{current}. Detalles y notas de la versión en Configuración, Actualizaciones.",
       "brand_back_aria_update": "SnapCon, volver a las impresoras. Actualización disponible: v{latest}.",
-      "sheet_update": "Actualización disponible: v{latest}"
+      "sheet_update": "Actualización disponible: v{latest}",
+      "pill_show_printing_one": "Mostrar {count} impresora imprimiendo",
+      "pill_show_printing_other": "Mostrar {count} impresoras imprimiendo",
+      "pill_show_attention_one": "Mostrar {count} impresora que necesita atención",
+      "pill_show_attention_other": "Mostrar {count} impresoras que necesitan atención",
+      "pill_show_idle_one": "Mostrar {count} impresora inactiva",
+      "pill_show_idle_other": "Mostrar {count} impresoras inactivas",
+      "pill_show_offline_one": "Mostrar {count} impresora sin conexión",
+      "pill_show_offline_other": "Mostrar {count} impresoras sin conexión",
+      "pill_show_all": "Mostrar todas las impresoras"
     },
     "sort": {
       "option_none": "Ninguno",

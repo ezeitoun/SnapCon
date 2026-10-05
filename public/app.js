@@ -1198,23 +1198,50 @@ function brandTarget(s){
                              : (fleetViews.includes(s.viewMode) ? s.viewMode : 'regular');
   return { action:'fleet', view, closeSettings:!!s.settingsOpen };
 }
-function goToFleetFromBrand(){
-  const target=brandTarget({
+// Where the user is, for brandTarget() and pillClick().
+function fleetNavState(){
+  return {
     deepLink: !!URL_PRINTER_FILTER,
     settingsOpen: $("setup").classList.contains("show"),
     healthOpen: $("healthPage").classList.contains("show"),
     libraryOpen: !!(window.LibraryPage && LibraryPage.isOpen()),
     queueOpen: $("queueDashboard").classList.contains("show"),
     viewMode: VIEW_MODE, lastFleetView: LAST_FLEET_VIEW,
-  });
-  if(target.action==='none') return;
-  closeTopbarPopup(false);
-  if(target.action==='scrollTop'){ $("fleet-wrap").scrollTop=0; return; }
+  };
+}
+// Back to the fleet the way brandTarget() decided. False if Settings stayed
+// open (its own Back declined), so the caller stops there.
+function returnToFleet(target){
   // Settings closes the way its own cell's "Back" does.
-  if(target.closeSettings){ $("gear").click(); if($("setup").classList.contains("show")) return; }
+  if(target.closeSettings){ $("gear").click(); if($("setup").classList.contains("show")) return false; }
   // chooseView() closes Health, the Library and the Queue dashboard through
   // their own close paths, then applies the view (which re-syncs the bar).
   chooseView(target.view);
+  return true;
+}
+function goToFleetFromBrand(){
+  const target=brandTarget(fleetNavState());
+  if(target.action==='none') return;
+  closeTopbarPopup(false);
+  if(target.action==='scrollTop'){ $("fleet-wrap").scrollTop=0; return; }
+  returnToFleet(target);
+}
+// What a status pill (or its popover/sheet row) click does. Pure. It sets
+// the fleet filter to the pill's bucket, or back to "all" if that bucket is
+// already the filter. From another page or Print farm it first returns to
+// the fleet, as the brand does. Nothing on the single-printer link.
+function pillClick(s){
+  if(s.deepLink) return { action:'none' };
+  const nav=brandTarget(s);
+  return { action:'filter', tab: s.camTab===s.bucket ? 'all' : s.bucket, toFleet: nav.action==='fleet' ? nav : null };
+}
+function applyStatusFilter(bucket){
+  const r=pillClick({ ...fleetNavState(), bucket, camTab: CAM_TAB });
+  if(r.action==='none') return;
+  closeTopbarPopup(false); // picking from the popover or the sheet closes it
+  if(r.toFleet && !returnToFleet(r.toFleet)) return;
+  CAM_TAB=r.tab; // one source of truth: the tabs and the pills both render from it
+  renderFleet();
 }
 
 // Which cells show. Pure: state in, one boolean per cell out. Settings (and
@@ -1399,6 +1426,12 @@ function wireTopbarPopups(){
   wireTopbarSearch();
   wireTopbarSheet();
   $("tbBrandBtn").addEventListener("click", goToFleetFromBrand);
+  for(const id of ["tbStatusPlain","tbStatusPop","tbSheetStatus"]){
+    $(id).addEventListener("click", e=>{
+      const b=e.target.closest("button[data-bucket]");
+      if(b) applyStatusFilter(b.dataset.bucket);
+    });
+  }
 }
 
 // Tablet and narrower: search is a magnifier until tapped. It stays open
@@ -1450,24 +1483,56 @@ const TB_STATUS = [
   { key:'offline',   word:'printer_status.offline',      pill:'global.topbar.pill_offline',   color:'var(--ink-faint)' },
 ];
 let TB_STATUS_LAST = null;
+// While the fleet hasn't loaded yet or a poll failed, the status cell says
+// so instead of showing counts (this used to be the "Fleet x/y" heading).
+let TB_CONN = null; // null | 'connecting' | 'reconnecting'
+const TB_CONN_KEYS = { connecting:'fleet.status.connecting_short', reconnecting:'fleet.status.reconnecting' };
+function setTopbarConnection(state){ TB_CONN=state; renderTopbarStatus(); }
+// One status pill. Interactive pills are filter buttons (pressed while their
+// bucket is the fleet filter, CAM_TAB); inside the popover button, or on the
+// single-printer link, they're plain readouts.
+function topbarPillHtml(s, sum, interactive){
+  const n=sum[s.key], active=CAM_TAB===s.key;
+  const inner=`<span class="tb-dot"></span><b>${n}</b><span class="tb-word">${esc(t(s.word))}</span>`;
+  if(!interactive){
+    const label=tn(s.pill, n);
+    return `<span class="tb-pill${active?' is-active':''}" role="img" style="--pill:${s.color}" aria-label="${esc(label)}" title="${esc(label)}">${inner}</span>`;
+  }
+  const label = active ? t("global.topbar.pill_show_all") : tn("global.topbar.pill_show_"+s.key, n);
+  return `<button type="button" class="tb-pill" data-bucket="${s.key}" aria-pressed="${active}" style="--pill:${s.color}" aria-label="${esc(label)}" title="${esc(label)}">${inner}</button>`;
+}
 function renderTopbarStatus(sum){
-  TB_STATUS_LAST=sum;
-  const plain=$("tbStatusPlain"), btn=$("tbStatusBtn"), pop=$("tbStatusPop");
+  if(sum) TB_STATUS_LAST=sum;
+  const plain=$("tbStatusPlain"), btn=$("tbStatusBtn"), pop=$("tbStatusPop"), sheet=$("tbSheetStatus");
   if(!plain || !btn || !pop) return;
-  // Zero counts hide, except idle, so the readout is never empty.
-  const pills=TB_STATUS.filter(s=>s.key==='idle' || sum[s.key]>0).map(s=>{
-    const label=tn(s.pill, sum[s.key]);
-    return `<span class="tb-pill" role="img" style="--pill:${s.color}" aria-label="${esc(label)}" title="${esc(label)}"><span class="tb-dot"></span><b>${sum[s.key]}</b><span class="tb-word">${esc(t(s.word))}</span></span>`;
-  }).join("");
+  if(TB_CONN){
+    const text=t(TB_CONN_KEYS[TB_CONN]);
+    const html=`<span class="tb-conn"><span class="tb-spin" aria-hidden="true"></span>${esc(text)}</span>`;
+    plain.innerHTML=html; btn.innerHTML=html; btn.setAttribute("aria-label", text);
+    pop.innerHTML=`<div class="tb-pop-row tb-conn">${esc(text)}</div>`;
+    if(sheet) sheet.innerHTML=html;
+    return;
+  }
+  sum=TB_STATUS_LAST;
+  if(!sum) return;
+  const live=!URL_PRINTER_FILTER; // pills are filters, except on the single-printer link
+  // Zero counts hide, except idle (so the readout is never empty) and the
+  // active filter (so it can always be switched off from here).
+  const shown=TB_STATUS.filter(s=>s.key==='idle' || sum[s.key]>0 || CAM_TAB===s.key);
+  const pills=interactive=>`<span class="tb-pills">${shown.map(s=>topbarPillHtml(s, sum, interactive)).join("")}</span>`;
   const nextText=sum.nextDone!=null ? t("global.topbar.next_done",{ time:fmtDuration(sum.nextDone) }) : "";
-  const html=`<span class="tb-pills">${pills}</span>`+(nextText ? `<span class="tb-next">${esc(nextText)}</span>` : "");
-  plain.innerHTML=html;
-  btn.innerHTML=html;
-  const summary=TB_STATUS.map(s=>tn(s.pill, sum[s.key])).concat(nextText ? [nextText] : []).join(", ");
-  btn.setAttribute("aria-label", summary);
-  const sheet=$("tbSheetStatus");
-  if(sheet) sheet.innerHTML=`<span class="tb-pills">${pills}</span>`+(sum.nextDone!=null ? `<span class="tb-next">${esc(t("global.topbar.next_done_in",{ time:fmtDuration(sum.nextDone) }))}</span>` : "");
-  pop.innerHTML=TB_STATUS.map(s=>`<div class="tb-pop-row" style="--pill:${s.color}"><span class="tb-dot"></span><b>${sum[s.key]}</b><span>${esc(t(s.word))}</span></div>`).join("")+
+  const next=nextText ? `<span class="tb-next">${esc(nextText)}</span>` : "";
+  plain.innerHTML=pills(live)+next;
+  btn.innerHTML=pills(false)+next; // a button can't hold buttons: the popover rows are the filters here
+  btn.setAttribute("aria-label", TB_STATUS.map(s=>tn(s.pill, sum[s.key])).concat(nextText ? [nextText] : []).join(", "));
+  if(sheet) sheet.innerHTML=pills(live)+(sum.nextDone!=null ? `<span class="tb-next">${esc(t("global.topbar.next_done_in",{ time:fmtDuration(sum.nextDone) }))}</span>` : "");
+  pop.innerHTML=TB_STATUS.map(s=>{
+    const row=`<span class="tb-dot"></span><b>${sum[s.key]}</b><span>${esc(t(s.word))}</span>`;
+    if(!live) return `<div class="tb-pop-row" style="--pill:${s.color}">${row}</div>`;
+    const active=CAM_TAB===s.key;
+    const label = active ? t("global.topbar.pill_show_all") : tn("global.topbar.pill_show_"+s.key, sum[s.key]);
+    return `<button type="button" class="tb-pop-row" data-bucket="${s.key}" aria-pressed="${active}" style="--pill:${s.color}" aria-label="${esc(label)}">${row}</button>`;
+  }).join("")+
     (sum.nextDone!=null ? `<div class="tb-pop-sep" role="separator"></div><div class="tb-pop-row tb-pop-next"><span>${esc(t("global.topbar.next_done_label"))}</span><span class="tb-mono">${esc(fmtDuration(sum.nextDone))}</span></div>` : "");
 }
 const ICONS = {
@@ -1719,8 +1784,8 @@ async function init(){
   applyRoleUI();
   wireUI();
   // Single-printer deep link (/orca/<name>): this is a focused view — the
-  // "Selected Model" summary and the "Fleet x/x online" heading are noise;
-  // only the printer card itself earns a place here. Inline display:none
+  // "Selected Model" summary is noise; only the printer card itself earns a
+  // place here. Inline display:none
   // beats the .show class toggle these elements use, so this stays permanent
   // even once a file gets selected (e.g. via a notify-load pending delivery).
   // The top bar's own cells for this state come from topbarVisibility().
@@ -1728,8 +1793,6 @@ async function init(){
     if($("jobsechead")) $("jobsechead").style.display="none";
     if($("jobloading")) $("jobloading").style.display="none";
     if($("jobcard")) $("jobcard").style.display="none";
-    const fleetSechead=$("fleetcount")&&$("fleetcount").closest(".sechead");
-    if(fleetSechead) fleetSechead.style.display="none";
   }
   await checkVersion(); await loadConfigUI();
   fetchUpdateStatus();
@@ -5435,7 +5498,7 @@ function heatBarFillStyle(bar){
 function renderSkeletonFleet(){
   if(!PRINTERS_CFG||!PRINTERS_CFG.length) return;
   const wrap=$("fleet"); wrap.innerHTML="";
-  $("fleetcount").textContent=t("fleet.status.connecting_short");
+  setTopbarConnection("connecting");
   PRINTERS_CFG.forEach(p=>{
     const card=document.createElement("div"); card.className="pcard";
     card.innerHTML=
@@ -5480,6 +5543,9 @@ async function loadFleet(){
     // let an {error:...} body get parsed into FLEET, which isn't an array.
     if(checkAuthFailure(r).status===401) return;
     const body=await r.text();
+    // An answer arrived: the status cell goes back from "Connecting…" or
+    // "Reconnecting…" to the counts, even if nothing else changed.
+    const wasDisconnected=!!TB_CONN; TB_CONN=null;
     if(body!==FLEET_PREV_BODY){ // unchanged payload → the DOM already shows this state
       FLEET_PREV_BODY=body;
       FLEET=JSON.parse(body);
@@ -5495,14 +5561,14 @@ async function loadFleet(){
       // Firmware-tab checkboxes are gated on live printer state — a printer
       // that just started printing must stop being selectable here too.
       refreshFirmwareRowEligibility();
-    }
+    } else if(wasDisconnected) renderTopbarStatus();
   }
   catch(e){
     FLEET_PREV_BODY=""; // force a re-render on the next successful poll
     // Transient failure: keep the last-known cards on screen and say we're
     // retrying — only show the bare message when there is nothing to show.
     if(!FLEET.length) $("fleet").innerHTML=`<p class="subnote">${esc(t("fleet.status.unreachable"))}</p>`;
-    $("fleetcount").textContent=t("fleet.status.reconnecting");
+    setTopbarConnection("reconnecting");
   }
   finally{ FLEET_INFLIGHT=false; }
 }
@@ -6174,12 +6240,8 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
 // arguments and gets today's full-rebuild behavior, unchanged.
 function renderFleet({incremental}={}){
   const wrap=$("fleet");
-  let online=0;
   const q=($("fleetSearch")||{value:""}).value.trim().toLowerCase();
   const all=sortedFleet();
-  // Reachable-but-in-maintenance shouldn't read as "online" here — it can't
-  // take a job right now, which is what this count is meant to signal.
-  all.forEach(p=>{ if(p.online&&p.state!=="maintenance") online++; });
   const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
     : !q ? all : all.filter(p=>matchesFleetQuery(p,q));
   // Status tabs + tag filter are shared by camera/list view only — tab
@@ -6219,7 +6281,6 @@ function renderFleet({incremental}={}){
   if(!incremental){ wrap.innerHTML=""; CARD_CACHE.clear(); closeAllCamRtc(); }
   reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, !!incremental);
   }
-  $("fleetcount").textContent=t("fleet.status.count_online",{online,total:FLEET.length});
   updateHealthBadge();
   renderTopbarStatus(fleetStatusSummary(FLEET));
   if(gridToolbarActive()) updateCamToolbar();

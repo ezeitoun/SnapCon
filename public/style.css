@@ -36,6 +36,7 @@
     --tb-hover:rgba(255,255,255,0.05); --tb-menu:#1B1F27; --tb-menu-border:rgba(255,255,255,0.11);
     --tb-menu-shadow:0 14px 36px rgba(0,0,0,0.5); --tb-badge-text:#0F1218;
     --tb-scrim:rgba(0,0,0,0.5);
+    --tb-warn:var(--warn);
     /* Scrollbars and native form controls follow the theme. */
     color-scheme:dark;
     --scroll-thumb:color-mix(in srgb, var(--ink-faint) 55%, transparent); --scroll-thumb-hover:var(--ink-faint);
@@ -80,6 +81,7 @@
     --tb-hover:rgba(255,255,255,0.05); --tb-menu:#1B1F27; --tb-menu-border:rgba(255,255,255,0.11);
     --tb-menu-shadow:0 14px 36px rgba(0,0,0,0.5); --tb-badge-text:#0F1218;
     --tb-scrim:rgba(0,0,0,0.5);
+    --tb-warn:var(--warn);
     /* Scrollbars and native form controls follow the theme. */
     color-scheme:dark;
     --scroll-thumb:color-mix(in srgb, var(--ink-faint) 55%, transparent); --scroll-thumb-hover:var(--ink-faint);
@@ -118,6 +120,7 @@
     --tb-hover:rgba(23,26,29,0.04); --tb-menu:var(--panel); --tb-menu-border:var(--line);
     --tb-menu-shadow:0 12px 32px rgba(15,18,24,0.14); --tb-badge-text:#171A1D;
     --tb-scrim:rgba(15,18,24,0.28);
+    --tb-warn:var(--warn);
     color-scheme:light;
     --scroll-thumb:color-mix(in srgb, var(--ink-faint) 45%, transparent); --scroll-thumb-hover:var(--ink-dim);
     /* rr-* (Health page ReadingRow cards) and storage-* (storage quota bar)
@@ -965,6 +968,9 @@
     button.tb-cell.is-active:hover{background:var(--tb-active-bg);}
     .topbar .sort-opt:hover{background:var(--tb-hover); color:var(--tb-text);}
     .topbar .sort-opt[aria-checked="true"]:hover{background:var(--tb-active-bg); color:var(--tb-active-text);}
+    /* Hover lays --tb-hover over the pill's own tint rather than replacing it. */
+    button.tb-pill:hover{background-image:linear-gradient(var(--tb-hover), var(--tb-hover));}
+    button.tb-pop-row:not([aria-pressed="true"]):hover{background-color:var(--tb-hover);}
   }
   .tb-icon{color:var(--tb-accent);}
   .topbar .tb-icon-only{width:46px; padding:0; justify-content:center;}
@@ -1022,6 +1028,15 @@
   .tb-pills{display:flex; align-items:center; gap:6px;}
   .tb-pill{display:inline-flex; align-items:center; gap:5px; height:22px; padding:0 8px; border-radius:11px; font-size:11px; color:var(--tb-text); background:color-mix(in srgb, var(--pill) 14%, transparent);}
   .tb-pill b{font-weight:600;}
+  /* Pills as filter buttons: pressed while their bucket is the fleet filter. */
+  button.tb-pill{border:0; margin:0; font:inherit; font-size:11px; cursor:pointer;}
+  .tb-pill[aria-pressed="true"], .tb-pill.is-active{background:color-mix(in srgb, var(--pill) 26%, transparent); box-shadow:inset 0 0 0 1px var(--pill);}
+  button.tb-pill:focus-visible{outline-offset:1px; border-radius:11px;}
+  /* "Connecting…" / "Reconnecting…" in place of the pills. */
+  .tb-conn{display:inline-flex; align-items:center; gap:7px; font-size:11px; color:var(--tb-warn);}
+  .tb-spin{width:10px; height:10px; border-radius:50%; border:2px solid color-mix(in srgb, var(--tb-warn) 30%, transparent); border-top-color:var(--tb-warn); animation:tb-spin .8s linear infinite;}
+  @keyframes tb-spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion: reduce){ .tb-spin{animation:none;} }
   .tb-dot{width:6px; height:6px; border-radius:50%; background:var(--pill); flex:none;}
   .tb-next{font-size:11px; color:var(--tb-text-2);}
 
@@ -1048,6 +1063,9 @@
   .tb-pop-row{display:flex; align-items:center; gap:8px; height:30px; padding:0 8px; font-size:12px; color:var(--tb-text);}
   .tb-pop-row .tb-dot{width:8px; height:8px;}
   .tb-pop-row b{min-width:2ch; font-weight:600;}
+  button.tb-pop-row{width:100%; border:0; border-radius:5px; background:transparent; font:inherit; font-size:12px; text-align:left; cursor:pointer;}
+  button.tb-pop-row[aria-pressed="true"]{background:color-mix(in srgb, var(--pill) 18%, transparent); box-shadow:inset 0 0 0 1px var(--pill); font-weight:600;}
+  button.tb-pop-row:focus-visible{outline-offset:-2px;}
   .tb-pop-sep{height:1px; margin:4px 0; background:var(--tb-menu-border);}
   .tb-pop-next{justify-content:space-between; color:var(--tb-text-2);}
   .tb-pop-next .tb-mono{font-family:var(--mono); color:var(--tb-text);}
@@ -1960,7 +1978,8 @@
      regular/compact/camera/list); Print Farm is a separate full-page
      dashboard that hides this element's ancestor (#fleet-wrap) outright, so
      no view-mode gating is needed here at all. */
-  #camViewBar{display:flex; flex-direction:column; gap:6px; margin-top:14px;}
+  /* 22px under the top bar, the same gap as every other page's heading. */
+  #camViewBar{display:flex; flex-direction:column; gap:6px; margin-top:22px;}
   /* Single row: chips+divider+tag-select on the left (flex:1, wraps first),
      select-all/actions/Edit Tags on the right (flex:none, wraps as a unit —
      stays on one line as long as possible, only dropping below the left

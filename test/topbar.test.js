@@ -6,7 +6,8 @@
 //                        another page took over);
 //   fleetStatusSummary() the fleet-wide status pills and "next done";
 //   brandTarget()        where a click on the brand ("back to printers") goes;
-//   updateDisplay()      whether the bar announces an update.
+//   updateDisplay()      whether the bar announces an update;
+//   pillClick()          what a status pill (fleet filter) click does.
 //
 // Each is loaded from public/app.js into a sandbox.
 const test = require("node:test");
@@ -22,7 +23,7 @@ function fnSource(name) {
   return m[0];
 }
 const sandbox = vm.createContext({});
-vm.runInContext(["topbarVisibility", "topbarActiveCells", "camBucket", "printRemaining", "fleetStatusSummary", "brandTarget", "updateDisplay"].map(fnSource).join("\n"), sandbox);
+vm.runInContext(["topbarVisibility", "topbarActiveCells", "camBucket", "printRemaining", "fleetStatusSummary", "brandTarget", "updateDisplay", "pillClick"].map(fnSource).join("\n"), sandbox);
 const call = (name, arg) => JSON.parse(JSON.stringify(vm.runInContext(name, sandbox)(arg)));
 
 const shown = vis => Object.keys(vis).filter(k => vis[k]).sort();
@@ -198,6 +199,32 @@ test("checkVersion() re-applies the whole update UI once it knows the version, w
   assert.equal(seen.length, 1, "renderUpdateUI() runs once the version is known");
   assert.equal(seen[0].cls, "vbadge bad", "with the mismatch already marked");
   assert.equal(seen[0].checked, true);
+});
+
+// ---- status pills as fleet filters ----
+
+const onFleet = { ...where, camTab: "all" };
+const pill = s => call("pillClick", { ...onFleet, ...s });
+
+test("a pill sets the fleet filter to its bucket, and the active pill toggles back to all", () => {
+  for (const bucket of ["printing", "attention", "idle", "offline"])
+    assert.deepEqual(pill({ bucket }), { action: "filter", tab: bucket, toFleet: null });
+  assert.deepEqual(pill({ bucket: "offline", camTab: "offline" }), { action: "filter", tab: "all", toFleet: null }, "toggle off");
+  assert.deepEqual(pill({ bucket: "idle", camTab: "offline" }), { action: "filter", tab: "idle", toFleet: null }, "switch buckets");
+});
+
+test("from another page or Print farm, a pill first returns to the fleet like the brand does", () => {
+  assert.deepEqual(pill({ bucket: "offline", healthOpen: true, viewMode: "camera" }),
+    { action: "filter", tab: "offline", toFleet: { action: "fleet", view: "camera", closeSettings: false } });
+  assert.deepEqual(pill({ bucket: "printing", settingsOpen: true }).toFleet, { action: "fleet", view: "regular", closeSettings: true });
+  assert.deepEqual(pill({ bucket: "idle", libraryOpen: true, viewMode: "list" }).toFleet.view, "list");
+  assert.deepEqual(pill({ bucket: "idle", queueOpen: true, viewMode: "printfarm", lastFleetView: "compact" }).toFleet,
+    { action: "fleet", view: "compact", closeSettings: false }, "Print farm → the last fleet view");
+});
+
+test("on the single-printer link a pill does nothing", () => {
+  assert.deepEqual(pill({ bucket: "offline", deepLink: true }), { action: "none" });
+  assert.deepEqual(pill({ bucket: "offline", deepLink: true, healthOpen: true }), { action: "none" });
 });
 
 // ---- the cell maps name real elements ----

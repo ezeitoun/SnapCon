@@ -358,7 +358,7 @@ test("the printer.* and fleet.* namespaces exist — Regular/Compact/Camera card
     "fleet.queued.queued_banner", "fleet.queued.staging_banner", "fleet.queued.stage_failed_banner",
     "fleet.queued.starting_print_status", "fleet.queued.printing_status",
     "fleet.status.connecting_short", "fleet.status.connecting_badge", "fleet.status.reconnecting",
-    "fleet.status.unreachable", "fleet.status.count_online",
+    "fleet.status.unreachable",
     "fleet.estop_status_sending", "fleet.estop_status_done",
     "fleet.ctl_status_working_pause", "fleet.ctl_status_working_resume", "fleet.ctl_status_working_cancel",
     "fleet.ctl_status_done_resume"]
@@ -396,7 +396,6 @@ test("the printer.* and fleet.* namespaces exist — Regular/Compact/Camera card
 
   // Placeholder-bearing templates.
   assert.ok(enFlat["fleet.error_panel.code_prefix"].includes("{code}"));
-  assert.ok(enFlat["fleet.status.count_online"].includes("{online}") && enFlat["fleet.status.count_online"].includes("{total}"));
   assert.ok(enFlat["fleet.queued.queued_banner"].includes("{name}") && enFlat["fleet.queued.queued_banner"].includes("<b>"));
   assert.ok(enFlat["fleet.queued.staging_banner"].includes("{name}") && enFlat["fleet.queued.staging_banner"].includes("<b>"));
   assert.ok(enFlat["fleet.queued.stage_failed_banner"].includes("{name}") && enFlat["fleet.queued.stage_failed_banner"].includes("{error}"));
@@ -837,11 +836,6 @@ test("final i18n v1 closure fixes exist — queueBtn's imperative title bug (sam
   // no duplicate fleet.job.send_title.
   assert.ok("fleet.modal.send.title" in enFlat);
   assert.equal("fleet.job.send_title" in enFlat, false);
-
-  // The Fleet page's own "Fleet" section heading — never had a key at all
-  // before this closure pass (the literal word was hardcoded in index.html
-  // since the very first phase).
-  assert.equal(enFlat["fleet.section_title"], "Fleet");
 });
 
 test("final i18n v1 closure sweep — General tab's Fleet polling/Costs/Sending prints sections, the Browse-for-folder and Electricity-rate modals, first-run onboarding, and accessibility strings, all previously untranslated (v1 closure regression anchor)", () => {
