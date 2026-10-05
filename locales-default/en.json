@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 78,
+    "version": 79,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-05"
   },
@@ -199,7 +199,9 @@
       "status_uploaded": "Uploaded",
       "status_uploaded_mapped": "Uploaded — heads mapped",
       "status_printing_on_existing": "Already on {printer} — printing without uploading",
-      "status_already_on_printer": "Already on the printer — nothing to upload"
+      "status_already_on_printer": "Already on the printer — nothing to upload",
+      "cancel_upload": "Cancel upload",
+      "upload_cancelled": "Upload cancelled"
     },
     "modal": {
       "bed": {

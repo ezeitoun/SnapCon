@@ -1973,9 +1973,28 @@ app.post("/api/print", requireRegular, async (req, res) => {
       }
     } catch (e) {
       console.log(`[print] ${p.name}: FAILED at phase "${job.phase}" — ${e.message}`);
+      if (e && e.code === "UPLOAD_CANCELLED") job.cancelled = true;
       job.error = e.message; job.done = true; job.phase = "error";
     }
   })();
+});
+
+// Cancels an /api/print upload while it is still sending. Only the transfer
+// can be cancelled: once its last byte is written the connector clears
+// job.cancelUpload, so a cancel can never land between the upload finishing
+// and the print starting. The printer is left with a broken upload, not a
+// complete-looking file.
+app.post("/api/print-cancel", requireRegular, (req, res) => {
+  const job = JOBS.get(req.body && req.body.job);
+  if (!job || !job.printerId) return res.status(404).json({ error: "No such upload" });
+  const p = PRINTERS.find(x => x.id === job.printerId);
+  if (!p || !printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (!job.cancelUpload) {
+    return res.status(409).json({ error: job.done ? "This upload has already finished." : "The file has already been sent; it can't be cancelled now." });
+  }
+  job.cancelUpload();
+  auditLog.log({ category: "job", event: "upload-cancelled", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file: job.file } });
+  res.json({ ok: true });
 });
 
 // Poll a print job's progress. Cleans the record up once a finished job is read.
@@ -1984,7 +2003,8 @@ app.get("/api/print-status", requireAuth, (req, res) => {
   if (!job) return res.status(404).json({ error: "No such job" });
   // skippedUpload travels so the client can say the transfer was skipped
   // rather than leaving a suspiciously instant "done" unexplained.
-  const out = { phase: job.phase, sent: job.sent, total: job.total, done: job.done, error: job.error, result: job.result, skippedUpload: !!job.skippedUpload };
+  const out = { phase: job.phase, sent: job.sent, total: job.total, done: job.done, error: job.error, result: job.result, skippedUpload: !!job.skippedUpload,
+    cancellable: !!job.cancelUpload, cancelled: !!job.cancelled };
   if (job.done) setTimeout(() => JOBS.delete(req.query.job), 5000);
   res.json(out);
 });

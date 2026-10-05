@@ -394,6 +394,26 @@ function setCardStatus(printerId, cls, txt){
   // the action it describes.
   renderFleet({incremental:true});
 }
+// Uploads that can still be cancelled: String(printer id) -> job id. Set and
+// cleared by pollJob() as the server reports `cancellable`; rendered as a
+// "Cancel upload" button in the card's status line (cardStatusHtml), so it
+// survives card rebuilds the same way the status text does.
+const UPLOAD_CANCEL = new Map();
+function setUploadCancel(printerId, jobId){
+  const key=String(printerId);
+  if((UPLOAD_CANCEL.get(key)||null)===(jobId||null)) return;
+  if(jobId) UPLOAD_CANCEL.set(key, jobId); else UPLOAD_CANCEL.delete(key);
+  renderFleet({incremental:true});
+}
+async function cancelUpload(jobId, printerId){
+  try{
+    const r=await postJSON("/api/print-cancel",{job:jobId});
+    const d=await r.json().catch(()=>({}));
+    // Refused (already sent, or finished): say why. A success shows up
+    // through pollJob(), which reports the cancelled upload.
+    if(!r.ok||d.error){ setUploadCancel(printerId, null); setCardStatus(printerId,"pstatus err",d.error||("HTTP "+r.status)); }
+  }catch(e){ setCardStatus(printerId,"pstatus err",e.message); }
+}
 function cardStatusFor(p){
   return (p&&CARD_STATUS.get(String(p.id)))||null;
 }
@@ -402,7 +422,9 @@ function cardStatusFor(p){
 // lands inside an attribute.
 function cardStatusHtml(p){
   const s=cardStatusFor(p);
-  return `<div class="${s?esc(s.cls):"pstatus"}" id="pst-${esc(p.id)}">${s?esc(s.txt):""}</div>`;
+  const job=UPLOAD_CANCEL.get(String(p.id));
+  const cancel=job ? `<button type="button" class="pstatus-cancel" data-cancel-upload="${esc(job)}" data-printer="${esc(p.id)}">${esc(t("fleet.print.cancel_upload"))}</button>` : "";
+  return `<div class="${s?esc(s.cls):"pstatus"}" id="pst-${esc(p.id)}">${s?esc(s.txt):""}${cancel}</div>`;
 }
 function statusColorText(p){
   const override=STATUS_OVERRIDE.get(String(p.id));
@@ -5913,7 +5935,8 @@ function cardSignature(p){
     statusOverride:STATUS_OVERRIDE.get(String(p.id))||null,
     // Same reasoning as statusOverride: client-only state the card renders,
     // so a new result message has to force the rebuild that displays it.
-    cardStatus:CARD_STATUS.get(String(p.id))||null
+    cardStatus:CARD_STATUS.get(String(p.id))||null,
+    uploadCancel:UPLOAD_CANCEL.get(String(p.id))||null
   });
 }
 // "Check again" on the monitoring-only note. The operator has just switched
@@ -6753,6 +6776,8 @@ async function doQuickPrint(){
 function wireFleetCardEvents(){
   const wrap=$("fleet");
   wrap.addEventListener("click", e=>{
+    const cancelBtn=e.target.closest("button[data-cancel-upload]");
+    if(cancelBtn){ cancelBtn.disabled=true; cancelUpload(cancelBtn.dataset.cancelUpload, parseInt(cancelBtn.dataset.printer,10)); return; }
     const idBtn=e.target.closest("button[data-id]");
     if(idBtn){
       const id=parseInt(idBtn.dataset.id,10), start=idBtn.dataset.start==="1";
@@ -7055,13 +7080,18 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
       await new Promise(r=>setTimeout(r,400));
       let d;
       try{ d=await getJSON("/api/print-status?job="+encodeURIComponent(jobId)); }catch(e){ continue; }
+      // Cancel is offered only while the server says the bytes are still going out.
+      const cancellable=!!d.cancellable && !d.done && printerId!=null;
+      setUploadCancel(printerId, cancellable ? jobId : null);
+      if(extraUI) setRowCancel(extraUI, cancellable ? jobId : null, printerId);
       if(d.error){
+        const msg=d.cancelled ? t("fleet.print.upload_cancelled") : d.error;
         // Order matters: clearOverride() re-renders synchronously, so the
         // message has to be written AFTER the card it belongs on has been
         // rebuilt, not before.
         clearOverride();
-        setStatus("pstatus err", d.error);
-        if(extraUI) setRowUI(extraUI, 100, "err", d.error);
+        setStatus("pstatus err", msg);
+        if(extraUI) setRowUI(extraUI, 100, "err", msg);
         if(btn){ btn.style.background=''; btn.disabled=false; }
         return false;
       }
@@ -7117,7 +7147,22 @@ async function pollJob(jobId, st, start, mapped, btn, extraUI, prefs, printerId,
         return true;
       }
     }
-  } finally { clearOverride(); }
+  } finally { clearOverride(); if(printerId!=null) setUploadCancel(printerId, null); if(extraUI) setRowCancel(extraUI, null); }
+}
+
+// A row's "Cancel upload" (Send dialog, Quick Print): one button created when
+// the upload becomes cancellable and removed after, never rebuilt per poll,
+// so a click can't land on an element replaced between press and release.
+function setRowCancel(extraUI, jobId, printerId){
+  const anchor=extraUI.statusEl;
+  if(!anchor) return;
+  if(!jobId){ if(extraUI.cancelBtn){ extraUI.cancelBtn.remove(); extraUI.cancelBtn=null; } return; }
+  if(extraUI.cancelBtn) return;
+  const b=document.createElement("button");
+  b.type="button"; b.className="pstatus-cancel"; b.textContent=t("fleet.print.cancel_upload");
+  b.addEventListener("click", ()=>{ b.disabled=true; cancelUpload(jobId, printerId); });
+  anchor.after(b);
+  extraUI.cancelBtn=b;
 }
 
 // ---- Eject / deselect job ----

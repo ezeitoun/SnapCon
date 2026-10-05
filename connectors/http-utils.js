@@ -109,17 +109,26 @@ async function uploadWithProgress(base, fp, name, job) {
       let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
       res.on("end", () => (res.statusCode < 300 ? resolve(b) : reject(new Error("Upload " + res.statusCode + ": " + b.slice(0, 160)))));
     });
-    req.on("error", reject);
+    req.on("error", e => { job.cancelUpload = null; reject(e); });
     req.write(pre); job.sent += pre.length;
     const fileStream = netfs.createReadStream(fp);
     const counter = new Transform({ transform(chunk, _e, cb) { job.sent += chunk.length; cb(null, chunk); } });
     // A local read that fails mid-upload (the NAS went away) aborts the
     // request too: the printer must see a broken upload, never a complete one
     // with the tail missing — Content-Length makes the short body invalid.
-    fileStream.on("error", e => { req.destroy(e); reject(e); });
+    fileStream.on("error", e => { job.cancelUpload = null; req.destroy(e); reject(e); });
+    // Cancel (POST /api/print-cancel), possible only while bytes are still
+    // going out: the printer gets a body shorter than its Content-Length, a
+    // broken upload, never a complete-looking file. Cleared once the last
+    // byte is written, after which it is too late to cancel.
+    job.cancelUpload = () => {
+      job.cancelUpload = null;
+      const e = new Error("Upload cancelled"); e.code = "UPLOAD_CANCELLED";
+      fileStream.destroy(); req.destroy(e); reject(e);
+    };
     counter.on("error", reject);
     counter.on("data", chunk => { if (!req.write(chunk)) { counter.pause(); req.once("drain", () => counter.resume()); } });
-    counter.on("end", () => { req.write(post); job.sent += post.length; req.end(); });
+    counter.on("end", () => { job.cancelUpload = null; req.write(post); job.sent += post.length; req.end(); });
     fileStream.pipe(counter);
   });
 }

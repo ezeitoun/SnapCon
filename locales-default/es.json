@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 78,
+    "version": 79,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-05"
   },
@@ -199,7 +199,9 @@
       "status_uploaded": "Subido",
       "status_uploaded_mapped": "Subido — cabezales asignados",
       "status_printing_on_existing": "Ya está en {printer}: imprimiendo sin subir",
-      "status_already_on_printer": "Ya está en la impresora: no hay nada que subir"
+      "status_already_on_printer": "Ya está en la impresora: no hay nada que subir",
+      "cancel_upload": "Cancelar subida",
+      "upload_cancelled": "Subida cancelada"
     },
     "modal": {
       "bed": {

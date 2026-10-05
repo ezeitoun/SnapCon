@@ -45,15 +45,17 @@ let renders = 0;
 const sandbox = {
   esc: s => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"),
   renderFleet: () => { renders++; },
+  t: k => k,
   Map,
 };
 vm.createContext(sandbox);
 vm.runInContext(extractConst("const CARD_STATUS"), sandbox);
+vm.runInContext(extractConst("const UPLOAD_CANCEL"), sandbox);
 for (const fn of ["setCardStatus", "cardStatusFor", "cardStatusHtml"]) {
   vm.runInContext(extractFn(fn), sandbox);
 }
 const call = (n, ...a) => vm.runInContext(n, sandbox)(...a);
-const reset = () => { vm.runInContext("CARD_STATUS.clear()", sandbox); renders = 0; };
+const reset = () => { vm.runInContext("CARD_STATUS.clear(); UPLOAD_CANCEL.clear()", sandbox); renders = 0; };
 
 test.beforeEach(reset);
 
@@ -117,6 +119,13 @@ test("cardSignature includes the card status, or the message would not repaint",
   const body = src.slice(0, src.indexOf("\n}") + 2);
   assert.match(body, /cardStatus/i,
     "a changed message must change the signature, exactly as statusOverride does");
+});
+
+test("an upload that can be cancelled puts a Cancel upload button in that card's status line only", () => {
+  vm.runInContext('UPLOAD_CANCEL.set("7", "j123")', sandbox);
+  const html = call("cardStatusHtml", { id: 7 });
+  assert.match(html, /<button type="button" class="pstatus-cancel" data-cancel-upload="j123" data-printer="7">fleet\.print\.cancel_upload<\/button><\/div>$/);
+  assert.doesNotMatch(call("cardStatusHtml", { id: 8 }), /pstatus-cancel/);
 });
 
 test("buildCardHtml renders the stored message rather than a hardcoded empty div", () => {

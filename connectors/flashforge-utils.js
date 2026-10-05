@@ -419,16 +419,25 @@ async function uploadFile(p, fp, name, job) {
         resolve(b);
       });
     });
-    req.on("error", reject);
+    req.on("error", e => { job.cancelUpload = null; reject(e); });
     req.write(pre); job.sent += pre.length;
     const fileStream = netfs.createReadStream(fp);
     const counter = new Transform({ transform(chunk, _e, cb) { job.sent += chunk.length; cb(null, chunk); } });
     // A failed local read aborts the request: never a short body the printer
     // could take as a whole file.
-    fileStream.on("error", e => { req.destroy(e); reject(e); });
+    fileStream.on("error", e => { job.cancelUpload = null; req.destroy(e); reject(e); });
+    // Cancel (POST /api/print-cancel), possible only while bytes are still
+    // going out: the printer gets a body shorter than its Content-Length, a
+    // broken upload, never a complete-looking file (same as http-utils). Cleared once the last
+    // byte is written, after which it is too late to cancel.
+    job.cancelUpload = () => {
+      job.cancelUpload = null;
+      const e = new Error("Upload cancelled"); e.code = "UPLOAD_CANCELLED";
+      fileStream.destroy(); req.destroy(e); reject(e);
+    };
     counter.on("error", reject);
     counter.on("data", chunk => { if (!req.write(chunk)) { counter.pause(); req.once("drain", () => counter.resume()); } });
-    counter.on("end", () => { req.write(post); job.sent += post.length; req.end(); });
+    counter.on("end", () => { job.cancelUpload = null; req.write(post); job.sent += post.length; req.end(); });
     fileStream.pipe(counter);
   });
 }

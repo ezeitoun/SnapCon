@@ -670,6 +670,11 @@
   .send-footer .btn-base{flex:none; padding:8px 18px;}
   /* Delete sits apart from Cancel and Print, on the footer's left. */
   .send-footer .pfile-del{flex:none; margin-right:auto;}
+  /* "Cancel upload": a small text button in a card's status line or beside a
+     Send/Quick Print row's progress. */
+  .pstatus-cancel{background:none; border:0; padding:0 0 0 8px; font:inherit; font-size:11.5px; color:var(--bad); text-decoration:underline; cursor:pointer;}
+  .pstatus-cancel:disabled{opacity:.5; cursor:default;}
+  .pstatus-cancel:focus-visible{outline:2px solid var(--signal); outline-offset:2px; border-radius:3px;}
   .platesvg{width:100%; height:auto; max-height:60vh; display:block;}
   .po-group[data-obj]{cursor:pointer;}
   .platesvg .po{fill:#2b6cb0; stroke:#16385f; stroke-width:.8; opacity:.85; transition:fill .15s,opacity .15s;}
