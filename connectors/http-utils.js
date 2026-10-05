@@ -283,6 +283,14 @@ async function getThumbnail(p, file) {
 // Klipper-family connector, so these live here rather than per-connector.
 // `list` recurses (unlike the Storage card's own top-level-only
 // /server/files/directory calls) — a relative path can include subdirs.
+// What connectors export as querySyncFiles / downloadSyncFile /
+// deleteSyncFile. Like every other connector call they take the PRINTER, not a
+// URL: a connector may first re-point it (the FlashForge connectors aim it at
+// Moonraker's port), which a URL string handed in from outside would bypass.
+const querySyncFiles = (p, root) => queryRemoteFileList(baseUrl(p), root);
+const downloadSyncFile = (p, root, relPath, destPath, expectedSize) => downloadRemoteFile(baseUrl(p), root, relPath, destPath, expectedSize);
+const deleteSyncFile = (p, root, relPath) => deleteRemoteFile(baseUrl(p), root, relPath);
+
 async function queryRemoteFileList(base, root) {
   const { ok, status, json } = await fetchJSONTimeout(base + "/server/files/list?root=" + encodeURIComponent(root), 8000);
   if (!ok) throw new Error("Moonraker " + status);
@@ -743,6 +751,7 @@ module.exports = {
   listFiles, getThumbnail, getFileMetadata, compareRemoteFile,
   queryFirmwareInfo, queryHealth, pickIface,
   queryRemoteFileList, downloadRemoteFile, deleteRemoteFile, queryRecentlyPrintedFiles,
+  querySyncFiles, downloadSyncFile, deleteSyncFile,
   // exported for tests only
   _internal: { assertSafeGcodeArg, parseFallbackStats }
 };

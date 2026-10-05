@@ -836,9 +836,9 @@ exports.getThumbnail = getThumbnail;
 // ---- Firmware (generic Moonraker query) ----
 exports.getFirmwareInfo = http.queryFirmwareInfo;
 exports.getHealth = http.queryHealth;
-exports.querySyncFiles = http.queryRemoteFileList;
-exports.downloadSyncFile = http.downloadRemoteFile;
-exports.deleteSyncFile = http.deleteRemoteFile;
+exports.querySyncFiles = http.querySyncFiles;
+exports.downloadSyncFile = http.downloadSyncFile;
+exports.deleteSyncFile = http.deleteSyncFile;
 
 // ---- Camera detection + snapshot ----
 // Earlier assumption here (K1/K2 firmware docs describing a closed-source

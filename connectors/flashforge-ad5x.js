@@ -569,9 +569,9 @@ exports.getPlate = moonrakerOnly("Exclude-object", http.getPlate);
 exports.excludeObject = moonrakerOnly("Exclude-object", http.excludeObject);
 exports.getHealth = moonrakerOnly("Health", http.queryHealth);
 exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo);
-exports.querySyncFiles = moonrakerOnly("File sync", http.queryRemoteFileList);
-exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadRemoteFile);
-exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteRemoteFile);
+exports.querySyncFiles = moonrakerOnly("File sync", http.querySyncFiles);
+exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadSyncFile);
+exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteSyncFile);
 
 // No getPlate/excludeObject, getFirmwareInfo, getInventory, discoverAt — see
 // flashforge-adventurer.js's matching comment; same gaps apply here.

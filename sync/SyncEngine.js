@@ -80,8 +80,6 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
     if (!retentionDays) return 0;
     const c = getConnector(p.connector);
     if (!c.deleteSyncFile) return 0;
-    const http = require("../connectors/http-utils");
-    const base = http.baseUrl(p);
     const cutoffSec = Date.now() / 1000 - retentionDays * 86400;
     const entries = store.listDownloaded(p.id, root);
     let deleted = 0;
@@ -95,7 +93,7 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
         continue; // can't verify the local copy exists — never delete the source
       }
       try {
-        await c.deleteSyncFile(base, root, entry.remotePath);
+        await c.deleteSyncFile(p, root, entry.remotePath);
         store.deleteEntry(p.id, root, entry.remotePath);
         deleted++;
       } catch (e) {
@@ -130,9 +128,8 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
       if (destinationDown(destRootFolder)) throw new Error("The sync folder " + destRootFolder + " is unreachable — try again once it answers");
       const c = getConnector(p.connector);
       if (!c.querySyncFiles) throw new Error("This printer's connector doesn't support file sync");
-      const http = require("../connectors/http-utils");
-      const base = http.baseUrl(p);
-      const remoteFiles = await c.querySyncFiles(base, root);
+      // The connector gets the printer, not a URL (see http-utils querySyncFiles).
+      const remoteFiles = await c.querySyncFiles(p, root);
       const destDir = path.join(destRootFolder, sanitizeFolderName(p.name));
       await fileIO.mkdir(destDir, { recursive: true });
       setStatus(p.id, root, { phase: "downloading", total: remoteFiles.length });
@@ -166,7 +163,7 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
         }
         try {
           await fileIO.mkdir(path.dirname(localPath), { recursive: true });
-          try { await c.downloadSyncFile(base, root, f.path, localPath, f.size); }
+          try { await c.downloadSyncFile(p, root, f.path, localPath, f.size); }
           catch (e) { fileIO.noteError(localPath, e); throw e; }
           store.recordSynced({
             printerId: p.id, root, remotePath: f.path,

@@ -123,9 +123,9 @@ exports.getFileMetadata = http.getFileMetadata;
 // ---- Firmware (generic Moonraker query) ----
 exports.getFirmwareInfo = http.queryFirmwareInfo;
 exports.getHealth = http.queryHealth;
-exports.querySyncFiles = http.queryRemoteFileList;
-exports.downloadSyncFile = http.downloadRemoteFile;
-exports.deleteSyncFile = http.deleteRemoteFile;
+exports.querySyncFiles = http.querySyncFiles;
+exports.downloadSyncFile = http.downloadSyncFile;
+exports.deleteSyncFile = http.deleteSyncFile;
 
 // No getCameraSnapshot, no getInventory, no discoverAt — none of these exist
 // on vanilla Moonraker without a brand-specific plugin/product_info block.

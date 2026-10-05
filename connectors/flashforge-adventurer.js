@@ -283,9 +283,9 @@ exports.getPlate = moonrakerOnly("Exclude-object", http.getPlate);
 exports.excludeObject = moonrakerOnly("Exclude-object", http.excludeObject);
 exports.getHealth = moonrakerOnly("Health", http.queryHealth);
 exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo);
-exports.querySyncFiles = moonrakerOnly("File sync", http.queryRemoteFileList);
-exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadRemoteFile);
-exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteRemoteFile);
+exports.querySyncFiles = moonrakerOnly("File sync", http.querySyncFiles);
+exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadSyncFile);
+exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteSyncFile);
 // HARDWARE GATE — docs/superpowers/specs/flashforge-dual-transport-design.md §8.
 // Only when the firmware has REPLACED the built-in command: that override is
 // the thing that may prompt on the touchscreen, and discovering it at runtime

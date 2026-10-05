@@ -460,9 +460,9 @@ exports.getFileMetadata = http.getFileMetadata;
 // ---- Firmware (generic Moonraker query, reused as-is) ----
 exports.getFirmwareInfo = http.queryFirmwareInfo;
 exports.getHealth = http.queryHealth;
-exports.querySyncFiles = http.queryRemoteFileList;
-exports.downloadSyncFile = http.downloadRemoteFile;
-exports.deleteSyncFile = http.deleteRemoteFile;
+exports.querySyncFiles = http.querySyncFiles;
+exports.downloadSyncFile = http.downloadSyncFile;
+exports.deleteSyncFile = http.deleteSyncFile;
 
 // ---- Camera: Snapmaker U1 monitor.jpg via Moonraker WebSocket RPC ----
 // Mirrors the Python camera-proxy logic: start_monitor → fetch JPEG → idle
