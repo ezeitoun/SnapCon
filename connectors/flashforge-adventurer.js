@@ -82,7 +82,7 @@ function moonrakerCaps(extra) {
   return {
     ...exports.capabilities,
     camera: false, cameraSnapshot: false,   // overridden below only on real evidence
-    excludeObject: true, firmwareInfo: true, health: true, fileSync: true, webUi: true,
+    excludeObject: true, firmwareInfo: true, health: true, fileSync: true, deleteFile: true, webUi: true,
     // ZMOD/Klipper has a real halt: /printer/emergency_stop.
     estop: true,
     // Hardware gates — an unverified capability ships off.
@@ -286,6 +286,7 @@ exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo)
 exports.querySyncFiles = moonrakerOnly("File sync", http.querySyncFiles);
 exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadSyncFile);
 exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteSyncFile);
+exports.deleteFile = moonrakerOnly("Deleting files", http.deleteFile);
 // HARDWARE GATE — docs/superpowers/specs/flashforge-dual-transport-design.md §8.
 // Only when the firmware has REPLACED the built-in command: that override is
 // the thing that may prompt on the touchscreen, and discovering it at runtime

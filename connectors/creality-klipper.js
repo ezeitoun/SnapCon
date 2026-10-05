@@ -48,7 +48,7 @@ exports.capabilities = {
   // SET_PRINT_PREFERENCES BED_LEVEL=1, a firmware PREFERENCE the printer acts
   // on at the correct point, which is a different mechanism and unaffected.
   autoLevel: false,
-  unloadFilament: false, firmwareInfo: true, inventory: false, discovery: true, health: true, fileSync: true,
+  unloadFilament: false, firmwareInfo: true, inventory: false, discovery: true, health: true, fileSync: true, deleteFile: true,
   // Confirmed live against a real Ender-3 V3 Plus: it serves its own
   // proprietary web UI (title "Creality", not actually Fluidd/Mainsail) on
   // the same host/port as Moonraker — a real dashboard either way.
@@ -839,6 +839,7 @@ exports.getHealth = http.queryHealth;
 exports.querySyncFiles = http.querySyncFiles;
 exports.downloadSyncFile = http.downloadSyncFile;
 exports.deleteSyncFile = http.deleteSyncFile;
+exports.deleteFile = http.deleteFile;
 
 // ---- Camera detection + snapshot ----
 // Earlier assumption here (K1/K2 firmware docs describing a closed-source

@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 77,
+    "version": 78,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-05"
   },
@@ -323,7 +323,13 @@
         "no_filament_loaded": "No filament loaded on this printer.",
         "print_started": "Print started",
         "search_placeholder": "Search files…",
-        "search_aria": "Search files"
+        "search_aria": "Search files",
+        "delete": "Delete",
+        "delete_title": "Delete the selected file from this printer",
+        "delete_disabled_title": "Select a file to delete",
+        "delete_confirm": "Delete \"{file}\" from {printer}? This can’t be undone.",
+        "deleting": "Deleting…",
+        "deleted": "Deleted \"{file}\""
       },
       "print_opts": {
         "flow_calibration": "Flow Calibration",

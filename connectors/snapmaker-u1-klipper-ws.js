@@ -459,6 +459,7 @@ exports.getHealth = base.getHealth;
 exports.querySyncFiles = base.querySyncFiles;
 exports.downloadSyncFile = base.downloadSyncFile;
 exports.deleteSyncFile = base.deleteSyncFile;
+exports.deleteFile = base.deleteFile;
 exports.getCameraSnapshot = base.getCameraSnapshot; // camera is explicitly out of scope — untouched
 exports.getInventory = base.getInventory;
 exports.discoverAt = base.discoverAt;

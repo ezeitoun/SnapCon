@@ -2712,6 +2712,7 @@ function wireUI(){
   wireModal("sendmodal", closeSendModal, ["sendmodalx","sendmodalcancel"]);
   wireModal("pfilemodal", closePrinterFiles, ["pfilex","pfilecancel"]);
   $("pfilego").addEventListener("click", doPrintFile);
+  $("pfiledel").addEventListener("click", deletePrinterFile);
   $("pfileSearch").addEventListener("input", renderPfileList);
 
   $("snaprefresh").addEventListener("click", loadSnapshot);
@@ -7637,6 +7638,8 @@ function openPrinterFiles(printerId){
   $("pfilemap").innerHTML="";
   $("pfileStatus").textContent="";
   $("pfilego").disabled=true;
+  $("pfiledel").hidden=!(canAct() && p.capabilities && p.capabilities.deleteFile);
+  syncPfileDelete();
   $("pfilemodal").classList.add("show");
   loadPrinterFiles();
 }
@@ -7675,9 +7678,40 @@ function renderPfileList(){
         x.querySelector(".pi-check").textContent = x.dataset.f===PFILE_SELECTED?"✓":"";
       });
       $("pfilego").disabled=false;
+      syncPfileDelete();
       loadPfileMeta(el.dataset.f);
     });
   });
+}
+// Delete in the printer-files dialog: enabled once a file is picked.
+function syncPfileDelete(){
+  const b=$("pfiledel");
+  b.disabled=!PFILE_SELECTED;
+  b.title=PFILE_SELECTED ? t("fleet.modal.pfile.delete_title") : t("fleet.modal.pfile.delete_disabled_title");
+}
+async function deletePrinterFile(){
+  if(PFILE_PRINTER===null||!PFILE_SELECTED) return;
+  const printerId=PFILE_PRINTER, file=PFILE_SELECTED;
+  const p=FLEET.find(f=>f.id===printerId);
+  if(!confirm(t("fleet.modal.pfile.delete_confirm",{file, printer:p?p.name:""}))) return;
+  const st=$("pfileStatus"), b=$("pfiledel");
+  st.textContent=t("fleet.modal.pfile.deleting");
+  b.disabled=true; $("pfilego").disabled=true;
+  try{
+    const r=await postJSON("/api/printer-file-delete",{printer:printerId,file});
+    const d=await r.json().catch(()=>({})); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    if(PFILE_PRINTER!==printerId) return; // the dialog was closed or moved on meanwhile
+    st.textContent=t("fleet.modal.pfile.deleted",{file});
+    PFILE_SELECTED=null; PFILE_META=null; PFILE_MAP={};
+    $("pfileinfo").innerHTML=""; $("pfilemap").innerHTML="";
+    syncPfileDelete();
+    await loadPrinterFiles();
+    loadFleet(); // a deleted staged file stops showing as ready on the card
+  }catch(e){
+    if(PFILE_PRINTER!==printerId) return;
+    st.textContent=e.message;
+    syncPfileDelete(); $("pfilego").disabled=!PFILE_SELECTED;
+  }
 }
 async function loadPfileMeta(file){
   PFILE_META=null; PFILE_MAP={};

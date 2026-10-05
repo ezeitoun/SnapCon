@@ -668,6 +668,8 @@
   .pfi-lbl{font-size:9px; color:var(--ink-faint); font-family:var(--mono); text-transform:uppercase; letter-spacing:.05em;}
   .pfi-val{font-size:11px; color:var(--ink); font-family:var(--mono); font-weight:600;}
   .send-footer .btn-base{flex:none; padding:8px 18px;}
+  /* Delete sits apart from Cancel and Print, on the footer's left. */
+  .send-footer .pfile-del{flex:none; margin-right:auto;}
   .platesvg{width:100%; height:auto; max-height:60vh; display:block;}
   .po-group[data-obj]{cursor:pointer;}
   .platesvg .po{fill:#2b6cb0; stroke:#16385f; stroke-width:.8; opacity:.85; transition:fill .15s,opacity .15s;}

@@ -11,7 +11,7 @@ exports.brand = "Klipper";
 exports.address = { scheme: "http", defaultPort: 7125, portEditable: true, required: true };
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true, autoLevel: false,
-  unloadFilament: false, firmwareInfo: true, inventory: false, discovery: false, health: true, fileSync: true,
+  unloadFilament: false, firmwareInfo: true, inventory: false, discovery: false, health: true, fileSync: true, deleteFile: true,
   // Generic Klipper/Moonraker installs commonly proxy Fluidd or Mainsail on
   // the same host — a reasonable default, though a bare Moonraker-only setup
   // with no frontend installed would have nothing to actually show here.
@@ -126,6 +126,7 @@ exports.getHealth = http.queryHealth;
 exports.querySyncFiles = http.querySyncFiles;
 exports.downloadSyncFile = http.downloadSyncFile;
 exports.deleteSyncFile = http.deleteSyncFile;
+exports.deleteFile = http.deleteFile;
 
 // No getCameraSnapshot, no getInventory, no discoverAt — none of these exist
 // on vanilla Moonraker without a brand-specific plugin/product_info block.

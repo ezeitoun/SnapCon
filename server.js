@@ -1653,6 +1653,33 @@ function activeJobConflict(printerState, activeFilename, targetName) {
   return base(activeFilename) === base(targetName);
 }
 
+// Why a file on the printer must not be deleted right now, or null. Pure, so
+// the whole table is testable without a printer. Names are compared by
+// basename, like activeJobConflict(): a stored path may carry a subfolder the
+// other side doesn't, and a false match only refuses, never deletes.
+//   state/activeFilename  the printer's probe (printing or paused on this file)
+//   starting              a start sequence is running (STARTING), during which
+//                         the printer still reports an idle-looking state
+//   staged                queuedFile's entry for the printer, if any
+//   queue                 the printer's queue: pending items and the current one
+//   uploading             names of /api/print uploads to this printer in flight
+function printerFileDeleteRefusal({ printerName, file, state, activeFilename, starting, staged, queue, uploading }) {
+  const base = s => String(s).replace(/\\/g, "/").split("/").pop();
+  const name = base(file);
+  if (starting) return `${printerName} is starting a print. Try again once it has started.`;
+  if (activeJobConflict(state, activeFilename, file)) return `"${name}" is the file ${printerName} is printing right now.`;
+  if (staged && base(staged.name) === name && staged.status !== "ready" && staged.status !== "error") {
+    return `"${name}" is still being sent to ${printerName}.`;
+  }
+  if ((uploading || []).some(n => base(n) === name)) return `"${name}" is still being sent to ${printerName}.`;
+  // A queued item that was already uploaded will start this file without
+  // sending it again; the one being dispatched may be sending or starting it.
+  const waiting = (queue || []).some(i => i && i.file && base(i.file.name) === name &&
+    ((i.status === "queued" && i.alreadyUploaded) || i.status === "dispatching"));
+  if (waiting) return `"${name}" is waiting in ${printerName}'s queue. Remove it from the queue first.`;
+  return null;
+}
+
 // Throws a 409 when sending `name` to `p` would disturb its running job.
 // probeCached() re-probes an online printer on every call (it caches only
 // OFFLINE results), so this reads current state rather than a stale snapshot —
@@ -1876,7 +1903,9 @@ app.post("/api/print", requireRegular, async (req, res) => {
 
   // Kick the work off in the background and hand the client a job id to poll.
   const jobId = newJobId();
-  const job = { phase: "upload", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now() };
+  // printerId/file: which printer the upload is going to and under what name,
+  // so deleting that file from the printer is refused while it is in flight.
+  const job = { phase: "upload", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now(), printerId: p.id, file: name };
   JOBS.set(jobId, job);
   res.json({ jobId });
   const actor = actorFromReq(req);
@@ -2149,6 +2178,47 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: e.message });
   }
+});
+
+// Deletes a G-code file from the printer's own storage (the printer-files
+// dialog). Refused while anything in SnapCon still needs that file: see
+// printerFileDeleteRefusal(). A staged file that is deleted stops being
+// offered as "ready to print".
+app.post("/api/printer-file-delete", requireRegular, async (req, res) => {
+  const { printer, file } = req.body || {};
+  const p = PRINTERS[printer];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  if (typeof file !== "string" || !file.trim() || file.length > 500 || /[\r\n\0]/.test(file) || file.startsWith("/") ||
+      file.replace(/\\/g, "/").split("/").includes("..")) {
+    return res.status(400).json({ error: "Bad file name" });
+  }
+  const c = getConnector(p.connector);
+  if (!c.deleteFile || !(getCapabilities(p.connector, p) || {}).deleteFile) {
+    return res.status(400).json({ error: p.name + " can't delete files from its storage through SnapCon." });
+  }
+  // Fail closed: a delete is permanent, so "couldn't tell what it's doing" refuses.
+  let st;
+  try { st = await probeCached(p); } catch { st = null; }
+  if (!st || !st.online) return res.status(502).json({ error: "Could not reach " + p.name + "." });
+  const qs = queueStore.getPrinterState(p.id) || {};
+  const refusal = printerFileDeleteRefusal({
+    printerName: p.name, file, state: st.state, activeFilename: st.filename,
+    starting: STARTING.has(p.id),
+    staged: queuedFile.get(printer) || null,
+    queue: [...(qs.queue || []), ...(qs.currentItem ? [qs.currentItem] : [])],
+    uploading: [...JOBS.values()].filter(j => !j.done && j.phase === "upload" && j.printerId === p.id).map(j => j.file),
+  });
+  if (refusal) return res.status(409).json({ error: refusal });
+  try {
+    await c.deleteFile(p, file);
+  } catch (e) {
+    return res.status(502).json({ error: "Could not delete \"" + file + "\" from " + p.name + ": " + e.message });
+  }
+  const staged = queuedFile.get(printer);
+  if (staged && path.basename(String(staged.name)) === path.basename(file)) { queuedFile.delete(printer); saveQueuedFiles(); }
+  auditLog.log({ category: "job", event: "printer-file-deleted", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file } });
+  res.json({ ok: true });
 });
 
 // ---- Exclude-object: live plate map + skip a single object mid-print ----

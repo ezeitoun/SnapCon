@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 77,
+    "version": 78,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-05"
   },
@@ -323,7 +323,13 @@
         "no_filament_loaded": "No hay filamento cargado en esta impresora.",
         "print_started": "Impresión iniciada",
         "search_placeholder": "Buscar archivos…",
-        "search_aria": "Buscar archivos"
+        "search_aria": "Buscar archivos",
+        "delete": "Eliminar",
+        "delete_title": "Eliminar de esta impresora el archivo seleccionado",
+        "delete_disabled_title": "Selecciona un archivo para eliminarlo",
+        "delete_confirm": "¿Eliminar «{file}» de {printer}? No se puede deshacer.",
+        "deleting": "Eliminando…",
+        "deleted": "Se eliminó «{file}»"
       },
       "print_opts": {
         "flow_calibration": "Calibración de flujo",

@@ -24,7 +24,7 @@ exports.printerFamily = "snapmaker-u1";
 exports.address = { scheme: "http", defaultPort: 80, portEditable: false, required: true };
 exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: true, autoLevel: true,
-  unloadFilament: true, firmwareInfo: true, inventory: true, discovery: true, health: true, fileSync: true,
+  unloadFilament: true, firmwareInfo: true, inventory: true, discovery: true, health: true, fileSync: true, deleteFile: true,
   // SET_PRINT_FILAMENT_CONFIG (see setFilamentColor below) really does write
   // filament_color_rgba back to the printer — the same command the
   // touchscreen itself issues. Verified against dlgambill/u1hub (the
@@ -463,6 +463,7 @@ exports.getHealth = http.queryHealth;
 exports.querySyncFiles = http.querySyncFiles;
 exports.downloadSyncFile = http.downloadSyncFile;
 exports.deleteSyncFile = http.deleteSyncFile;
+exports.deleteFile = http.deleteFile;
 
 // ---- Camera: Snapmaker U1 monitor.jpg via Moonraker WebSocket RPC ----
 // Mirrors the Python camera-proxy logic: start_monitor → fetch JPEG → idle

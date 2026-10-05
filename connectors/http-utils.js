@@ -290,6 +290,9 @@ async function getThumbnail(p, file) {
 const querySyncFiles = (p, root) => queryRemoteFileList(baseUrl(p), root);
 const downloadSyncFile = (p, root, relPath, destPath, expectedSize) => downloadRemoteFile(baseUrl(p), root, relPath, destPath, expectedSize);
 const deleteSyncFile = (p, root, relPath) => deleteRemoteFile(baseUrl(p), root, relPath);
+// Deleting a G-code file from the printer's own storage (the printer-files
+// dialog). `relPath` is the path as listFiles() reports it.
+const deleteFile = (p, relPath) => deleteRemoteFile(baseUrl(p), "gcodes", relPath);
 
 async function queryRemoteFileList(base, root) {
   const { ok, status, json } = await fetchJSONTimeout(base + "/server/files/list?root=" + encodeURIComponent(root), 8000);
@@ -751,7 +754,7 @@ module.exports = {
   listFiles, getThumbnail, getFileMetadata, compareRemoteFile,
   queryFirmwareInfo, queryHealth, pickIface,
   queryRemoteFileList, downloadRemoteFile, deleteRemoteFile, queryRecentlyPrintedFiles,
-  querySyncFiles, downloadSyncFile, deleteSyncFile,
+  querySyncFiles, downloadSyncFile, deleteSyncFile, deleteFile,
   // exported for tests only
   _internal: { assertSafeGcodeArg, parseFallbackStats }
 };

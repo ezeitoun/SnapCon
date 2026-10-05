@@ -94,7 +94,7 @@ function moonrakerCaps(extra) {
   return {
     ...exports.capabilities,
     camera: false, cameraSnapshot: false,
-    excludeObject: true, firmwareInfo: true, health: true, fileSync: true, webUi: true,
+    excludeObject: true, firmwareInfo: true, health: true, fileSync: true, deleteFile: true, webUi: true,
     // ZMOD/Klipper has a real halt: /printer/emergency_stop.
     estop: true,
     // Hardware gates — each ships off until individually verified.
@@ -572,6 +572,7 @@ exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo)
 exports.querySyncFiles = moonrakerOnly("File sync", http.querySyncFiles);
 exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadSyncFile);
 exports.deleteSyncFile = moonrakerOnly("File sync", http.deleteSyncFile);
+exports.deleteFile = moonrakerOnly("Deleting files", http.deleteFile);
 
 // No getPlate/excludeObject, getFirmwareInfo, getInventory, discoverAt — see
 // flashforge-adventurer.js's matching comment; same gaps apply here.
