@@ -192,8 +192,11 @@ test("resolveWebcam returns null when no webcam is configured at all", async () 
 test("case 1 — same-host direct url is fetched", async () => {
   const s = await serve((req, res) => { res.setHeader("content-type", "image/jpeg"); res.end(JPEG); });
   try {
-    const buf = await fm.fetchSnapshot({ url: s.origin, name: "t" }, s.origin + "/snap.jpg");
+    const { contentType, buffer: buf } = await fm.fetchSnapshot({ url: s.origin, name: "t" }, s.origin + "/snap.jpg");
     assert.ok(Buffer.isBuffer(buf) && buf.length > 0);
+    // The shape every getCameraSnapshot() returns: a bare Buffer here left
+    // /api/snapshot with Content-Type "undefined" on ZMOD printers.
+    assert.match(contentType, /^image\//);
   } finally { s.close(); }
 });
 
@@ -203,7 +206,7 @@ test("case 2 — a same-host redirect within budget is followed", async () => {
     res.setHeader("content-type", "image/jpeg"); res.end(JPEG);
   });
   try {
-    const buf = await fm.fetchSnapshot({ url: s.origin, name: "t" }, s.origin + "/a");
+    const { buffer: buf } = await fm.fetchSnapshot({ url: s.origin, name: "t" }, s.origin + "/a");
     assert.ok(Buffer.isBuffer(buf) && buf.length > 0);
   } finally { s.close(); }
 });
@@ -258,7 +261,7 @@ test("a chain exactly at the budget still succeeds", async () => {
     res.setHeader("content-type", "image/jpeg"); res.end(JPEG);
   });
   try {
-    const buf = await fm.fetchSnapshot({ url: s.origin, name: "t" }, s.origin + "/0");
+    const { buffer: buf } = await fm.fetchSnapshot({ url: s.origin, name: "t" }, s.origin + "/0");
     assert.ok(Buffer.isBuffer(buf) && buf.length > 0);
   } finally { s.close(); }
 });

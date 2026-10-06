@@ -252,7 +252,9 @@ async function fetchSnapshot(p, url, ms = 5000) {
       // unknown paths, which would otherwise verify as a working snapshot.
       const ct = r.headers.get("content-type") || "";
       if (!/^image\//i.test(ct.trim())) throw new Error("Camera returned " + (ct || "no content-type") + ", not an image");
-      return Buffer.from(await r.arrayBuffer());
+      // The connector contract's shape (getCameraSnapshot): every caller —
+      // /api/snapshot, notification images — destructures these two.
+      return { contentType: ct.trim(), buffer: Buffer.from(await r.arrayBuffer()) };
     }
     // Every hop passed the host check, so only this counter can stop a printer
     // redirecting to itself indefinitely.

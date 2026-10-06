@@ -2979,10 +2979,23 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
 // stop timer state (if any) lives inside it, not here. See
 // connectors/snapmaker-u1-klipper.js's getCameraSnapshot for why: it's a
 // quirk of Snapmaker's own camera plugin, not a generic "camera" concept.
+// Every connector's getCameraSnapshot() returns { contentType, buffer }. This
+// checks it before anything uses it: /api/snapshot copies contentType onto the
+// response, where an invalid one ("undefined" from a connector returning a
+// bare Buffer) made Express throw while sending — then again in the route's
+// own 502 handler, so the browser got no answer at all and the log an
+// unhandled rejection. A bad answer is now an ordinary "no camera frame".
 async function getSnapshot(p) {
   const c = getConnector(p.connector);
   if (!c.getCameraSnapshot) throw new Error(p.name + " has no camera");
-  return c.getCameraSnapshot(p);
+  return checkSnapshot(p, await c.getCameraSnapshot(p));
+}
+function checkSnapshot(p, shot) {
+  const buffer = shot && shot.buffer;
+  const type = String((shot && shot.contentType) || "").split(";")[0].trim().toLowerCase();
+  if (!Buffer.isBuffer(buffer) || !buffer.length) throw new Error(p.name + "'s camera returned no image");
+  if (!/^image\/[a-z0-9][a-z0-9.+-]*$/.test(type)) throw new Error(p.name + "'s camera returned " + (type || "no content type") + ", not an image");
+  return { contentType: type, buffer };
 }
 
 // Server-side throttle for the fleet Camera View's automatic polling: that
