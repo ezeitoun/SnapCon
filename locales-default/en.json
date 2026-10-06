@@ -3,9 +3,9 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 81,
+    "version": 82,
     "snapconVersion": "0.8.0",
-    "updated": "2026-10-05"
+    "updated": "2026-10-06"
   },
   "printer_status": {
     "offline": "Offline",
@@ -50,7 +50,8 @@
     "note_monitoring_only": "Monitoring only. Turn on Developer Mode on the printer (Settings → Network) to control prints from here.",
     "note_check_again": "Check again",
     "note_checking": "Checking…",
-    "note_untested_model": "{model} has not been tested with SnapCon yet — some readings may be missing."
+    "note_untested_model": "{model} has not been tested with SnapCon yet — some readings may be missing.",
+    "action_preheat_unavailable_title": "Preheat isn’t available: {status}"
   },
   "fleet": {
     "estop_status_sending": "Sending emergency stop…",

@@ -487,6 +487,15 @@ function offlineSeenText(lastSeenAt, now){
 function printerHost(url){
   try{ const u=new URL(String(url||"")); return u.host || String(url||""); }catch{ return String(url||""); }
 }
+// Preheat's button attributes. It needs a printer that is reachable and not
+// mid-flash; the card grid shows no buttons on those cards at all, but
+// Camera view and the list view keep their button row, so it is disabled
+// there, with the reason in its tooltip.
+function preheatAttrs(p){
+  const unreachable = !p.online || p.state==="updating" || p.state==="rebooting";
+  const title = unreachable ? t("printer.action_preheat_unavailable_title",{status:statusColorText(p).statusTxt}) : t("printer.action_preheat");
+  return `${canAct()&&!unreachable?"":"disabled"} data-preheat="${p.id}" title="${esc(title)}"`;
+}
 const WIFI_OFF_ICON=`<svg class="offline-info-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><path d="M12 20h.01"/></svg>`;
 
 function statusColorText(p){
@@ -6134,7 +6143,7 @@ function buildCardHtml(p, need, dragEnabled){
       <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${brandHtml(p)}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${mode?(webUiPill?`<div class="card-pills">${webUiPill}</div>`:''):p.online?`<div class="card-pills">${canEject(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${webUiPill}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
       ${mode==="offline"?'':`<div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>`}
       ${VIEW_MODE==='camera'?(!p.online
-          ? `<div class="cam-shot-placeholder"><span>${esc(t("printer_status.offline"))}</span></div>`
+          ? `<div class="cam-shot-placeholder"><span>${esc(statusTxt)}</span></div>`
           : p.capabilities?.camera
             ? `<div class="cam-shot-slot" data-camslot="${p.id}"></div>`
             : `<div class="cam-shot-placeholder"><img class="cam-shot-placeholder-icon" src="/camera-disabled.svg" alt=""><span>${esc(t("fleet.camera.disabled_label"))}</span></div>`
@@ -6246,7 +6255,7 @@ function buildCardHtml(p, need, dragEnabled){
             + `<button class="btn-chip danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""><span>${esc(t("printer.action_estop"))}</span></button>`
           : `<button class="btn-chip" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
             + `<button class="btn-chip" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
-            + `<button class="btn-chip" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
+            + `<button class="btn-chip" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
             + (p.state==='complete'&&p.filename?`<button class="btn-chip" ${canAct()?"":"disabled"} data-reprint="${p.id}" title="${esc(t("printer.action_reprint_title",{filename:p.filename}))}"><img src="/reprint-icon.svg" alt=""><span>${esc(t("printer.action_reprint"))}</span></button>`:"")
         }
       </div>`}
@@ -6627,7 +6636,7 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
         + `<button class="btn-chip icon-only danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
       : `<button class="btn-chip icon-only" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
         + `<button class="btn-chip icon-only" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
-        + `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""></button>`;
+        + `<button class="btn-chip icon-only" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""></button>`;
     const tr=document.createElement("tr");
     tr.className="list-row"+(p.online?"":" offline");
     tr.innerHTML=`<td class="list-th-chk"><label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label></td>`+

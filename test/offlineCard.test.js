@@ -22,12 +22,13 @@ function extractFn(name) {
 
 const sandbox = {
   STATUS_OVERRIDE: new Map(), Date, Number, String, URL, Math,
+  canAct: () => true,
   // t() stand-in: the key plus its parameters, so tests see what was chosen.
   t: (k, params) => k + (params ? " " + JSON.stringify(params) : ""),
   esc: s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
 };
 vm.createContext(sandbox);
-vm.runInContext(["printerShowsOffline", "cardMode", "offlineSeenText", "printerHost", "fmtDuration", "stripExt", "queuedFileBannerHtml", "statusColorText"].map(extractFn).join("\n"), sandbox);
+vm.runInContext(["printerShowsOffline", "cardMode", "offlineSeenText", "printerHost", "preheatAttrs", "fmtDuration", "stripExt", "queuedFileBannerHtml", "statusColorText"].map(extractFn).join("\n"), sandbox);
 const call = (name, ...a) => vm.runInContext(name, sandbox)(...a);
 
 // ---- which card ----
@@ -123,6 +124,21 @@ test("the link's tooltip carries the host, so the address the card no longer sho
   assert.equal(call("printerHost", "http://192.168.4.212:8898"), "192.168.4.212:8898");
   assert.equal(call("printerHost", "not a url"), "not a url");
   assert.equal(call("printerHost", undefined), "");
+});
+
+test("Preheat is disabled, with the reason, on a printer that is offline or mid-flash (Camera and list views keep their buttons)", () => {
+  assert.equal(call("preheatAttrs", { id: 3, online: true, state: "standby" }), ' data-preheat="3" title="printer.action_preheat"');
+  assert.equal(call("preheatAttrs", { id: 3, online: false, state: "standby" }),
+    'disabled data-preheat="3" title="printer.action_preheat_unavailable_title {&quot;status&quot;:&quot;printer_status.offline&quot;}"');
+  assert.match(call("preheatAttrs", { id: 3, online: true, state: "updating" }), /^disabled .*printer_status\.updating/);
+  assert.match(call("preheatAttrs", { id: 3, online: false, state: "rebooting" }), /^disabled .*printer_status\.rebooting/);
+  // Both places that render Preheat use it.
+  assert.equal((appSrc.match(/\$\{preheatAttrs\(p\)\}>/g) || []).length, 2);
+  assert.doesNotMatch(appSrc, /\$\{canAct\(\)\?"":"disabled"\} data-preheat=/);
+});
+
+test("Camera view's placeholder names the printer's real status (Updating, not Offline)", () => {
+  assert.match(build, /\? `<div class="cam-shot-placeholder"><span>\$\{esc\(statusTxt\)\}<\/span><\/div>`/);
 });
 
 test("the faded 0.55 card is gone from the card grid; the list view keeps its own fade", () => {
