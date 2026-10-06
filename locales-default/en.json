@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 79,
+    "version": 81,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-05"
   },
@@ -41,7 +41,7 @@
     "action_reprint_title": "Reprint {filename}",
     "action_eject": "Eject",
     "action_camera": "Camera",
-    "action_web_interface_title": "Open Web Interface",
+    "action_web_interface_title": "Open web interface, {host}",
     "action_web_interface_alt": "Web Interface",
     "action_plate": "Plate",
     "action_plate_title": "Plate {done}/{total}",
@@ -112,7 +112,10 @@
       "afc_last_used": "LAST USED",
       "afc_loaded": "LOADED",
       "transport_native": "Native",
-      "transport_moonraker": "Moonraker"
+      "transport_moonraker": "Moonraker",
+      "offline_seen_today": "Last seen {time} · {ago} ago",
+      "offline_seen_earlier": "Last seen {date}, {time}",
+      "offline_never_seen": "Not reached since SnapCon started"
     },
     "progress": {
       "total_time_label": "Total time",
@@ -140,7 +143,8 @@
       "staging_banner": "Staging <b>{name}</b> on this printer…",
       "stage_failed_banner": "Couldn't stage {name}: {error}",
       "starting_print_status": "Starting print…",
-      "printing_status": "Printing {filename}"
+      "printing_status": "Printing {filename}",
+      "ready_banner": "Ready to print: <b>{name}</b>"
     },
     "status": {
       "connecting_short": "Connecting…",

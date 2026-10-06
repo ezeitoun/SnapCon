@@ -346,6 +346,7 @@ test("the printer.* and fleet.* namespaces exist — Regular/Compact/Camera card
     "action_web_interface_title", "action_web_interface_alt", "action_plate", "action_plate_title"]
     .forEach(k => assert.ok(`printer.${k}` in enFlat, `printer.${k} must exist`));
   assert.ok(enFlat["printer.action_reprint_title"].includes("{filename}"));
+  assert.ok(enFlat["printer.action_web_interface_title"].includes("{host}"), "the link's tooltip names the printer's address");
   assert.ok(enFlat["printer.action_plate_title"].includes("{done}") && enFlat["printer.action_plate_title"].includes("{total}"));
 
   // Card/progress/camera/error-panel/queued-banner/connectivity chrome.

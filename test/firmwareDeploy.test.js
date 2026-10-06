@@ -611,7 +611,10 @@ test("the fleet card says Updating while a deploy is in flight, and stops saying
                           appSrc.indexOf("// ---- Camera view: live snapshot"));
   const updIdx = fn.indexOf('p.state==="updating"');
   const rebIdx = fn.indexOf('p.state==="rebooting"');
-  const offIdx = fn.indexOf("if(!p.online)");
+  // The Offline branch goes through printerShowsOffline(), which the
+  // offline card shares, and which itself excludes both states.
+  const offIdx = fn.indexOf("if(printerShowsOffline(p))");
+  assert.match(appSrc, /function printerShowsOffline\(p\)\{\n  return !p\.online && p\.state!=="updating" && p\.state!=="rebooting";\n\}/);
   assert.ok(updIdx > 0 && updIdx < offIdx, "updating is decided before offline");
   assert.ok(rebIdx > 0 && rebIdx < offIdx, "and so is rebooting — the printer is",
     "legitimately unreachable then");

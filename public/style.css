@@ -275,7 +275,13 @@
      panel-vs-chassis contrast alone, light mode needs the border backed by
      a faint shadow to actually read as a raised card. */
   [data-theme="light"] .pcard{box-shadow:0 1px 2px rgba(16,24,40,.06);}
-  .pcard.offline{opacity:.55;}
+  /* Offline (header, staged file, last seen) and firmware (updating or
+     rebooting: header only) cards are full contrast and carry no buttons.
+     The list view's .list-row.offline keeps its own fade. */
+  .offline-info{display:flex; align-items:center; gap:8px; margin-top:12px; padding:10px 12px;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:6px; font-size:13px; color:var(--ink); min-width:0;}
+  .offline-info-icon{flex:none; color:var(--ink-dim);}
+  .offline-info-seen{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   /* A "/[color]/" tag (see parseColorTag in app.js) sets --tag-color and this
      class — blended rather than a flat fill, so status pills/text on top
      stay readable and it still reads as part of the same dark theme. */
@@ -1866,6 +1872,8 @@
 
   .queued-banner{margin:10px 0 0;padding:9px 12px;border-radius:8px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
   .queued-banner.work{background:color-mix(in srgb,var(--accent) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);color:var(--ink-dim);}
+  .queued-banner-text{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .queued-banner.ready{background:color-mix(in srgb,var(--signal) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--signal) 32%,transparent);color:var(--ink-dim);}
   .queued-banner.err{background:color-mix(in srgb,var(--bad) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);color:var(--ink-dim);}
 
   /* ---- User Access Management ---- */

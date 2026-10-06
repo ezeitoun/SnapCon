@@ -453,6 +453,42 @@ function cardStatusHtml(p){
   const cancel=job ? `<button type="button" class="pstatus-cancel" data-cancel-upload="${esc(job)}" data-printer="${esc(p.id)}">${esc(t("fleet.print.cancel_upload"))}</button>` : "";
   return `<div class="${s?esc(s.cls):"pstatus"}" id="pst-${esc(p.id)}">${s?esc(s.txt):""}${cancel}</div>`;
 }
+// "Offline" as the status badge means it: not reachable, and not mid-flash
+// (a printer being updated or rebooting is legitimately unreachable and says
+// so with its own badge). statusColorText() and the card both use this, so
+// the badge and the card's layout can't disagree.
+function printerShowsOffline(p){
+  return !p.online && p.state!=="updating" && p.state!=="rebooting";
+}
+// Which reduced card a printer gets: "offline" (header, staged file, last
+// seen) or "firmware" (updating/rebooting: header and badge only, nothing to
+// act on mid-flash), else null for the normal card. A client-side phase
+// override (a send in progress) wins, the same as in statusColorText().
+function cardMode(p){
+  if(STATUS_OVERRIDE.get(String(p.id))) return null;
+  if(p.state==="updating"||p.state==="rebooting") return "firmware";
+  return printerShowsOffline(p) ? "offline" : null;
+}
+// The offline card's "last seen" line. Pure: lastSeenAt is the server's ISO
+// time of the printer's last successful probe (null until it is reached once
+// after SnapCon starts), now is Date.now().
+function offlineSeenText(lastSeenAt, now){
+  const at=lastSeenAt ? Date.parse(lastSeenAt) : NaN;
+  if(!Number.isFinite(at)) return t("fleet.card.offline_never_seen");
+  const d=new Date(at), n=new Date(now);
+  const time=d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  if(d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth() && d.getDate()===n.getDate()){
+    return t("fleet.card.offline_seen_today",{time, ago:fmtDuration((now-at)/1000)});
+  }
+  return t("fleet.card.offline_seen_earlier",{date:d.toLocaleDateString([], {month:"short",day:"numeric"}), time});
+}
+// The printer's host[:port] from its URL (for the web-interface link's
+// tooltip), or the URL itself when it isn't one.
+function printerHost(url){
+  try{ const u=new URL(String(url||"")); return u.host || String(url||""); }catch{ return String(url||""); }
+}
+const WIFI_OFF_ICON=`<svg class="offline-info-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><path d="M12 20h.01"/></svg>`;
+
 function statusColorText(p){
   const override=STATUS_OVERRIDE.get(String(p.id));
   if(override) return override;
@@ -466,7 +502,7 @@ function statusColorText(p){
   // Distinct from Updating on purpose: one is work in progress, the other is
   // a wait for the machine to come back. Amber matches the row's own bar.
   if(p.state==="rebooting") return { statusColor:"var(--warn)", statusTxt:t("printer_status.rebooting") };
-  if(!p.online) return { statusColor:"var(--ink-faint)", statusTxt:t("printer_status.offline") };
+  if(printerShowsOffline(p)) return { statusColor:"var(--ink-faint)", statusTxt:t("printer_status.offline") };
   if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:t("printer_status.printing") };
   if(p.state==="paused") return { statusColor:"var(--paused)", statusTxt:t("printer_status.paused") };
   if(p.state==="error") return { statusColor:"var(--bad)", statusTxt:t("printer_status.error") };
@@ -5876,6 +5912,10 @@ function updateFleetCardLiveValues(card, p){
   setText('[data-live="bed-val"]', bedA+"°");
   setText('[data-live="bed-target"]', bedBar.targetTxt);
   setBar('[data-live="bed-bar"]', bedBar);
+  // The offline card's "Last seen 14:02 · 2h 03m ago": the "ago" moves on
+  // every poll by itself, so it is patched here rather than rebuilding the
+  // card. lastSeenAt itself is in the signature.
+  setText('[data-live="seen"]', offlineSeenText(p.lastSeenAt, Date.now()));
 }
 // Which protocol a printer is being driven over, for the tag beside its
 // brand. Only the two transports SnapCon actually detects are ever rendered —
@@ -5941,6 +5981,8 @@ function cardSignature(p){
     // data-live hook there, and nothing else may be removed without
     // giving it one.
     filename:p.filename,
+    // The offline card's "last seen" (the "ago" beside it is patched live).
+    lastSeenAt:p.lastSeenAt||null,
     filamentUsed:p.filamentUsed, completedAt:p.completedAt,
     errorCode:p.errorCode, message:p.message, plate:p.plate,
     activeExt:p.activeExt, forceDefaults:p.forceDefaults,
@@ -6011,7 +6053,15 @@ function printerNoteHtml(p){
 // reconcileFleetCards(), which computes them once and passes them down.
 function buildCardHtml(p, need, dragEnabled){
     const card=document.createElement("div");
-    card.className="pcard"+(p.online?"":" offline");
+    // The reduced layouts are for the card grid (Full and Compact); Camera
+    // view keeps its own offline placeholder.
+    const mode=VIEW_MODE==='camera' ? null : cardMode(p);
+    card.className="pcard"+(mode==="offline"?" offline":mode==="firmware"?" fw-busy":"");
+    // The printer's own web interface (Fluidd/Mainsail), from the connector's
+    // webUi capability. Also the one pill on offline and updating/rebooting
+    // cards: it's a plain link that may answer when SnapCon's probe doesn't,
+    // and its tooltip carries the address the card no longer shows.
+    const webUiPill=p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title",{host:printerHost(p.url)}))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:'';
     card.dataset.pid=p.id;
     const tagColor=parseColorTag(p.tags);
     if(tagColor){ card.classList.add("tag-tinted"); card.style.setProperty("--tag-color",tagColor); }
@@ -6081,15 +6131,16 @@ function buildCardHtml(p, need, dragEnabled){
       }
     }
     card.innerHTML=`
-      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${brandHtml(p)}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${p.online?`<div class="card-pills">${canEject(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title"))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:''}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
-      <div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>
+      <div class="top">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}<span class="pn"><span><div class="hdr-brand">${brandHtml(p)}</div><div class="hdr-name">${esc(p.name)}</div></span></span><div class="card-right">${mode?(webUiPill?`<div class="card-pills">${webUiPill}</div>`:''):p.online?`<div class="card-pills">${canEject(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:''}${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}${webUiPill}</div>`:''}<span class="status-badge${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''} style="--status-color:${statusColor}">${statusTxt}</span></div></div>
+      ${mode==="offline"?'':`<div class="prism-line${p.state==='error'?' err-line':p.state==='cancelled'?' cancelled-line':p.state==='paused'?' pause-line':p.state==='complete'?' complete-line':''}"></div>`}
       ${VIEW_MODE==='camera'?(!p.online
           ? `<div class="cam-shot-placeholder"><span>${esc(t("printer_status.offline"))}</span></div>`
           : p.capabilities?.camera
             ? `<div class="cam-shot-slot" data-camslot="${p.id}"></div>`
             : `<div class="cam-shot-placeholder"><img class="cam-shot-placeholder-icon" src="/camera-disabled.svg" alt=""><span>${esc(t("fleet.camera.disabled_label"))}</span></div>`
         ):''}
-      ${p.queuedFile?queuedFileBannerHtml(p):''}
+      ${p.queuedFile?queuedFileBannerHtml(p,{readyToo:mode==="offline"}):''}
+      ${mode==="offline"?`<div class="offline-info">${WIFI_OFF_ICON}<span class="offline-info-seen" data-live="seen">${esc(offlineSeenText(p.lastSeenAt, Date.now()))}</span></div>`:''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
         const e=lookupKlipperError(p.errorCode, p.message);
         const listIcon=`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="12" y2="17"/></svg>`;
@@ -6181,7 +6232,7 @@ function buildCardHtml(p, need, dragEnabled){
       ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'):''}
       ${mapHtml}
       ${printerNoteHtml(p)}
-      <div class="foot${busy?'':' foot-idle'}">
+      ${mode?'':`<div class="foot${busy?'':' foot-idle'}">
         ${busy
           ? (p.state==="paused"
                 ? `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_resume"))}</span></button>`
@@ -6198,7 +6249,7 @@ function buildCardHtml(p, need, dragEnabled){
             + `<button class="btn-chip" ${canAct()?"":"disabled"} data-preheat="${p.id}" title="${esc(t("printer.action_preheat"))}"><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
             + (p.state==='complete'&&p.filename?`<button class="btn-chip" ${canAct()?"":"disabled"} data-reprint="${p.id}" title="${esc(t("printer.action_reprint_title",{filename:p.filename}))}"><img src="/reprint-icon.svg" alt=""><span>${esc(t("printer.action_reprint"))}</span></button>`:"")
         }
-      </div>
+      </div>`}
       ${cardStatusHtml(p)}`;
     return card;
 }
@@ -6606,9 +6657,13 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
 // statusColorText) and the filename itself shows in the same slot a printing
 // job's filename would (see the progress-section's `stem`), so a second,
 // separate notice here would just be redundant extra card height.
-function queuedFileBannerHtml(p){
+// {readyToo}: also show a file that is ready to print. The normal card says
+// that with its "Loaded" badge; an offline card's badge says "Offline", so
+// without this a waiting job would look lost.
+function queuedFileBannerHtml(p, {readyToo=false}={}){
   const qf=p.queuedFile;
   if(!qf) return '';
+  if(qf.status==='ready' && readyToo) return `<div class="queued-banner ready" title="${esc(qf.name)}"><span class="queued-banner-text">${t("fleet.queued.ready_banner",{name:stripExt(qf.name)},{html:true})}</span></div>`;
   if(qf.status==='queued') return `<div class="queued-banner work">${t("fleet.queued.queued_banner",{name:qf.name},{html:true})}</div>`;
   if(qf.status==='uploading') return `<div class="queued-banner work">${t("fleet.queued.staging_banner",{name:qf.name},{html:true})}</div>`;
   if(qf.status==='error') return `<div class="queued-banner err">${esc(t("fleet.queued.stage_failed_banner",{name:qf.name,error:qf.error||''}))}</div>`;

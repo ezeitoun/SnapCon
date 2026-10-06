@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 79,
+    "version": 81,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-05"
   },
@@ -41,7 +41,7 @@
     "action_reprint_title": "Reimprimir {filename}",
     "action_eject": "Expulsar",
     "action_camera": "Cámara",
-    "action_web_interface_title": "Abrir interfaz web",
+    "action_web_interface_title": "Abrir interfaz web, {host}",
     "action_web_interface_alt": "Interfaz web",
     "action_plate": "Placa",
     "action_plate_title": "Placa {done}/{total}",
@@ -112,7 +112,10 @@
       "afc_last_used": "ÚLTIMA USADA",
       "afc_loaded": "CARGADA",
       "transport_native": "Nativo",
-      "transport_moonraker": "Moonraker"
+      "transport_moonraker": "Moonraker",
+      "offline_seen_today": "Visto por última vez a las {time} · hace {ago}",
+      "offline_seen_earlier": "Visto por última vez el {date}, {time}",
+      "offline_never_seen": "Sin contacto desde que se inició SnapCon"
     },
     "progress": {
       "total_time_label": "Tiempo total",
@@ -140,7 +143,8 @@
       "staging_banner": "Preparando <b>{name}</b> en esta impresora…",
       "stage_failed_banner": "No se pudo preparar {name}: {error}",
       "starting_print_status": "Iniciando impresión…",
-      "printing_status": "Imprimiendo {filename}"
+      "printing_status": "Imprimiendo {filename}",
+      "ready_banner": "Listo para imprimir: <b>{name}</b>"
     },
     "status": {
       "connecting_short": "Conectando…",

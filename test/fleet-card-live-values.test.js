@@ -186,7 +186,7 @@ test("exactly four fields are absent from the signature — nothing else silentl
     // cardStatus, statusOverride, uploadCancel and sendFill are the client-only stores:
     // all are rendered into the card, so all must force the rebuild that shows them.
     "activeExt", "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
-    "filamentUsed", "filename", "forceDefaults", "heads", "layer", "message", "name",
+    "filamentUsed", "filename", "forceDefaults", "heads", "lastSeenAt", "layer", "message", "name",
     "online", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
     "transport", "uploadCancel", "url"
   ]);
@@ -246,10 +246,13 @@ test("the build path and the live path share one heat-bar shadow spec", () => {
   assert.equal((appSrc.match(/0 0 6px \$\{bg\}/g) || []).length, 1, "exactly one shadow spec");
 });
 
-test("the live updater reads only the four live fields off the printer", () => {
+test("the live updater reads only the four live fields off the printer, plus lastSeenAt for the offline card's \"ago\"", () => {
   const i = appSrc.indexOf("function updateFleetCardLiveValues(");
   const fn = appSrc.slice(i, appSrc.indexOf("\n}", i));
   const fields = [...new Set([...fn.matchAll(/\bp\.([a-zA-Z]+)/g)].map(m => m[1]))].sort();
-  assert.deepEqual(fields, ["bed", "elapsed", "hotend", "progress"],
+  // lastSeenAt is the exception on purpose: it stays IN the signature (a new
+  // time rebuilds the card); the updater reads it only to recompute the
+  // "2h 03m ago" text, which moves with the clock, not with the data.
+  assert.deepEqual(fields, ["bed", "elapsed", "hotend", "lastSeenAt", "progress"],
     "patching anything else means that field no longer needs to be structural — decide deliberately, not by accident");
 });

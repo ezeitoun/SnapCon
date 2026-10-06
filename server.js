@@ -2282,6 +2282,13 @@ app.post("/api/exclude", requireRegular, async (req, res) => {
 // a full fetch timeout on every fleet poll.
 const OFFLINE_RETRY_MS = 10 * 1000;
 const offlineCache = new Map();   // printer url -> { result, until }
+// When each printer last answered a probe: printer id -> ms. Set by
+// probeCached() on every online result (the fleet poll and notifyTick's own
+// background poll both pass through it, so it advances with no browser open)
+// and never by a failed one. In memory only: after a restart a printer has
+// no time until it is reached once, and the card says so.
+const LAST_SEEN = new Map();
+const lastSeenIso = p => (LAST_SEEN.has(p.id) ? new Date(LAST_SEEN.get(p.id)).toISOString() : null);
 
 // /api/fleet's client only re-renders a card when the raw JSON body differs
 // from the last poll (see app.js's FLEET_PREV_BODY check) — cheap, but it
@@ -2364,7 +2371,7 @@ async function probeCached(p) {
   if (hit && Date.now() < hit.until) result = hit.result;
   else {
     result = await getConnector(p.connector).probe(p);
-    if (result.online) offlineCache.delete(p.url);
+    if (result.online) { offlineCache.delete(p.url); LAST_SEEN.set(p.id, Date.now()); }
     else offlineCache.set(p.url, { result, until: Date.now() + OFFLINE_RETRY_MS });
   }
   if (result.online) {
@@ -2812,7 +2819,7 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // leaked to a user who can't see it.
     if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
     const conn = getConnector(p.connector);
-    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) });
+    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)), lastSeenAt: lastSeenIso(p) });
   }
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
     if (!printerVisibleTo(req.user, p)) return null;
@@ -2826,7 +2833,7 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // the connector can say (FlashForge's stock API vs Moonraker after a
     // firmware mod). Synchronous and I/O-free by the same contract
     // getCapabilities has; null for every connector that speaks only one.
-    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)) };
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)), lastSeenAt: lastSeenIso(p) };
     const qf = queuedFile.get(i);
     const pl = pendingLoad.get(i);
     // queuedFile (uploading/ready/error) reflects the retry sweep actually
