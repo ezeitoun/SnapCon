@@ -5991,7 +5991,11 @@ function cardSignature(p){
     // giving it one.
     filename:p.filename,
     // The offline card's "last seen" (the "ago" beside it is patched live).
-    lastSeenAt:p.lastSeenAt||null,
+    // Only when that card is showing: an ONLINE printer's lastSeenAt moves on
+    // every successful probe, and having it in here rebuilt every online
+    // card on every poll (focus lost, WebRTC sessions renegotiated, thumbnails
+    // re-fetched).
+    lastSeenAt:cardMode(p)==="offline" ? (p.lastSeenAt||null) : null,
     filamentUsed:p.filamentUsed, completedAt:p.completedAt,
     errorCode:p.errorCode, message:p.message, plate:p.plate,
     activeExt:p.activeExt, forceDefaults:p.forceDefaults,

@@ -47,6 +47,9 @@ vm.createContext(sandbox);
 // and list view use, so the real one comes along rather than a stand-in that
 // could disagree with it.
 vm.runInContext(extractFn("cardFileStem"), sandbox);
+// The offline card's lastSeenAt is in the signature only while that card
+// shows, which cardMode() decides — the real one, for the same reason.
+vm.runInContext(extractFn("printerShowsOffline") + "\n" + extractFn("cardMode"), sandbox);
 vm.runInContext(extractFn("cardSignature"), sandbox);
 const cardSignature = sandbox.cardSignature;
 
@@ -163,6 +166,16 @@ test("a send starting or ending rebuilds the card; its percentage does not", () 
     sandbox.SEND_FILL.set("3", { start: false, pct: 90 });
     assert.equal(sigOf(BASE()), during, "progress is patched in place, never a rebuild per tick");
   } finally { sandbox.SEND_FILL.clear(); }
+});
+
+test("an online printer's lastSeenAt, which moves on every probe, never rebuilds its card", () => {
+  // Regression: lastSeenAt went into the signature unconditionally, so every
+  // online card was rebuilt on every poll.
+  assert.equal(sigOf({ ...BASE(), lastSeenAt: "2026-10-06T21:24:37.104Z" }),
+               sigOf({ ...BASE(), lastSeenAt: "2026-10-06T21:24:41.117Z" }));
+  // On the offline card it is displayed, so a different time does rebuild it.
+  const off = t => sigOf({ ...BASE(), online: false, state: undefined, lastSeenAt: t });
+  assert.notEqual(off("2026-10-06T21:24:37.104Z"), off("2026-10-06T21:30:00.000Z"));
 });
 
 test("the remaining structural fields all still invalidate the signature", () => {
