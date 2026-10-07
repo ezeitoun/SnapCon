@@ -872,6 +872,36 @@
   .pstatus.ok{color:var(--ok);} .pstatus.err{color:var(--bad);} .pstatus.work{color:var(--accent);}
   .progress-section{padding:12px 16px 10px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(255,255,255,0.01);}
   [data-theme="light"] .progress-section{border-top-color:var(--line);background:transparent;}
+  /* ---- Printer card layout v2 (Settings > View, in preview). Every rule is
+     scoped under .pcard.card-v2, which only Full-view cards with the switch
+     on carry (cardLayoutV2()), so classic cards and the Compact, Camera and
+     List views are untouched. Theme tokens only, for dark and light. ---- */
+  .pcard.card-v2 .v2-stats{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-top:-7px;}
+  .pcard.card-v2 .v2-stat{position:relative; display:flex; flex-direction:column; gap:3px; padding:9px 8px 11px; min-width:0;}
+  .pcard.card-v2 .v2-stat+.v2-stat{border-left:1px solid var(--line);}
+  .pcard.card-v2 .v2-stat-label{font-size:11px; color:var(--ink-dim);}
+  /* "215°/215°" has to show whole: a clipped target is a wrong reading. */
+  .pcard.card-v2 .v2-stat-val{font-family:var(--mono); font-size:14px; font-weight:600; color:var(--ink); white-space:nowrap;}
+  .pcard.card-v2 .v2-sub{font-size:10px; color:var(--ink-dim);}
+  .pcard.card-v2 .v2-stat .stats-mini-bar{left:8px; right:8px; bottom:4px; height:3px;}
+  .pcard.card-v2 .v2-main{display:grid; grid-template-columns:100px minmax(0,1fr); gap:14px; align-items:center; padding:12px 16px 10px;}
+  /* The thumbnail box is always there: dashed while there is no image (no
+     file, or none the printer can give), plain once an image fills it. */
+  .pcard.card-v2 .v2-thumb{width:100px; height:100px; border-radius:8px; border:1px dashed var(--line); overflow:hidden; display:flex; align-items:center; justify-content:center;}
+  .pcard.card-v2 .v2-thumb:has(img){border-style:solid; border-color:transparent; cursor:pointer;}
+  .pcard.card-v2 .v2-thumb .stats-thumb-empty{display:none;}
+  .pcard.card-v2 .v2-thumb-img{width:100%; height:100%; object-fit:cover; display:block;}
+  .pcard.card-v2 .v2-prog{display:flex; flex-direction:column; gap:7px; min-width:0;}
+  .pcard.card-v2 .v2-file{font-family:var(--mono); font-size:11px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .pcard.card-v2 .v2-headline{display:flex; justify-content:space-between; align-items:baseline; gap:8px;}
+  .pcard.card-v2 .v2-left{font-family:var(--mono); font-size:20px; font-weight:700; color:var(--ink); white-space:nowrap;}
+  .pcard.card-v2 .v2-left-unit{font-family:inherit; font-size:12px; font-weight:400; color:var(--ink-dim);}
+  .pcard.card-v2 .prog-pct{font-size:20px;}
+  .pcard.card-v2 .prog-track{flex:none;}
+  .pcard.card-v2 .v2-under{display:flex; justify-content:space-between; gap:8px;}
+  .pcard.card-v2 .v2-under-end{text-align:right;}
+  .pcard.card-v2 .v2-under-label{font-size:11px; color:var(--ink-dim);}
+  .pcard.card-v2 .v2-under-val{font-family:var(--mono); font-size:13px; font-weight:600; color:var(--ink);}
   .prog-file{font-family:var(--mono);font-size:10px;color:rgba(255,255,255,0.90);letter-spacing:0.05em;margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   [data-theme="light"] .prog-file,[data-theme="light"] .prog-file-name,[data-theme="light"] .prog-time-label{color:var(--ink-dim);}
   /* Thumbnail spans both rows (filename above, progress bar below) via

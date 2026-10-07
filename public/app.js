@@ -1151,6 +1151,24 @@ function applyFilesOpen(){
 // CSS mode like the other four — see openQueueDashboard()/closeQueueDashboard()
 // for how entering/leaving it is kept in sync with this same VIEW_MODE.
 let VIEW_MODE = 'regular'; // 'regular' | 'compact' | 'camera' | 'list' | 'printfarm'
+// The Full view's printing-card layout (Settings > View > Printer card
+// layout): "classic", or "v2" — the new layout, in preview, built beside the
+// classic one so it can be switched off without a revert. ?cards=v2 /
+// ?cards=classic overrides the setting for this page load only.
+let CARD_LAYOUT = 'classic';
+const CARD_LAYOUT_URL = (()=>{ try{ const v=new URLSearchParams(location.search).get("cards"); return v==="v2"||v==="classic" ? v : null; }catch{ return null; } })();
+// Whether a card is built with the v2 block: Full view only. Compact, Camera
+// and List always get the classic markup.
+function cardLayoutV2(){ return (CARD_LAYOUT_URL||CARD_LAYOUT)==="v2" && VIEW_MODE==='regular'; }
+// From the config (load and after Save). A change rebuilds every card in
+// full — the layout is not part of cardSignature(), on purpose.
+function applyCardLayout(value){
+  const next = value==="v2" ? "v2" : "classic";
+  if($("setCardLayout")) $("setCardLayout").value=next;
+  if(next===CARD_LAYOUT) return;
+  CARD_LAYOUT=next;
+  if(!CARD_LAYOUT_URL && typeof FLEET!=="undefined" && FLEET.length) renderFleet();
+}
 // The last fleet view (anything but Print farm), so the brand cell can
 // return there from the Queue dashboard. Kept by applyViewMode().
 let LAST_FLEET_VIEW = 'regular';
@@ -5552,7 +5570,27 @@ function fmtDuration(s){
   if(m)return m+'m '+String(sec).padStart(2,'0')+'s';
   return sec+'s';
 }
-function fmtRemaining(elapsed,progress){if(!elapsed||!progress||progress<=0)return'—';const total=elapsed/progress;const rem=Math.max(0,total-elapsed);return fmtDuration(rem);}
+// Seconds left by linear extrapolation (elapsed ÷ progress), or null when it
+// can't be estimated. fmtRemaining() and the v2 card's "Est. done" share it.
+function remainingSeconds(elapsed,progress){ if(!elapsed||!progress||progress<=0) return null; return Math.max(0, elapsed/progress-elapsed); }
+function fmtRemaining(elapsed,progress){ const rem=remainingSeconds(elapsed,progress); return rem==null ? '—' : fmtDuration(rem); }
+// "Est. done" on the v2 card: now + remaining, as the local time ("14:20"),
+// with the short weekday when it falls on another day ("Tue 09:15"). "—"
+// while paused (no finish time until it resumes) or when unknown. Pure.
+function etaText(remainingSec, nowMs, state){
+  if(state==="paused" || remainingSec==null || !Number.isFinite(remainingSec)) return '—';
+  const d=new Date(nowMs+remainingSec*1000), n=new Date(nowMs);
+  const time=d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  const sameDay=d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth() && d.getDate()===n.getDate();
+  return sameDay ? time : d.toLocaleDateString([], {weekday:"short"})+" "+time;
+}
+// The right-hand value under the v2 card's bar: the finish time once the
+// print is complete, otherwise "Est. done". Shared by the build and the
+// live updater.
+function cardV2EndText(p, nowMs){
+  return p.state==="complete" ? fmtFinishedTime(p.completedAt) : etaText(remainingSeconds(p.elapsed,p.progress), nowMs, p.state);
+}
+function cardV2FilamentText(p){ return p.filamentUsed!=null ? (p.filamentUsed/1000).toFixed(1)+' m' : '—'; }
 
 // Klipper's current_layer only advances when a NEW layer's gcode starts, so
 // the final layer of a print never triggers a "next layer" bump — it stays
@@ -5963,6 +6001,10 @@ function updateFleetCardLiveValues(card, p){
   setText('[data-live="layer-current"]', layer ? String(layer.current) : '—');
   setText('[data-live="layer-target"]', layer ? '/'+layer.total : '');
   setText('[data-live="center-val"]', VIEW_MODE==='camera' ? cardLayerText(p) : cardFilamentText(p));
+  // The v2 card's filament cell and "Est. done" (moves with the clock as
+  // well as the data, so patched on each poll; absent on classic cards).
+  setText('[data-live="filament-val"]', cardV2FilamentText(p));
+  setText('[data-live="eta"]', cardV2EndText(p, Date.now()));
   // The offline card's "Last seen 14:02 · 2h 03m ago": the "ago" moves on
   // every poll by itself, so it is patched here rather than rebuilding the
   // card. lastSeenAt itself is in the signature.
@@ -6108,6 +6150,45 @@ function printerNoteHtml(p){
   return notes.length?`<div class="card-note">${notes.join("")}</div>`:"";
 }
 
+// The v2 printing card's stats and progress (Full view, switch on; see
+// cardLayoutV2()). Replaces the classic .stats-bar and .progress-section for
+// a card without an error; an error keeps the classic path. Every data-live
+// hook the classic block has is kept (plus filament-val and eta), so
+// updateFleetCardLiveValues() patches it the same way.
+function buildCardStatsV2(p){
+  const extA=p.hotend?Math.round(p.hotend.temp):0, extT=p.hotend?Math.round(p.hotend.target):0;
+  const bedA=p.bed?Math.round(p.bed.temp):0, bedT=p.bed?Math.round(p.bed.target):0;
+  const hotendBar=heatBarInfo(extA,extT), bedBar=heatBarInfo(bedA,bedT);
+  const layer=layerDisplay(p);
+  const stem=cardFileStem(p);
+  const done=p.state==='complete';
+  const pct=(p.progress*100).toFixed(1);
+  const pctCls=p.state==='paused'?'amber':done?'green':'cyan';
+  const trackCls=p.state==='paused'?'amber':'';
+  const cell=(label, val, extra='', attrs='', cls='')=>`<div class="v2-stat${cls}"${attrs}><div class="v2-stat-label">${esc(label)}</div><div class="v2-stat-val">${val}</div>${extra}</div>`;
+  const heat=(key, bar)=>`<div class="stats-mini-bar"><div class="stats-mini-fill" data-live="${key}-bar" style="${heatBarFillStyle(bar)}"></div></div>`;
+  const stats=`<div class="v2-stats">`+
+    cell(t("fleet.card.hotend_label"), `<span data-live="hotend-val">${extA}°</span><span class="v2-sub">/<span data-live="hotend-target">${hotendBar.targetTxt}</span></span>`, heat("hotend", hotendBar))+
+    cell(t("fleet.card.bed_label"), `<span data-live="bed-val">${bedA}°</span><span class="v2-sub">/<span data-live="bed-target">${bedBar.targetTxt}</span></span>`, heat("bed", bedBar),
+      ` data-setbed="${p.id}" style="cursor:pointer" title="${esc(t("fleet.card.bed_temp_title"))}"`, canAct()?'':' inert-action')+
+    cell(t("fleet.progress.layer_label"), `<span data-live="layer-current">${layer?layer.current:'—'}</span><span class="v2-sub" data-live="layer-target">${layer?'/'+layer.total:''}</span>`)+
+    cell(t("fleet.progress.filament_label"), `<span data-live="filament-val">${cardV2FilamentText(p)}</span>`)+
+    `</div>`;
+  const thumb=stem
+    ? `<div class="v2-thumb" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"v2-thumb-img")}</div>`
+    : `<div class="v2-thumb"></div>`;
+  const headline=`<div class="v2-headline">`+
+    (done ? `<span class="v2-left">${esc(t("fleet.progress.done"))}</span>`
+          : `<span class="v2-left"><span data-live="remaining">${fmtRemaining(p.elapsed,p.progress)}</span><span class="v2-left-unit"> ${esc(t("fleet.progress.left_suffix"))}</span></span>`)+
+    `<span class="prog-pct ${pctCls}" data-live="pct">${pct}%</span></div>`;
+  const bar=`<div class="prog-track ${trackCls}"><div class="prog-fill ${pctCls}" data-live="bar" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div></div>`;
+  const under=`<div class="v2-under">`+
+    `<div><div class="v2-under-label">${esc(done?t("fleet.progress.total_time_label"):t("fleet.progress.elapsed_label"))}</div><div class="v2-under-val" data-live="elapsed">${fmtDuration(p.elapsed)}</div></div>`+
+    `<div class="v2-under-end"><div class="v2-under-label">${esc(done?t("fleet.progress.finished_label"):t("fleet.progress.eta_label"))}</div><div class="v2-under-val" data-live="eta">${esc(cardV2EndText(p, Date.now()))}</div></div>`+
+    `</div>`;
+  return stats+`<div class="v2-main">${thumb}<div class="v2-prog"><div class="v2-file" title="${esc(stem||'')}">${esc(stem||'—')}</div>${headline}${bar}${under}</div></div>`;
+}
+
 // Builds one printer's card element. `need` (neededColors()) and
 // `dragEnabled` are per-render-pass context, not per-card state — see
 // reconcileFleetCards(), which computes them once and passes them down.
@@ -6117,6 +6198,10 @@ function buildCardHtml(p, need, dragEnabled){
     // view keeps its own offline placeholder.
     const mode=VIEW_MODE==='camera' ? null : cardMode(p);
     card.className="pcard"+(mode==="offline"?" offline":mode==="firmware"?" fw-busy":"");
+    // The v2 block (new layout, in preview) replaces the stats bar and the
+    // progress section of a card without an error; the error path stays classic.
+    const v2=cardLayoutV2() && !mode && p.online && !(p.errorCode||p.message);
+    if(v2) card.classList.add("card-v2");
     // The printer's own web interface (Fluidd/Mainsail), from the connector's
     // webUi capability. Also the one pill on offline and updating/rebooting
     // cards: it's a plain link that may answer when SnapCon's probe doesn't,
@@ -6210,7 +6295,7 @@ function buildCardHtml(p, need, dragEnabled){
           (e.url?`<br><a class="klipper-err-link" href="${esc(e.url)}" target="_blank" rel="noopener">${esc(t("fleet.error_panel.learn_more"))}</a>`:'')+
           `</div></div>`;
       })():''}
-      ${p.online&&!(p.errorCode||p.message)?(()=>{
+      ${p.online&&!(p.errorCode||p.message)?(v2?buildCardStatsV2(p):(()=>{
         const extA=p.hotend?Math.round(p.hotend.temp):0, extT=p.hotend?Math.round(p.hotend.target):0;
         const bedA=p.bed?Math.round(p.bed.temp):0, bedT=p.bed?Math.round(p.bed.target):0;
         const layer=layerDisplay(p);
@@ -6235,8 +6320,8 @@ function buildCardHtml(p, need, dragEnabled){
           `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.progress.layer_label"))}</div><div class="stats-cell-val"><span data-live="layer-current">${layer?layer.current:'—'}</span><span class="stats-inline-target" data-live="layer-target">${layer?'/'+layer.total:''}</span></div></div>`+
           thumbCell+
           `</div>`;
-      })():""}
-      ${p.online?(()=>{
+      })()):""}
+      ${p.online&&!v2?(()=>{
         const pct=(p.progress*100).toFixed(1);
         const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
         const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
@@ -11468,6 +11553,7 @@ async function loadConfigUI(){
     FILAMENT_COST=c.filamentCost||0; ELECTRICITY_RATE=c.electricityRate||0;
     $("setTNotation").checked=!!c.tNotation; USE_T_NOTATION=!!c.tNotation;
     $("setDefaultView").value=["regular","compact","camera","list","printfarm"].includes(c.defaultView)?c.defaultView:"regular";
+    applyCardLayout(c.cardLayout);
     const siteName=(c.siteName||"").trim();
     $("setSiteName").value=siteName;
     if($("topbarSiteName")){ $("topbarSiteName").textContent=siteName; $("topbarSiteName").style.display=siteName?"":"none"; }
@@ -12971,7 +13057,7 @@ async function saveConfig(){
   const logsRetentionDays=parseInt($("setLogsRetentionDays").value,10);
   const cameraRetentionDays=parseInt($("setCameraRetentionDays").value,10);
   const gcodeSyncRetentionDays=parseInt($("setGcodeSyncRetentionDays").value,10);
-  const body={ gcodeFolder:$("setFolder").value.trim(), firmwareFolder:$("setFirmwareFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:useTNotation||undefined, defaultView:$("setDefaultView").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING, skipIdenticalUploads:$("setSkipIdenticalUploads").checked, checkForUpdates:$("setCheckForUpdates").checked, overwriteDifferentFiles:$("setOverwriteDifferent").checked, allowUploadWhilePrinting:$("setAllowUploadWhilePrinting").checked, uploadIntoQueue:$("setUploadIntoQueue").checked, locale:$("setLocale")?$("setLocale").value:undefined,
+  const body={ gcodeFolder:$("setFolder").value.trim(), firmwareFolder:$("setFirmwareFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:useTNotation||undefined, defaultView:$("setDefaultView").value, cardLayout:$("setCardLayout").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING, skipIdenticalUploads:$("setSkipIdenticalUploads").checked, checkForUpdates:$("setCheckForUpdates").checked, overwriteDifferentFiles:$("setOverwriteDifferent").checked, allowUploadWhilePrinting:$("setAllowUploadWhilePrinting").checked, uploadIntoQueue:$("setUploadIntoQueue").checked, locale:$("setLocale")?$("setLocale").value:undefined,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     otp:{
@@ -13037,6 +13123,7 @@ async function saveConfig(){
     });
     setSaveStatus("ok",t("settings.dirty_bar.saved"));
     $("setupmsg").textContent="";
+    applyCardLayout(c.cardLayout);
     if($("topbarSiteName")){ const sn=(c.siteName||"").trim(); $("topbarSiteName").textContent=sn; $("topbarSiteName").style.display=sn?"":"none"; }
     FILAMENT_COST=fc>0?fc:0; ELECTRICITY_RATE=er>0?er:0;
     updateCurrencyLabels();

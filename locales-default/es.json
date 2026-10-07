@@ -3,9 +3,9 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 82,
+    "version": 83,
     "snapconVersion": "0.8.0",
-    "updated": "2026-10-06"
+    "updated": "2026-10-07"
   },
   "printer_status": {
     "offline": "Sin conexión",
@@ -124,7 +124,10 @@
       "filament_label": "Filamento",
       "layer_label": "Capa",
       "finished_label": "Finalizado",
-      "remaining_label": "Restante"
+      "remaining_label": "Restante",
+      "left_suffix": "restantes",
+      "eta_label": "Fin estimado",
+      "done": "Terminado"
     },
     "camera": {
       "disabled_label": "Cámara desactivada",
@@ -1008,7 +1011,11 @@
       "camera_stagger_desc": "distribuye las peticiones de instantáneas a lo largo del intervalo en lugar de lanzarlas todas a la vez — recomendado para flotas grandes",
       "system_default_locale_section_title": "Idioma",
       "system_default_locale_label": "Idioma predeterminado",
-      "system_default_locale_hint": "se usa para quien no haya elegido su propio idioma de interfaz"
+      "system_default_locale_hint": "se usa para quien no haya elegido su propio idioma de interfaz",
+      "card_layout_label": "Diseño de la tarjeta de impresora",
+      "card_layout_hint": "Solo en la vista completa",
+      "card_layout_classic": "Clásico",
+      "card_layout_v2": "Nuevo (vista previa)"
     },
     "notif": {
       "resend_key_placeholder_saved": "•••••••• (guardada — deja en blanco para conservarla)",

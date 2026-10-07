@@ -3,9 +3,9 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 82,
+    "version": 83,
     "snapconVersion": "0.8.0",
-    "updated": "2026-10-06"
+    "updated": "2026-10-07"
   },
   "printer_status": {
     "offline": "Offline",
@@ -124,7 +124,10 @@
       "filament_label": "Filament",
       "layer_label": "Layer",
       "finished_label": "Finished",
-      "remaining_label": "Remaining"
+      "remaining_label": "Remaining",
+      "left_suffix": "left",
+      "eta_label": "Est. done",
+      "done": "Done"
     },
     "camera": {
       "disabled_label": "Camera Disabled",
@@ -1008,7 +1011,11 @@
       "camera_stagger_desc": "spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets",
       "system_default_locale_section_title": "Language",
       "system_default_locale_label": "Default language",
-      "system_default_locale_hint": "used for anyone who hasn't picked their own interface language"
+      "system_default_locale_hint": "used for anyone who hasn't picked their own interface language",
+      "card_layout_label": "Printer card layout",
+      "card_layout_hint": "Full view only",
+      "card_layout_classic": "Classic",
+      "card_layout_v2": "New (preview)"
     },
     "notif": {
       "resend_key_placeholder_saved": "•••••••• (saved — leave blank to keep)",
