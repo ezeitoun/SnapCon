@@ -118,6 +118,9 @@ function canAct(){ return !USERS_ENABLED || (CURRENT_USER && (CURRENT_USER.role=
 let GROUPS = [];
 const GROUP_EVERYONE_ID = "grp_everyone";
 async function loadGroupsUI(){
+  // /api/groups is admin-only, and only Settings (admin) uses the list; for
+  // anyone else asking just produced a 403 on every page load.
+  if(!isAdmin()){ GROUPS = []; return; }
   try{ GROUPS = await getJSON("/api/groups"); }
   catch{ GROUPS = []; }
   // Every already-rendered Printers-tab row baked its Access checklist into
@@ -5821,23 +5824,51 @@ function thumbToken(p, stem){
   return token;
 }
 
+// Thumbnail URLs the server answered 404 for: the printer has no preview for
+// that file (or no such file). Final for that job — the URL carries the job's
+// token, so a new job asks again — and remembered, so a card rebuilt later
+// shows the placeholder instead of fetching (and retrying) the same 404.
+const THUMB_MISSING = new Set();
+function thumbImgHtml(p, stem, cls){
+  const url=`/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}`;
+  if(THUMB_MISSING.has(url)) return `<span class="stats-thumb-empty">—</span>`;
+  return `<img class="${cls}" src="${url}" data-thumb-url="${esc(url)}" alt="" onerror="thumbRetry(this)">`;
+}
+
 // A failed thumbnail load only gets a fresh <img> (and thus a fresh fetch)
-// when the NEXT /api/fleet poll's body actually differs from the last one
-// (renderFleet's cheap re-render guard) — for an idle/complete/cancelled
-// printer that's often never, since nothing else on the card is changing
-// either. Without this, one transient blip (a slow/busy printer, a dropped
-// connection) leaves the card permanently showing the "—" placeholder until
-// something unrelated changes or the page is reloaded. Retry a few times
-// with backoff before actually giving up.
+// when the card is rebuilt — for an idle/complete/cancelled printer that's
+// often never. Without this, one transient blip (a slow/busy printer, a
+// dropped connection) leaves the card permanently showing the "—"
+// placeholder until something unrelated changes or the page is reloaded.
+// So: an <img> can't see the status, so the first failure asks once. A 404
+// is final (see THUMB_MISSING); anything else retries a few times with
+// backoff before giving up.
 function thumbRetry(img){
   const n=parseInt(img.dataset.retry||"0",10);
-  if(n<4){
-    img.dataset.retry=n+1;
-    const base=img.src.split("&r=")[0];
-    setTimeout(()=>{ if(img.isConnected) img.src=base+"&r="+Date.now(); }, 1500*(n+1));
-  } else if(img.parentNode){
-    img.parentNode.innerHTML='<span class="stats-thumb-empty">—</span>';
+  const url=img.dataset.thumbUrl;
+  if(n===0 && url){
+    img.dataset.retry=1;
+    fetch(url).then(r=>{
+      if(r.status===404){ THUMB_MISSING.add(url); thumbGiveUp(img); }
+      else thumbRetryLater(img, 1);
+    }).catch(()=>thumbRetryLater(img, 1));
+    return;
   }
+  if(n<4) thumbRetryLater(img, n+1);
+  else thumbGiveUp(img);
+}
+function thumbRetryLater(img, n){
+  img.dataset.retry=n;
+  const base=img.src.split("&r=")[0];
+  setTimeout(()=>{ if(img.isConnected) img.src=base+"&r="+Date.now(); }, 1500*n);
+}
+// Only the image is replaced: in the list view its cell also holds the file
+// name, which replacing the whole cell used to wipe out.
+function thumbGiveUp(img){
+  if(!img.isConnected) return;
+  const span=document.createElement("span");
+  span.className="stats-thumb-empty"; span.textContent="—";
+  img.replaceWith(span);
 }
 
 // /orca/<printer> mode: narrow any printer list down to just that one printer.
@@ -6180,7 +6211,7 @@ function buildCardHtml(p, need, dragEnabled){
         // already points at the newly queued one.
         const stem=cardFileStem(p);
         const thumbCell=stem
-          ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"><img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"></div>`
+          ? `<div class="stats-cell stats-thumb-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"stats-thumb")}</div>`
           : `<div class="stats-cell stats-thumb-cell"><span class="stats-thumb-empty">—</span></div>`;
         return `<div class="stats-bar">`+
           `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.card.hotend_label"))}</div><div class="stats-cell-val"><span data-live="hotend-val">${extA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="hotend-target">${hotendBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="hotend-bar" style="${heatBarFillStyle(hotendBar)}"></div></div></div>`+
@@ -6225,7 +6256,7 @@ function buildCardHtml(p, need, dragEnabled){
           ? progRowHtml
           : camView
             ? `<div class="cam-prog-file">`+
-                `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"`:''}>${stem?`<img class="stats-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)">`:''}</div>`+
+                `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"`:''}>${stem?`${thumbImgHtml(p,stem,"stats-thumb")}`:''}</div>`+
                 `<span class="prog-file-name">${esc(stem||'—')}</span>`+
                 progRowHtml+
               `</div>`
@@ -6599,7 +6630,7 @@ function renderFleetListRows(camFleet, wrap, camRefreshMs){
     // already says "Loaded" for a different one.
     const stem=cardFileStem(p);
     const fileCell=stem
-      ? `<div class="list-file-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"><img class="list-thumb" src="/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}" alt="" onerror="thumbRetry(this)"><span class="list-file-name">${esc(stem)}</span></div>`
+      ? `<div class="list-file-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"list-thumb")}<span class="list-file-name">${esc(stem)}</span></div>`
       : `<span class="list-file-empty">—</span>`;
     const pct=p.online&&p.progress!=null?p.progress*100:null;
     const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
@@ -11217,7 +11248,8 @@ function scheduleFirmwareFolderCheck(){
   const el=$("firmwareFolderCheckStatus");
   if(!el) return;
   const p=$("setFirmwareFolder").value.trim();
-  if(!p){ el.className="settings-help"; el.textContent=""; return; }
+  // /api/check-folder is admin-only, like the Settings field it reports on.
+  if(!p || !isAdmin()){ el.className="settings-help"; el.textContent=""; return; }
   el.className="settings-help"; el.textContent=t("settings.general.folder_checking");
   FIRMWARE_FOLDER_CHECK_TIMER=setTimeout(async()=>{
     try{
@@ -11233,7 +11265,8 @@ function scheduleFolderCheck(){
   clearTimeout(FOLDER_CHECK_TIMER);
   const el=$("folderCheckStatus");
   const p=$("setFolder").value.trim();
-  if(!p){ el.className="settings-help"; el.textContent=""; return; }
+  // /api/check-folder is admin-only, like the Settings field it reports on.
+  if(!p || !isAdmin()){ el.className="settings-help"; el.textContent=""; return; }
   el.className="settings-help"; el.textContent=t("settings.general.folder_checking");
   FOLDER_CHECK_TIMER=setTimeout(async()=>{
     try{
