@@ -5563,6 +5563,10 @@ function layerDisplay(p){
   if(!p.layer) return null;
   return p.state==='complete' ? { current:p.layer.total, total:p.layer.total } : p.layer;
 }
+// The card's layer and filament readouts, shared by buildCardHtml() and the
+// live updater so the two can't render them differently.
+function cardLayerText(p){ const l=layerDisplay(p); return l ? l.current+'/'+l.total : '—'; }
+function cardFilamentText(p){ return p.filamentUsed!=null ? (p.filamentUsed/1000).toFixed(1)+'m' : '—'; }
 function fmtFinishedTime(ts){ return ts?new Date(ts).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):'—'; }
 
 // Hotend/bed mini-bar: fill represents progress from a fixed ambient
@@ -5952,6 +5956,13 @@ function updateFleetCardLiveValues(card, p){
   setText('[data-live="bed-val"]', bedA+"°");
   setText('[data-live="bed-target"]', bedBar.targetTxt);
   setBar('[data-live="bed-bar"]', bedBar);
+  // Layer and filament move every few seconds while printing; patched here
+  // so they don't rebuild the card (the centre cell shows the layer in
+  // Camera view, filament used elsewhere — same rule as buildCardHtml()).
+  const layer=layerDisplay(p);
+  setText('[data-live="layer-current"]', layer ? String(layer.current) : '—');
+  setText('[data-live="layer-target"]', layer ? '/'+layer.total : '');
+  setText('[data-live="center-val"]', VIEW_MODE==='camera' ? cardLayerText(p) : cardFilamentText(p));
   // The offline card's "Last seen 14:02 · 2h 03m ago": the "ago" moves on
   // every poll by itself, so it is patched here rather than rebuilding the
   // card. lastSeenAt itself is in the signature.
@@ -6009,8 +6020,9 @@ function cardSignature(p){
     // ||null, not the bare value: JSON.stringify drops undefined keys, so a
     // bare p.transport would make the signature's SHAPE depend on the brand.
     online:p.online, state:p.state, name:p.name, brand:p.brand, transport:p.transport||null, url:p.url,
-    // progress/elapsed/bed/hotend are deliberately ABSENT — they are the
-    // four values that move on their own while a printer runs, and while
+    // progress/elapsed/bed/hotend, filamentUsed and layer are deliberately
+    // ABSENT — they are the values that move on their own while a printer
+    // runs, and while
     // they were in here every actively printing card was destroyed and
     // rebuilt on every poll: a WebRTC camera renegotiated its session,
     // a .pstatus message being written by an in-flight action was wiped,
@@ -6027,11 +6039,15 @@ function cardSignature(p){
     // card on every poll (focus lost, WebRTC sessions renegotiated, thumbnails
     // re-fetched).
     lastSeenAt:cardMode(p)==="offline" ? (p.lastSeenAt||null) : null,
-    filamentUsed:p.filamentUsed, completedAt:p.completedAt,
-    errorCode:p.errorCode, message:p.message, plate:p.plate,
+    completedAt:p.completedAt,
+    errorCode:p.errorCode, message:p.message,
+    // Only what the card shows: whether there is a Plate button (total > 1)
+    // and its "done/total" tooltip. p.plate.current, the object being
+    // printed, changes as the nozzle moves between objects and is not shown.
+    plate:p.plate ? { total:p.plate.total, excluded:p.plate.excluded } : null,
     activeExt:p.activeExt, forceDefaults:p.forceDefaults,
     heads:p.heads, capabilities:p.capabilities, tags:p.tags,
-    queuedFile:p.queuedFile, layer:p.layer, stem,
+    queuedFile:p.queuedFile, stem,
     // Temperatures used to live here for a real reason: a printer sitting
     // idle/"Loaded" with nothing else in this signature changing can still
     // have its bed/hotend genuinely drifting, and with them omitted and
@@ -6216,7 +6232,7 @@ function buildCardHtml(p, need, dragEnabled){
         return `<div class="stats-bar">`+
           `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.card.hotend_label"))}</div><div class="stats-cell-val"><span data-live="hotend-val">${extA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="hotend-target">${hotendBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="hotend-bar" style="${heatBarFillStyle(hotendBar)}"></div></div></div>`+
           `<div class="stats-cell${canAct()?'':' inert-action'}" data-setbed="${p.id}" style="cursor:pointer" title="${esc(t("fleet.card.bed_temp_title"))}"><div class="stats-cell-label">${esc(t("fleet.card.bed_label"))}</div><div class="stats-cell-val"><span data-live="bed-val">${bedA}°</span><span class="stats-sep">/</span><span class="stats-inline-target" data-live="bed-target">${bedBar.targetTxt}</span></div><div class="stats-mini-bar"><div class="stats-mini-fill" data-live="bed-bar" style="${heatBarFillStyle(bedBar)}"></div></div></div>`+
-          `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.progress.layer_label"))}</div><div class="stats-cell-val">${layer?layer.current:'—'}<span class="stats-inline-target">${layer?'/'+layer.total:''}</span></div></div>`+
+          `<div class="stats-cell"><div class="stats-cell-label">${esc(t("fleet.progress.layer_label"))}</div><div class="stats-cell-val"><span data-live="layer-current">${layer?layer.current:'—'}</span><span class="stats-inline-target" data-live="layer-target">${layer?'/'+layer.total:''}</span></div></div>`+
           thumbCell+
           `</div>`;
       })():""}
@@ -6231,9 +6247,8 @@ function buildCardHtml(p, need, dragEnabled){
         // when the whole point of this view is watching the print happen —
         // layer progress is the one stat from that row worth keeping, and
         // the thumbnail moves up alongside the filename instead.
-        const filM=p.filamentUsed!=null?(p.filamentUsed/1000).toFixed(1)+'m':'—';
-        const layer=layerDisplay(p);
-        const layerTxt=layer?layer.current+'/'+layer.total:'—';
+        const filM=cardFilamentText(p);
+        const layerTxt=cardLayerText(p);
         // A file loaded/queued but not yet started (see statusColorText's
         // "Loaded" state) takes over this slot instead of the printer's own
         // last-printed filename — it's the more relevant "what's up next",
@@ -6266,7 +6281,7 @@ function buildCardHtml(p, need, dragEnabled){
           (p.errorCode||p.message?'':`<div class="prog-times">`+
           `<div class="prog-time-cell"><span class="prog-time-label">${esc(p.state==='complete'?t("fleet.progress.total_time_label"):t("fleet.progress.elapsed_label"))}</span><span class="prog-time-val" data-live="elapsed">${fmtDuration(p.elapsed)}</span></div>`+
           `<div class="prog-time-sep"></div>`+
-          `<div class="prog-time-cell center"><span class="prog-time-label">${esc(camView?t("fleet.progress.layer_label"):t("fleet.progress.filament_label"))}</span><span class="prog-time-val">${camView?layerTxt:filM}</span></div>`+
+          `<div class="prog-time-cell center"><span class="prog-time-label">${esc(camView?t("fleet.progress.layer_label"):t("fleet.progress.filament_label"))}</span><span class="prog-time-val" data-live="center-val">${camView?layerTxt:filM}</span></div>`+
           `<div class="prog-time-sep"></div>`+
           (p.state==='complete'
             ? `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.finished_label"))}</span><span class="prog-time-val">${fmtFinishedTime(p.completedAt)}</span></div>`

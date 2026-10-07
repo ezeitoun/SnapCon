@@ -182,15 +182,30 @@ test("the remaining structural fields all still invalidate the signature", () =>
   const base = sigOf(BASE());
   for (const [field, value] of [
     ["name", "U1 Blue"], ["brand", "Creality"], ["url", "http://192.168.4.9"],
-    ["filename", "other.gcode"], ["filamentUsed", 9999], ["completedAt", 1700000000000],
-    ["activeExt", 2], ["forceDefaults", false], ["tags", ["office"]],
-    ["layer", { current: 13, total: 300 }]
+    ["filename", "other.gcode"], ["completedAt", 1700000000000],
+    ["activeExt", 2], ["forceDefaults", false], ["tags", ["office"]]
   ]) {
     assert.notEqual(sigOf(withField(field, value)), base, field + " must still force a rebuild");
   }
 });
 
-test("exactly four fields are absent from the signature — nothing else silently joined them", () => {
+test("filament used and the layer, which move every few seconds while printing, don't rebuild the card", () => {
+  // Measured 2026-10-06: filamentUsed changed 84 times in 12 polls across the
+  // printing cards, so every printing card was rebuilt on every poll.
+  const base = sigOf(BASE());
+  assert.equal(sigOf(withField("filamentUsed", 9999)), base);
+  assert.equal(sigOf(withField("layer", { current: 13, total: 300 })), base);
+  assert.equal(sigOf(withField("layer", null)), base, "even appearing or going: the cell's text is patched");
+});
+
+test("the object being printed (plate.current) doesn't rebuild the card; excluding one does", () => {
+  const plate = (current, excluded) => sigOf(withField("plate", { total: 4, excluded, current }));
+  assert.equal(plate("BRACKET_ID_1", 0), plate("BRACKET_ID_2", 0), "the nozzle moving between objects");
+  assert.notEqual(plate("BRACKET_ID_1", 0), plate("BRACKET_ID_1", 1), "an exclusion changes the Plate button's tooltip");
+  assert.notEqual(sigOf(withField("plate", null)), sigOf(withField("plate", { total: 2, excluded: 0 })), "and the button's presence");
+});
+
+test("exactly six fields are absent from the signature — nothing else silently joined them", () => {
   // Guards the real hazard: someone removing one more field "because it was
   // easy" without giving it a data-live hook.
   const sig = JSON.parse(cardSignature(BASE()));
@@ -199,11 +214,11 @@ test("exactly four fields are absent from the signature — nothing else silentl
     // cardStatus, statusOverride, uploadCancel and sendFill are the client-only stores:
     // all are rendered into the card, so all must force the rebuild that shows them.
     "activeExt", "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
-    "filamentUsed", "filename", "forceDefaults", "heads", "lastSeenAt", "layer", "message", "name",
+    "filename", "forceDefaults", "heads", "lastSeenAt", "message", "name",
     "online", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
     "transport", "uploadCancel", "url"
   ]);
-  for (const gone of ["progress", "elapsed", "bed", "hotend"]) {
+  for (const gone of ["progress", "elapsed", "bed", "hotend", "filamentUsed", "layer"]) {
     assert.equal(gone in sig, false, gone + " must stay out of the signature");
   }
 });
@@ -227,7 +242,8 @@ test("updateFleetCardLiveValues is called exactly where a card is REUSED, never 
 test("every field removed from the signature has a data-live hook in buildCardHtml", () => {
   const i = appSrc.indexOf("function buildCardHtml(");
   const build = appSrc.slice(i, appSrc.indexOf("\n}", i));
-  for (const hook of ["pct", "bar", "elapsed", "remaining", "hotend-val", "hotend-target", "hotend-bar", "bed-val", "bed-target", "bed-bar"]) {
+  for (const hook of ["pct", "bar", "elapsed", "remaining", "hotend-val", "hotend-target", "hotend-bar", "bed-val", "bed-target", "bed-bar",
+    "layer-current", "layer-target", "center-val"]) {
     assert.ok(build.includes('data-live="' + hook + '"'), "missing hook: " + hook);
   }
 });
@@ -268,4 +284,11 @@ test("the live updater reads only the four live fields off the printer, plus las
   // "2h 03m ago" text, which moves with the clock, not with the data.
   assert.deepEqual(fields, ["bed", "elapsed", "hotend", "lastSeenAt", "progress"],
     "patching anything else means that field no longer needs to be structural — decide deliberately, not by accident");
+  // filamentUsed and layer are read through the same helpers buildCardHtml()
+  // renders them with, so the two paths can't format them differently.
+  assert.match(fn, /layerDisplay\(p\)/);
+  assert.match(fn, /VIEW_MODE==='camera' \? cardLayerText\(p\) : cardFilamentText\(p\)/);
+  const build = appSrc.slice(appSrc.indexOf("function buildCardHtml("), appSrc.indexOf("\n}", appSrc.indexOf("function buildCardHtml(")));
+  assert.match(build, /const filM=cardFilamentText\(p\);/);
+  assert.match(build, /const layerTxt=cardLayerText\(p\);/);
 });
