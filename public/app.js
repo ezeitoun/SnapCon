@@ -1145,7 +1145,7 @@ function applyFilesOpen(){
 }
 
 // ---- Regular / Compact / Camera / List / Print Farm views ----
-// Launch state comes from the "Default View to Launch" setting (loadConfigUI);
+// Launch state comes from the "Default view to launch" setting (loadConfigUI);
 // the top bar's View menu only switches the current session (chooseView()).
 // 'printfarm' is Queue Management's own full-page dashboard, not a body-class
 // CSS mode like the other four — see openQueueDashboard()/closeQueueDashboard()

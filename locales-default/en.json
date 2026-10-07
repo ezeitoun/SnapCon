@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 83,
+    "version": 84,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-07"
   },
@@ -995,7 +995,7 @@
       "edit_languages": "Edit languages",
       "t_notation_label": "Use T0/T1/T2/T3 notation",
       "t_notation_desc": "default: 1–4",
-      "default_view_label": "Default View to Launch",
+      "default_view_label": "Default view to launch",
       "default_view_hint": "which view the app opens to on load",
       "view_option_full": "Full View",
       "view_option_compact": "Compact View",
