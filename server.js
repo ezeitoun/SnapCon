@@ -1820,24 +1820,15 @@ app.post("/api/print", requireRegular, async (req, res) => {
   try { await assertNotActiveJobFile(p, path.basename(fp)); }
   catch (e) { return res.status(e.status || 409).json({ error: e.message }); }
 
-  // map is { logicalToolIndex: physicalHeadIndex }. Reject two tools → same head —
-  // but only when actually starting a print. A plain upload just stages the file
-  // on the printer; the mapping isn't acted on until print start, so a conflicting
-  // (or mismatched-material) mapping shouldn't block getting the file there.
-  // The conflict itself is real on every multi-color connector — a single-
-  // toolhead-with-material-changer printer (AD5X's IFS) still can't have two
-  // colors sharing one physical filament slot in the same print, same as two
-  // colors can't share one independent toolhead on the U1 — only the WORDING
-  // needs to differ, since "head" reads as "not possible on this printer at
-  // all" to someone whose printer only has one physical nozzle.
+  // map is { logicalToolIndex: physicalHeadIndex }. Several colors may share one
+  // head (or slot): printing two of a file's colors with the same filament is a
+  // normal choice, and every connector sends one assignment per color (the U1's
+  // SET_PRINT_EXTRUDER_MAP, the IFS port, the AMS tray, the CFS table), so it is
+  // expressible everywhere. This used to be refused when starting a print; the
+  // /api/printfile path never refused it.
   let tools = [];
   if (map && Object.keys(map).length) {
     tools = Object.keys(map).map(Number).sort((a, b) => a - b);
-    const heads = tools.map(t => map[t]);
-    if (start && new Set(heads).size !== heads.length) {
-      const unit = (getCapabilities(p.connector, p) || {}).singleToolhead ? "slot" : "head";
-      return res.status(400).json({ error: `Two colors are mapped to the same ${unit} — give each its own ${unit}.` });
-    }
   }
 
   const c = getConnector(p.connector);
