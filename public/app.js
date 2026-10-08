@@ -1152,10 +1152,10 @@ function applyFilesOpen(){
 // for how entering/leaving it is kept in sync with this same VIEW_MODE.
 let VIEW_MODE = 'regular'; // 'regular' | 'compact' | 'camera' | 'list' | 'printfarm'
 // The Full view's printing-card layout (Settings > View > Printer card
-// layout): "classic", or "v2" — the new layout, in preview, built beside the
-// classic one so it can be switched off without a revert. ?cards=v2 /
-// ?cards=classic overrides the setting for this page load only.
-let CARD_LAYOUT = 'classic';
+// layout): "v2", the new layout and the default, or "classic", kept beside it
+// as a fallback until it is removed. ?cards=v2 / ?cards=classic overrides the
+// setting for this page load only.
+let CARD_LAYOUT = 'v2';
 const CARD_LAYOUT_URL = (()=>{ try{ const v=new URLSearchParams(location.search).get("cards"); return v==="v2"||v==="classic" ? v : null; }catch{ return null; } })();
 // Whether a card is built with the v2 block: Full view only. Compact, Camera
 // and List always get the classic markup.
@@ -1163,7 +1163,7 @@ function cardLayoutV2(){ return (CARD_LAYOUT_URL||CARD_LAYOUT)==="v2" && VIEW_MO
 // From the config (load and after Save). A change rebuilds every card in
 // full — the layout is not part of cardSignature(), on purpose.
 function applyCardLayout(value){
-  const next = value==="v2" ? "v2" : "classic";
+  const next = value==="classic" ? "classic" : "v2";
   if($("setCardLayout")) $("setCardLayout").value=next;
   if(next===CARD_LAYOUT) return;
   CARD_LAYOUT=next;

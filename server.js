@@ -3814,9 +3814,10 @@ function publicCfg(role) {
     currency: CFG.currency || "$",
     tNotation: CFG.tNotation || false,
     defaultView: CFG.defaultView || "regular",
-    // The Full view's printing-card layout: "classic" (default) or "v2", the
-    // new layout in preview. Omitted from config.json while classic.
-    cardLayout: CFG.cardLayout === "v2" ? "v2" : "classic",
+    // The Full view's printing-card layout: "v2" (the new layout, default) or
+    // "classic". Only an explicit Classic is stored, so a config that never
+    // chose keeps following the default.
+    cardLayout: CFG.cardLayout === "classic" ? "classic" : "v2",
     siteName: CFG.siteName || "",
     allowMapping: CFG.allowMapping !== false,
     suggestMatching: CFG.suggestMatching !== false,
@@ -4276,8 +4277,10 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     locale: (typeof b.locale === "string" && locales.LOCALE_RE.test(b.locale)) ? b.locale : (CFG.locale || "en"),
     tNotation: b.tNotation ? true : undefined,
     defaultView: ["regular","compact","camera","list","printfarm"].includes(b.defaultView) ? b.defaultView : (CFG.defaultView || "regular"),
-    // Absent (an older page) keeps the current choice rather than resetting it.
-    cardLayout: b.cardLayout === undefined ? (CFG.cardLayout === "v2" ? "v2" : undefined) : (b.cardLayout === "v2" ? "v2" : undefined),
+    // Only an explicit Classic is written; New (the default) is left out, so
+    // "never chose" stays distinguishable from "chose Classic". Absent (an
+    // older page) keeps the current choice rather than resetting it.
+    cardLayout: b.cardLayout === undefined ? (CFG.cardLayout === "classic" ? "classic" : undefined) : (b.cardLayout === "classic" ? "classic" : undefined),
     // Empty means "don't show it" (see the topbar) — never persisted as a
     // stray leftover string once cleared.
     siteName: (typeof b.siteName === "string" && b.siteName.trim()) ? b.siteName.trim().slice(0, 60) : undefined,

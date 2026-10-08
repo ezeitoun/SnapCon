@@ -3,9 +3,9 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 84,
+    "version": 85,
     "snapconVersion": "0.8.0",
-    "updated": "2026-10-07"
+    "updated": "2026-10-08"
   },
   "printer_status": {
     "offline": "Offline",
@@ -1015,7 +1015,7 @@
       "card_layout_label": "Printer card layout",
       "card_layout_hint": "Full view only",
       "card_layout_classic": "Classic",
-      "card_layout_v2": "New (preview)"
+      "card_layout_v2": "New"
     },
     "notif": {
       "resend_key_placeholder_saved": "•••••••• (saved — leave blank to keep)",

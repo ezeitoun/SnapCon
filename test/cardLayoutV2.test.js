@@ -179,3 +179,40 @@ test("never more than 1.8x, never shrunk, and left alone when there's nothing to
   assert.equal(thumbWorld({ W: 300, H: 300, opaque: { x0: 0.02, y0: 0.02, x1: 0.98, y1: 0.98 } }).fit(), null, "already fills it");
   assert.equal(thumbWorld({ W: 0, H: 0 }).fit(), null, "not loaded yet");
 });
+
+// ---- New is the default; only an explicit Classic is stored ----
+
+function applyWorld() {
+  let renders = 0;
+  const select = { value: null };
+  const ctx = vm.createContext({ $: id => (id === "setCardLayout" ? select : null), renderFleet: () => { renders++; }, FLEET: [{}], VIEW_MODE: "regular" });
+  vm.runInContext(line("let CARD_LAYOUT = ") + "\nconst CARD_LAYOUT_URL = null;\n" + extractFn("cardLayoutV2") + "\n" + extractFn("applyCardLayout") +
+    "\nthis.state = () => CARD_LAYOUT;", ctx);
+  return { ctx, select, renders: () => renders, apply: v => vm.runInContext("applyCardLayout", ctx)(v), v2: () => vm.runInContext("cardLayoutV2", ctx)(), state: () => ctx.state() };
+}
+
+test("with no setting stored, Full view uses the new layout", () => {
+  const w = applyWorld();
+  assert.equal(w.state(), "v2", "before the config has loaded");
+  assert.equal(w.v2(), true);
+  w.apply(undefined);
+  assert.equal(w.state(), "v2"); assert.equal(w.select.value, "v2");
+  w.apply("anything else");
+  assert.equal(w.state(), "v2", "anything but Classic is New");
+});
+
+test("an explicit Classic is honoured, and switching rebuilds the cards", () => {
+  const w = applyWorld();
+  w.apply("classic");
+  assert.equal(w.state(), "classic"); assert.equal(w.select.value, "classic"); assert.equal(w.v2(), false);
+  assert.equal(w.renders(), 1);
+  w.apply("classic");
+  assert.equal(w.renders(), 1, "no rebuild when nothing changed");
+});
+
+test("the server stores only an explicit Classic, so 'never chose' follows the default", () => {
+  const serverSrc = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSrc, /cardLayout: CFG\.cardLayout === "classic" \? "classic" : "v2",/, "read: absent means New");
+  assert.match(serverSrc, /cardLayout: b\.cardLayout === undefined \? \(CFG\.cardLayout === "classic" \? "classic" : undefined\) : \(b\.cardLayout === "classic" \? "classic" : undefined\),/,
+    "write: New is left out; an older page that doesn't send it keeps the current choice");
+});
