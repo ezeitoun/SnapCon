@@ -1965,6 +1965,10 @@ app.post("/api/print", requireRegular, async (req, res) => {
     } catch (e) {
       console.log(`[print] ${p.name}: FAILED at phase "${job.phase}" — ${e.message}`);
       if (e && e.code === "UPLOAD_CANCELLED") job.cancelled = true;
+      // The code (ECONNRESET, ETIMEDOUT, UPLOAD_REJECTED, NAS_UNREACHABLE…)
+      // and the phase it failed in let the browser say what went wrong in
+      // plain words, and tell an upload failure from a start failure.
+      job.errorCode = (e && e.code) || null; job.failedPhase = job.phase;
       job.error = e.message; job.done = true; job.phase = "error";
     }
   })();
@@ -1995,7 +1999,8 @@ app.get("/api/print-status", requireAuth, (req, res) => {
   // skippedUpload travels so the client can say the transfer was skipped
   // rather than leaving a suspiciously instant "done" unexplained.
   const out = { phase: job.phase, sent: job.sent, total: job.total, done: job.done, error: job.error, result: job.result, skippedUpload: !!job.skippedUpload,
-    cancellable: !!job.cancelUpload, cancelled: !!job.cancelled };
+    cancellable: !!job.cancelUpload, cancelled: !!job.cancelled,
+    errorCode: job.errorCode || null, failedPhase: job.failedPhase || null };
   if (job.done) setTimeout(() => JOBS.delete(req.query.job), 5000);
   res.json(out);
 });

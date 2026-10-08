@@ -413,8 +413,10 @@ async function uploadFile(p, fp, name, job) {
     }, res => {
       let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
       res.on("end", () => {
-        if (res.statusCode >= 300) return reject(new Error("Upload " + res.statusCode + ": " + b.slice(0, 160)));
-        try { if (JSON.parse(b).code !== 0) return reject(new Error(JSON.parse(b).message || "Upload failed")); }
+        // UPLOAD_REJECTED: the printer answered and refused the file (see http-utils).
+        const rejected = msg => Object.assign(new Error(msg), { code: "UPLOAD_REJECTED" });
+        if (res.statusCode >= 300) return reject(rejected("Upload " + res.statusCode + ": " + b.slice(0, 160)));
+        try { if (JSON.parse(b).code !== 0) return reject(rejected(JSON.parse(b).message || "Upload failed")); }
         catch { /* non-JSON 2xx body — treat as success */ }
         resolve(b);
       });

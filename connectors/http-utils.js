@@ -107,7 +107,9 @@ async function uploadWithProgress(base, fp, name, job) {
       headers: { "Content-Type": "multipart/form-data; boundary=" + boundary, "Content-Length": job.total }
     }, res => {
       let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
-      res.on("end", () => (res.statusCode < 300 ? resolve(b) : reject(new Error("Upload " + res.statusCode + ": " + b.slice(0, 160)))));
+      // UPLOAD_REJECTED: the printer answered and refused the file (as
+      // opposed to a connection that failed), so the browser can say so.
+      res.on("end", () => (res.statusCode < 300 ? resolve(b) : reject(Object.assign(new Error("Upload " + res.statusCode + ": " + b.slice(0, 160)), { code: "UPLOAD_REJECTED" }))));
     });
     req.on("error", e => { job.cancelUpload = null; reject(e); });
     req.write(pre); job.sent += pre.length;
