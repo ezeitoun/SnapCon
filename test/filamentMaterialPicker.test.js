@@ -32,7 +32,7 @@ const sandbox = {
   t: (k, v) => (v && v.material ? `Keep ${v.material}` : k),
 };
 vm.createContext(sandbox);
-for (const fn of ["materialLabel", "currentMaterialIndex", "materialOptionsHtml", "pendingMaterial"]) {
+for (const fn of ["materialLabel", "currentMaterialIndex", "materialOptionsHtml", "pendingMaterial", "materialIsUnset", "defaultMaterialIndex"]) {
   vm.runInContext(extractFn(fn), sandbox);
 }
 const call = (name, ...args) => vm.runInContext(name, sandbox)(...args);
@@ -139,4 +139,33 @@ test("pendingMaterial: an out-of-range index never fabricates a material", () =>
   for (const idx of [99, -2, null, undefined, NaN]) {
     assert.equal(call("pendingMaterial", MATERIALS, idx, 0), null, `index ${idx} must send nothing`);
   }
+});
+
+// ---- A slot with no material set starts on Generic PLA ----
+
+const head = (material, extra = {}) => ({ loaded: true, vendor: null, material, sub: null, ...extra });
+const start = h => { const base = call("currentMaterialIndex", MATERIALS, h); return [base, call("defaultMaterialIndex", MATERIALS, h, base)]; };
+
+test("defaultMaterialIndex: the firmware's NONE, or no material at all, starts on Generic PLA", () => {
+  for (const m of ["NONE", "none", "", null, undefined]) assert.deepEqual(start(head(m)), [-1, 0], String(m));
+});
+
+test("defaultMaterialIndex: a recognised load keeps its own entry", () => {
+  assert.deepEqual(start(head("PETG", { vendor: "Generic", sub: "HF" })), [2, 2]);
+});
+
+test("defaultMaterialIndex: an unlisted real material is kept, not replaced (e.g. BVOH)", () => {
+  assert.deepEqual(start(head("BVOH")), [-1, -1]);
+});
+
+test("defaultMaterialIndex: no Generic PLA in the printer's table means no default", () => {
+  assert.equal(call("defaultMaterialIndex", MATERIALS.slice(1), head("NONE"), -1), -1);
+});
+
+test("the pre-selected Generic PLA is a real change, and 'keep' is still offered beside it", () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(call("pendingMaterial", MATERIALS, 0, -1))), MATERIALS[0], "Apply sends Generic PLA");
+  assert.equal(call("pendingMaterial", MATERIALS, -1, -1), null, "choosing keep sends nothing");
+  const html = call("materialOptionsHtml", MATERIALS, 0, null, { offerKeep: true });
+  assert.match(html, /^<option value="-1">fleet\.modal\.unload\.material_keep_unknown<\/option>/, "keep listed, not selected");
+  assert.match(html, /<option value="0" selected>PLA<\/option>/);
 });

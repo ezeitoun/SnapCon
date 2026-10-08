@@ -8293,7 +8293,7 @@ let SPOOL_MODAL_PRINTER=null, SPOOL_MODAL_EXT=null, SPOOL_MODAL_CURRENT=null, SP
 // (null when this connector has none); BASE is what is loaded right now and
 // IDX what the user has picked, both indexes into it, -1 meaning "not one of
 // them". Apply is enabled by a colour change OR by IDX moving off BASE.
-let SPOOL_MODAL_MATERIALS=null, SPOOL_MODAL_MATERIAL_IDX=-1, SPOOL_MODAL_MATERIAL_BASE=-1, SPOOL_MODAL_MATERIAL_TEXT=null;
+let SPOOL_MODAL_MATERIALS=null, SPOOL_MODAL_MATERIAL_IDX=-1, SPOOL_MODAL_MATERIAL_BASE=-1, SPOOL_MODAL_MATERIAL_TEXT=null, SPOOL_MODAL_MATERIAL_DEFAULT=-1;
 let UNLOAD_DIALOG_MODE="unload"; // "unload" | "color" — mutually exclusive views sharing one dialog
 
 function openUnload(printerId,ext){
@@ -8332,10 +8332,12 @@ function openUnload(printerId,ext){
   const canEditMaterial=!!(p.capabilities&&p.capabilities.setMaterial)&&!isRfid&&Array.isArray(p.filamentMaterials)&&p.filamentMaterials.length;
   SPOOL_MODAL_MATERIALS=canEditMaterial?p.filamentMaterials:null;
   SPOOL_MODAL_MATERIAL_BASE=currentMaterialIndex(SPOOL_MODAL_MATERIALS,h);
+  SPOOL_MODAL_MATERIAL_DEFAULT=defaultMaterialIndex(SPOOL_MODAL_MATERIALS,h,SPOOL_MODAL_MATERIAL_BASE);
   SPOOL_MODAL_MATERIAL_IDX=SPOOL_MODAL_MATERIAL_BASE;
   // Only needed when the load matches nothing in the table, to name it in the
   // keep-as-is option — a material the printer has no tuned profile for.
-  SPOOL_MODAL_MATERIAL_TEXT=SPOOL_MODAL_MATERIAL_BASE<0
+  // "NONE" is the firmware's no-material filler, not a material to name.
+  SPOOL_MODAL_MATERIAL_TEXT=SPOOL_MODAL_MATERIAL_BASE<0 && !materialIsUnset(h)
     ? [h.material,h.sub].filter(Boolean).join(" ")||null
     : null;
 
@@ -8466,15 +8468,33 @@ function currentMaterialIndex(materials,head){
   return materials.findIndex(m=>m.vendor===vendor&&m.type===type&&(m.subType||"")===sub);
 }
 
+// A loaded slot whose material isn't set: no type at all, or the firmware's
+// "NONE" filler (the connectors drop "NONE" from vendor and sub-type, but the
+// type comes through as the printer reports it).
+function materialIsUnset(head){
+  const m=String((head&&head.material)||"").trim();
+  return !m || m.toUpperCase()==="NONE";
+}
+// The material the picker starts on: what is loaded when the table has it;
+// Generic PLA when the slot has no material set; otherwise -1 ("keep" the
+// unlisted material it reports, e.g. BVOH). Pure.
+function defaultMaterialIndex(materials,head,baseIdx){
+  if(baseIdx>=0 || !Array.isArray(materials) || !materialIsUnset(head)) return baseIdx;
+  return materials.findIndex(m=>m.vendor==="Generic" && m.type==="PLA" && !m.subType);
+}
+
 // currentText: what the slot reports when it matches nothing in the table, so
 // the keep-as-is option can name it rather than reading as an empty choice.
-function materialOptionsHtml(materials,selectedIdx,currentText){
+// {offerKeep}: list that keep-as-is option even when something else is
+// pre-selected (a slot with no material, pre-set to Generic PLA), so it can
+// still be left as it is.
+function materialOptionsHtml(materials,selectedIdx,currentText,{offerKeep=selectedIdx<0}={}){
   let html="";
-  if(selectedIdx<0){
+  if(offerKeep){
     const label=currentText
       ?t("fleet.modal.unload.material_keep",{material:currentText})
       :t("fleet.modal.unload.material_keep_unknown");
-    html+=`<option value="-1" selected>${esc(label)}</option>`;
+    html+=`<option value="-1"${selectedIdx<0?" selected":""}>${esc(label)}</option>`;
   }
   let vendor=null;
   (materials||[]).forEach((m,i)=>{
@@ -8525,11 +8545,14 @@ function enterColorMode(){
   SPOOL_MODAL_PENDING={hex:SPOOL_MODAL_CURRENT.hex||"#FFFFFF",name:SPOOL_MODAL_CURRENT.name};
   SPOOL_MODAL_TAB="palette";
   SPOOL_MODAL_DIRTY=false;
-  // Same "starts fresh from the last-saved value" rule as the color above.
-  SPOOL_MODAL_MATERIAL_IDX=SPOOL_MODAL_MATERIAL_BASE;
+  // Same "starts fresh" rule as the color above — from what is loaded, or,
+  // when the slot has no material set, from Generic PLA (defaultMaterialIndex).
+  SPOOL_MODAL_MATERIAL_IDX=SPOOL_MODAL_MATERIAL_DEFAULT;
   $("unloadSaveColorBtn").disabled=true;
 
   renderUnloadMaterial();
+  // A pre-selected Generic PLA is a pending change: Apply is live for it.
+  updateUnloadApplyState();
   updateUnloadCompareSwatches();
   renderUnloadColorTabs();
   renderUnloadPaletteGrid();
@@ -8539,7 +8562,7 @@ function renderUnloadMaterial(){
   const row=$("unloadMaterialRow");
   if(!SPOOL_MODAL_MATERIALS){ row.style.display="none"; return; }
   row.style.display="";
-  $("unloadMaterialSelect").innerHTML=materialOptionsHtml(SPOOL_MODAL_MATERIALS,SPOOL_MODAL_MATERIAL_IDX,SPOOL_MODAL_MATERIAL_TEXT);
+  $("unloadMaterialSelect").innerHTML=materialOptionsHtml(SPOOL_MODAL_MATERIALS,SPOOL_MODAL_MATERIAL_IDX,SPOOL_MODAL_MATERIAL_TEXT,{offerKeep:SPOOL_MODAL_MATERIAL_BASE<0});
 }
 function materialSelectChanged(){
   SPOOL_MODAL_MATERIAL_IDX=parseInt($("unloadMaterialSelect").value,10);
