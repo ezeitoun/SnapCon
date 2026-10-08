@@ -136,3 +136,46 @@ test("all v2 styles are scoped under .pcard.card-v2", () => {
   assert.ok(v2Rules.length > 10);
   for (const r of v2Rules) assert.match(r.trim(), /^\.pcard\.card-v2 /, r.trim());
 });
+
+// ---- the v2 thumbnail fills its box with the part ----
+
+function thumbWorld({ W, H, box = 98, opaque }) {
+  // A fake canvas whose alpha is opaque only inside `opaque` (fractions of the image).
+  const canvas = () => { let w = 0, h = 0; return { set width(v) { w = v; }, get width() { return w; }, set height(v) { h = v; }, get height() { return h; },
+    getContext: () => ({ drawImage() {}, getImageData: (x, y, ww, hh) => { const d = new Uint8ClampedArray(ww * hh * 4);
+      for (let j = 0; j < hh; j++) for (let i = 0; i < ww; i++) { const fx = (i + 0.5) / ww, fy = (j + 0.5) / hh; if (opaque && fx >= opaque.x0 && fx <= opaque.x1 && fy >= opaque.y0 && fy <= opaque.y1) d[(j * ww + i) * 4 + 3] = 255; }
+      return { data: d }; } }) }; };
+  const ctx = vm.createContext({ Math, Number, Set, encodeURIComponent, THUMB_TOKENS: {}, Date,
+    esc: s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;"), document: { createElement: canvas } });
+  vm.runInContext("const THUMB_MISSING = new Set();\n" + ["thumbToken", "thumbImgHtml", "thumbFitToPart", "thumbPartBox"].map(extractFn).join("\n"), ctx);
+  const img = { naturalWidth: W, naturalHeight: H, clientWidth: box, style: {} };
+  return { ctx, img, fit: () => { vm.runInContext("thumbFitToPart", ctx)(img); return img.style.transform || null; } };
+}
+const scaleOf = tr => tr ? +/scale\(([\d.]+)\)/.exec(tr)[1] : 1;
+
+test("the classic thumbnail markup is unchanged; only the v2 card asks for the fit", () => {
+  const w = thumbWorld({ W: 300, H: 300 });
+  const html = vm.runInContext("thumbImgHtml", w.ctx)({ id: 4, state: "printing" }, "Benchy", "stats-thumb");
+  assert.match(html, /^<img class="stats-thumb" src="\/api\/thumbnail\?printer=4&file=Benchy&t=\d+" data-thumb-url="[^"]+" alt="" onerror="thumbRetry\(this\)">$/);
+  const v2 = vm.runInContext("thumbImgHtml", w.ctx)({ id: 4, state: "printing" }, "Benchy", "v2-thumb-img", { fitPart: true });
+  assert.match(v2, / alt="" onload="thumbFitToPart\(this\)" onerror="thumbRetry\(this\)">$/);
+  assert.match(appSrc, /thumbImgHtml\(p,stem,"v2-thumb-img",\{fitPart:true\}\)/);
+  assert.equal((appSrc.match(/fitPart:true/g) || []).length, 1, "only the v2 card");
+});
+
+test("a part in the middle of a transparent square is scaled up to fill the box, and centred", () => {
+  // Measured on the fleet: a 300x300 thumbnail whose part covers 54% x 61%.
+  const tr = thumbWorld({ W: 300, H: 300, opaque: { x0: 0.23, y0: 0.24, x1: 0.77, y1: 0.85 } }).fit();
+  const s = scaleOf(tr);
+  assert.ok(s > 1.4 && s < 1.6, "scale " + s);
+  assert.match(tr, /^translate\(-?[\d.]+px, -?[\d.]+px\) scale\([\d.]+\)$/);
+  assert.ok(+/translate\(-?[\d.]+px, (-?[\d.]+)px\)/.exec(tr)[1] < 0, "moved up: the part sits low in the image");
+});
+
+test("never more than 1.8x, never shrunk, and left alone when there's nothing to trim", () => {
+  assert.equal(scaleOf(thumbWorld({ W: 300, H: 300, opaque: { x0: 0.45, y0: 0.45, x1: 0.55, y1: 0.55 } }).fit()), 1.8, "a tiny part: capped");
+  assert.equal(thumbWorld({ W: 300, H: 300, opaque: { x0: 0, y0: 0, x1: 1, y1: 1 } }).fit(), null, "fully opaque");
+  assert.equal(thumbWorld({ W: 300, H: 300, opaque: null }).fit(), null, "empty");
+  assert.equal(thumbWorld({ W: 300, H: 300, opaque: { x0: 0.02, y0: 0.02, x1: 0.98, y1: 0.98 } }).fit(), null, "already fills it");
+  assert.equal(thumbWorld({ W: 0, H: 0 }).fit(), null, "not loaded yet");
+});

@@ -5871,10 +5871,47 @@ function thumbToken(p, stem){
 // token, so a new job asks again — and remembered, so a card rebuilt later
 // shows the placeholder instead of fetching (and retrying) the same 404.
 const THUMB_MISSING = new Set();
-function thumbImgHtml(p, stem, cls){
+// {fitPart}: once loaded, zoom the image to the part itself (thumbFitToPart);
+// only the v2 card asks for it, so every other thumbnail's markup is as before.
+function thumbImgHtml(p, stem, cls, {fitPart=false}={}){
   const url=`/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}`;
   if(THUMB_MISSING.has(url)) return `<span class="stats-thumb-empty">—</span>`;
-  return `<img class="${cls}" src="${url}" data-thumb-url="${esc(url)}" alt="" onerror="thumbRetry(this)">`;
+  return `<img class="${cls}" src="${url}" data-thumb-url="${esc(url)}" alt=""${fitPart?' onload="thumbFitToPart(this)"':''} onerror="thumbRetry(this)">`;
+}
+// Slicer thumbnails draw the part in the middle of a transparent square, and
+// how much of it the part covers varies a lot (measured on the fleet: 43–86%
+// of the width, not always centred), so no single scale fills the box
+// without cropping some. This finds the part's opaque pixels and centres and
+// scales THIS image so the part fills the box (object-fit: cover, a small
+// margin, at most 1.8x). An image with no transparent margin stays at 1x.
+// The click-to-enlarge view loads the original, unaffected.
+function thumbFitToPart(img){
+  try{
+    const W=img.naturalWidth, H=img.naturalHeight, box=img.clientWidth;
+    if(!W || !H || !box) return;
+    const f=thumbPartBox(img, W, H);
+    if(!f) return;
+    // object-fit: cover — the image is scaled by k and centred in the box.
+    const k=Math.max(box/W, box/H), ox=(box-W*k)/2, oy=(box-H*k)/2;
+    const bx0=ox+f.x0*k, bx1=ox+f.x1*k, by0=oy+f.y0*k, by1=oy+f.y1*k;
+    const s=Math.min(1.8, Math.max(1, 0.94*Math.min(box/(bx1-bx0), box/(by1-by0))));
+    if(s<=1.01) return;
+    const mx=(bx0+bx1)/2-box/2, my=(by0+by1)/2-box/2;
+    img.style.transform=`translate(${(-s*mx).toFixed(1)}px, ${(-s*my).toFixed(1)}px) scale(${s.toFixed(3)})`;
+  }catch{ /* unreadable (a cross-origin image, say): leave it as it is */ }
+}
+// The part's bounding box in the image's own pixels: where alpha > 8, read
+// from a copy at most 120px across (enough to place a box, ~1ms). Null when
+// the whole image is opaque or empty.
+function thumbPartBox(img, W, H){
+  const r=Math.min(1, 120/Math.max(W,H)), w=Math.max(1, Math.round(W*r)), h=Math.max(1, Math.round(H*r));
+  const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+  const g=cv.getContext("2d"); g.drawImage(img, 0, 0, w, h);
+  const d=g.getImageData(0, 0, w, h).data;
+  let x0=w, y0=h, x1=-1, y1=-1;
+  for(let y=0; y<h; y++) for(let x=0; x<w; x++) if(d[(y*w+x)*4+3]>8){ if(x<x0) x0=x; if(x>x1) x1=x; if(y<y0) y0=y; if(y>y1) y1=y; }
+  if(x1<0 || (x0===0 && y0===0 && x1===w-1 && y1===h-1)) return null;
+  return { x0:x0/r, y0:y0/r, x1:(x1+1)/r, y1:(y1+1)/r };
 }
 
 // A failed thumbnail load only gets a fresh <img> (and thus a fresh fetch)
@@ -6175,7 +6212,7 @@ function buildCardStatsV2(p){
     cell(t("fleet.progress.filament_label"), `<span data-live="filament-val">${cardV2FilamentText(p)}</span>`)+
     `</div>`;
   const thumb=stem
-    ? `<div class="v2-thumb" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"v2-thumb-img")}</div>`
+    ? `<div class="v2-thumb" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"v2-thumb-img",{fitPart:true})}</div>`
     : `<div class="v2-thumb"></div>`;
   const headline=`<div class="v2-headline">`+
     (done ? `<span class="v2-left">${esc(t("fleet.progress.done"))}</span>`

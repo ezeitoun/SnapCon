@@ -884,19 +884,23 @@
   .pcard.card-v2 .v2-stat-val{font-family:var(--mono); font-size:14px; font-weight:600; color:var(--ink); white-space:nowrap;}
   .pcard.card-v2 .v2-sub{font-size:10px; color:var(--ink-dim);}
   .pcard.card-v2 .v2-stat .stats-mini-bar{left:8px; right:8px; bottom:4px; height:3px;}
-  .pcard.card-v2 .v2-main{display:grid; grid-template-columns:100px minmax(0,1fr); gap:14px; align-items:center; padding:12px 16px 10px;}
+  /* Flush with the card's content edge (no classic padding). The card's own
+     13px gap is trimmed so the file name sits 8px under the stats row and
+     the spool lanes 10px under this block; the progress column starts at
+     the top of the thumbnail. */
+  .pcard.card-v2 .v2-main{display:grid; grid-template-columns:100px minmax(0,1fr); gap:14px; align-items:start; padding:0; margin:-5px 0 -3px;}
   /* The thumbnail box is always there: dashed while there is no image (no
      file, or none the printer can give), plain once an image fills it. */
   .pcard.card-v2 .v2-thumb{width:100px; height:100px; border-radius:8px; border:1px dashed var(--line); overflow:hidden; display:flex; align-items:center; justify-content:center;}
   .pcard.card-v2 .v2-thumb:has(img){border-style:solid; border-color:transparent; cursor:pointer;}
   .pcard.card-v2 .v2-thumb .stats-thumb-empty{display:none;}
-  .pcard.card-v2 .v2-thumb-img{width:100%; height:100%; object-fit:cover; display:block;}
+  .pcard.card-v2 .v2-thumb-img{width:100%; height:100%; object-fit:cover; display:block; transform-origin:50% 50%;}
   .pcard.card-v2 .v2-prog{display:flex; flex-direction:column; gap:7px; min-width:0;}
   .pcard.card-v2 .v2-file{font-family:var(--mono); font-size:11px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .pcard.card-v2 .v2-headline{display:flex; justify-content:space-between; align-items:baseline; gap:8px;}
-  .pcard.card-v2 .v2-left{font-family:var(--mono); font-size:20px; font-weight:700; color:var(--ink); white-space:nowrap;}
-  .pcard.card-v2 .v2-left-unit{font-family:inherit; font-size:12px; font-weight:400; color:var(--ink-dim);}
-  .pcard.card-v2 .prog-pct{font-size:20px;}
+  .pcard.card-v2 .v2-left{font-family:var(--mono); font-size:18px; font-weight:700; color:var(--ink); white-space:nowrap;}
+  .pcard.card-v2 .v2-left-unit{font-family:inherit; font-size:11px; font-weight:400; color:var(--ink-dim);}
+  .pcard.card-v2 .prog-pct{font-size:18px;}
   .pcard.card-v2 .prog-track{flex:none;}
   .pcard.card-v2 .v2-under{display:flex; justify-content:space-between; gap:8px;}
   .pcard.card-v2 .v2-under-end{text-align:right;}
