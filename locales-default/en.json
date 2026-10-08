@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 85,
+    "version": 86,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-08"
   },
@@ -391,6 +391,23 @@
       "blocked_summary": "Not sent: {names} cannot print this file as it stands.",
       "plate_label": "Plate to print",
       "plate_option": "Plate {n}"
+    },
+    "upload": {
+      "uploading_next": "Uploading next: {file}",
+      "uploading": "Uploading: {file}",
+      "detail": "{pct}% · {sent} of {total} MB",
+      "detail_sent": "{sent} MB sent",
+      "starting": "Starting the upload…",
+      "failed_title": "Upload failed at {pct}%: {file}",
+      "waiting_title": "Waiting for the upload to finish",
+      "cancel_not_yet_title": "The upload is still starting",
+      "dialog_title": "Uploading {file}",
+      "reason_lost_connection": "Lost connection to the printer",
+      "reason_timeout": "The printer stopped responding",
+      "reason_unreachable": "Couldn’t reach the printer",
+      "reason_rejected": "The printer refused the file",
+      "reason_file_unreadable": "Couldn’t read the file from the G-code folder",
+      "reason_unknown": "The upload stopped"
     }
   },
   "health": {

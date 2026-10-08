@@ -408,7 +408,10 @@ function fillBackground(pct){
 }
 // The Upload (start=false) or Print (start=true) button's disabled state and,
 // while that button's send runs, its fill.
-function sendBtnAttrs(p, start, enabled){
+// {card}: the card's buttons — both disabled while a send runs, no fill (the
+// upload strip shows the progress). The list row keeps its button fill.
+function sendBtnAttrs(p, start, enabled, {card=false}={}){
+  if(card) return (enabled && !sendInFlight(p)) ? "" : "disabled";
   const f=SEND_FILL.get(String(p.id));
   if(f && f.start===start) return `disabled style="background:${fillBackground(f.pct)}"`;
   return enabled ? "" : "disabled";
@@ -422,6 +425,83 @@ function setSendFill(printerId, start, pct){
   SEND_FILL.set(key, { start, pct });
   if(!prev || prev.start!==start){ renderFleet({incremental:true}); return; }
   document.querySelectorAll(`#fleet button[data-id="${key}"][data-start="${start?"1":"0"}"]`).forEach(b=>{ b.style.background=fillBackground(pct); });
+}
+
+// ---- The card's upload strip ----
+// One per printer while a send from this tab is uploading, or after its
+// upload failed (until Retry or Dismiss): String(printer id) ->
+// { state:"uploading"|"failed", name, pct, sent, total, reason, retry }.
+// Shown in the banner position by uploadStripHtml(); progress is patched in
+// place (patchUploadProgress), and only a state change rebuilds the card (it
+// is in cardSignature()). Only the tab that started the upload has it.
+const UPLOADS = new Map();
+function uploadMB(bytes){ const s=(Math.max(0,bytes||0)/1048576).toFixed(1); return s.endsWith(".0") ? s.slice(0,-2) : s; }
+// "34% · 15.6 of 46 MB"; "15.6 MB sent" when the total isn't known yet. Pure.
+function uploadDetailText(pct, sent, total){
+  if(total>0) return t("fleet.upload.detail",{pct, sent:uploadMB(sent), total:uploadMB(total)});
+  if(sent>0) return t("fleet.upload.detail_sent",{sent:uploadMB(sent)});
+  return t("fleet.upload.starting");
+}
+// Why an upload failed, in plain words, from the error code the server keeps
+// on the job (errorCode); the raw message when the code says nothing. Pure.
+const UPLOAD_FAILURE_REASONS = {
+  ECONNRESET:"lost_connection", EPIPE:"lost_connection", ECONNABORTED:"lost_connection",
+  ETIMEDOUT:"timeout", ESOCKETTIMEDOUT:"timeout",
+  ECONNREFUSED:"unreachable", EHOSTUNREACH:"unreachable", ENETUNREACH:"unreachable", ENOTFOUND:"unreachable", EAI_AGAIN:"unreachable",
+  UPLOAD_REJECTED:"rejected",
+  NAS_UNREACHABLE:"file_unreadable", ENOENT:"file_unreadable", EACCES:"file_unreadable",
+};
+function uploadFailureReason(code, message){
+  const key=UPLOAD_FAILURE_REASONS[code] || (/socket hang up/i.test(message||"") ? "lost_connection" : null);
+  return key ? t("fleet.upload.reason_"+key) : (message || t("fleet.upload.reason_unknown"));
+}
+function uploadStripHtml(p){
+  const u=UPLOADS.get(String(p.id));
+  if(!u) return "";
+  const name=stripExt(u.name);
+  const bar=`<div class="upload-strip-bar"><div class="upload-strip-fill" data-live="upload-bar" style="width:${u.pct}%"></div></div>`;
+  if(u.state==="failed"){
+    return `<div class="upload-strip failed">`+
+      `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}">${esc(t("fleet.upload.failed_title",{pct:u.pct, file:name}))}</div>`+
+      `<div class="upload-strip-detail">${esc(u.reason)}</div></div>`+
+      `<div class="upload-strip-actions">`+
+        `<button type="button" class="upload-strip-btn" data-upload-retry="${esc(p.id)}">${esc(t("settings.firmware.st_retry"))}</button>`+
+        `<button type="button" class="upload-strip-btn quiet" data-upload-dismiss="${esc(p.id)}">${esc(t("library.dismiss_btn"))}</button>`+
+      `</div>`+bar+`</div>`;
+  }
+  // On a printing printer the file is the next job; the print itself keeps its badge and progress.
+  const next=p.state==="printing"||p.state==="paused";
+  const job=UPLOAD_CANCEL.get(String(p.id));
+  return `<div class="upload-strip">`+
+    `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}"><span class="upload-strip-name">${esc(t(next?"fleet.upload.uploading_next":"fleet.upload.uploading",{file:name}))}</span><span class="upload-strip-pct" data-live="upload-pct">${u.pct}%</span></div>`+
+    `<div class="upload-strip-detail" data-live="upload-detail">${esc(uploadDetailText(u.pct,u.sent,u.total))}</div></div>`+
+    `<button type="button" class="upload-strip-btn danger" data-cancel-upload="${esc(job||"")}" data-printer="${esc(p.id)}"${job?"":` disabled title="${esc(t("fleet.upload.cancel_not_yet_title"))}"`}>${esc(t("fleet.print.cancel_upload"))}</button>`+
+    bar+`</div>`;
+}
+// A state change (uploading, failed, gone) rebuilds the card.
+function setUploadState(printerId, entry){
+  if(printerId==null) return;
+  const key=String(printerId);
+  if(entry) UPLOADS.set(key, entry); else if(UPLOADS.has(key)) UPLOADS.delete(key); else return;
+  renderFleet({incremental:true});
+}
+// A progress tick: written into the strip on screen, no rebuild.
+function patchUploadProgress(printerId, d){
+  const u=UPLOADS.get(String(printerId));
+  if(!u || u.state!=="uploading" || !d.total) return;
+  u.sent=d.sent; u.total=d.total; u.pct=Math.min(100, Math.round(d.sent/d.total*100));
+  const card=document.querySelector(`#fleet .pcard[data-pid="${printerId}"]`);
+  if(!card) return;
+  const set=(sel,txt)=>{ const el=card.querySelector(sel); if(el && el.textContent!==txt) el.textContent=txt; };
+  set('[data-live="upload-detail"]', uploadDetailText(u.pct, u.sent, u.total));
+  set('[data-live="upload-pct"]', u.pct+"%");
+  const bar=card.querySelector('[data-live="upload-bar"]');
+  if(bar) bar.style.width=u.pct+"%";
+}
+// Upload and Print on the card are disabled while a send to this printer runs.
+function sendInFlight(p){
+  const key=String(p.id), u=UPLOADS.get(key);
+  return SEND_FILL.has(key) || !!(u && u.state==="uploading");
 }
 
 // Uploads that can still be cancelled: String(printer id) -> job id. Set and
@@ -452,9 +532,7 @@ function cardStatusFor(p){
 // lands inside an attribute.
 function cardStatusHtml(p){
   const s=cardStatusFor(p);
-  const job=UPLOAD_CANCEL.get(String(p.id));
-  const cancel=job ? `<button type="button" class="pstatus-cancel" data-cancel-upload="${esc(job)}" data-printer="${esc(p.id)}">${esc(t("fleet.print.cancel_upload"))}</button>` : "";
-  return `<div class="${s?esc(s.cls):"pstatus"}" id="pst-${esc(p.id)}">${s?esc(s.txt):""}${cancel}</div>`;
+  return `<div class="${s?esc(s.cls):"pstatus"}" id="pst-${esc(p.id)}">${s?esc(s.txt):""}</div>`;
 }
 // "Offline" as the status badge means it: not reachable, and not mid-flash
 // (a printer being updated or rebooting is legitimately unreachable and says
@@ -2658,6 +2736,13 @@ function wireUI(){
   $("unloadSaveColorBtn").addEventListener("click", doApplyUnloadColor);
   $("unloadAllCheck").addEventListener("change", updateUnloadConfirmLabel);
   wireModal("quickPrintModal", closeQuickPrintModal, ["qpX","qpCancel"]);
+  // Cancel upload: stops the upload and closes the dialog (the strip goes away).
+  $("qpCancelUpload").addEventListener("click", ()=>{
+    const job=QP_UPLOAD_JOB, printer=QP_PRINTER;
+    $("qpCancelUpload").disabled=true;
+    if(job!=null) cancelUpload(job, printer);
+    closeQuickPrintModal();
+  });
   $("qpPrint").addEventListener("click", doQuickPrint);
   // Single-button toggle, same convention as #gear: click opens the
   // dashboard, clicking it again while open closes it — there's no separate
@@ -6146,7 +6231,9 @@ function cardSignature(p){
     cardStatus:CARD_STATUS.get(String(p.id))||null,
     uploadCancel:UPLOAD_CANCEL.get(String(p.id))||null,
     // Which button is filling, not how far: the percentage is patched in place.
-    sendFill:SEND_FILL.has(String(p.id)) ? SEND_FILL.get(String(p.id)).start : null
+    sendFill:SEND_FILL.has(String(p.id)) ? SEND_FILL.get(String(p.id)).start : null,
+    // The upload strip's state and file; its progress is patched in place.
+    uploadStrip:UPLOADS.has(String(p.id)) ? UPLOADS.get(String(p.id)).state+"|"+UPLOADS.get(String(p.id)).name : null
   });
 }
 // "Check again" on the monitoring-only note. The operator has just switched
@@ -6322,6 +6409,7 @@ function buildCardHtml(p, need, dragEnabled){
             : `<div class="cam-shot-placeholder"><img class="cam-shot-placeholder-icon" src="/camera-disabled.svg" alt=""><span>${esc(t("fleet.camera.disabled_label"))}</span></div>`
         ):''}
       ${p.queuedFile?queuedFileBannerHtml(p,{readyToo:mode==="offline"}):''}
+      ${uploadStripHtml(p)}
       ${mode==="offline"?`<div class="offline-info">${WIFI_OFF_ICON}<span class="offline-info-seen" data-live="seen">${esc(offlineSeenText(p.lastSeenAt, Date.now()))}</span></div>`:''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
         const e=lookupKlipperError(p.errorCode, p.message);
@@ -6425,8 +6513,8 @@ function buildCardHtml(p, need, dragEnabled){
             + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""><span>${esc(t("common.cancel"))}</span></button>`
             + (p.capabilities?.excludeObject&&p.plate&&p.plate.total>1?`<button class="btn-chip" ${canAct()?"":"disabled"} data-plate="${p.id}" title="${esc(t("printer.action_plate_title",{done:p.plate.total-p.plate.excluded,total:p.plate.total}))}"><img src="/plate-icon.svg" alt=""><span>${esc(t("printer.action_plate"))}</span></button>`:"")
             + `<button class="btn-chip danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""><span>${esc(t("printer.action_estop"))}</span></button>`
-          : `<button class="btn-chip" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
-            + `<button class="btn-chip" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
+          : `<button class="btn-chip" ${sendBtnAttrs(p,false,canSend&&canAct(),{card:true})} data-id="${p.id}" data-start="0" title="${sendInFlight(p)?esc(t("fleet.upload.waiting_title")):maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
+            + `<button class="btn-chip" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct(),{card:true})} data-id="${p.id}" data-start="1" title="${sendInFlight(p)?esc(t("fleet.upload.waiting_title")):maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
             + `<button class="btn-chip" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
             + (p.state==='complete'&&p.filename?`<button class="btn-chip" ${canAct()?"":"disabled"} data-reprint="${p.id}" title="${esc(t("printer.action_reprint_title",{filename:p.filename}))}"><img src="/reprint-icon.svg" alt=""><span>${esc(t("printer.action_reprint"))}</span></button>`:"")
         }
@@ -6920,10 +7008,36 @@ function openQuickPrintModal(printerId, mode, queuedName){
   $("qpSubtitle").textContent=t("fleet.modal.quickprint.subtitle",{printer:p.name});
   $("qpStatus").className="pstatus"; $("qpStatus").textContent="";
   $("qpProgress").style.display="none";
-  $("qpFill").className="send-row-fill"; $("qpFill").style.width="0%";
-  $("qpUploadStatus").className="send-status-txt"; $("qpUploadStatus").textContent="";
+  qpFooter("idle");
   renderQuickPrintOpts();
   $("quickPrintModal").classList.add("show");
+}
+// The dialog's footer: "idle" (Cancel + Start print), "uploading" (one
+// Cancel upload in the danger style + a disabled "Uploading…"), or
+// "starting" (the upload is done and the print is being started: Cancel to
+// close + a disabled "Starting print…").
+let QP_UPLOAD_JOB=null;
+function qpFooter(state){
+  const uploading=state==="uploading";
+  $("qpCancel").style.display=uploading ? "none" : "";
+  $("qpCancelUpload").style.display=uploading ? "" : "none";
+  $("qpCancelUpload").disabled=false;
+  const btn=$("qpPrint");
+  btn.textContent=t(uploading ? "fleet.print.status_uploading" : state==="starting" ? "fleet.queued.starting_print_status" : "fleet.modal.quickprint.start_print_button");
+  if(state==="idle"){ QP_UPLOAD_JOB=null; syncQuickPrintButton(); } else { btn.disabled=true; btn.title=""; }
+}
+// One poll of the print job, while the dialog shows it (pollJob's onJob hook).
+function qpUploadTick(d, jobId){
+  if(d.phase==="upload"){
+    QP_UPLOAD_JOB=d.cancellable ? jobId : null;
+    const pct=d.total ? Math.min(100, Math.round(d.sent/d.total*100)) : 0;
+    $("qpUploadDetail").textContent=uploadDetailText(pct, d.sent, d.total);
+    $("qpUploadFill").style.width=pct+"%";
+    qpFooter("uploading");
+  } else if(!d.error && !d.done){
+    $("qpUploadFill").style.width="100%";
+    qpFooter("starting");
+  }
 }
 function closeQuickPrintModal(){
   $("quickPrintModal").classList.remove("show");
@@ -7022,10 +7136,25 @@ async function doQuickPrint(){
       // pushTo/pollJob already drive for the send-modal's per-printer rows,
       // reused here instead of a static "Starting…" label.
       $("qpStatus").className="pstatus"; $("qpStatus").textContent="";
+      const name=String(SELECTED||"").split("/").pop();
+      $("qpUploadTitle").textContent=t("fleet.upload.dialog_title",{file:stripExt(name)}); $("qpUploadTitle").title=name;
+      $("qpUploadDetail").textContent=uploadDetailText(0,0,0); $("qpUploadFill").style.width="0%";
       $("qpProgress").style.display="";
-      ok=await pushTo(printer, true, {fillEl:$("qpFill"), statusEl:$("qpUploadStatus")}, prefs);
+      qpFooter("uploading");
+      // Only while the dialog still shows this printer: closed (the card's strip
+      // takes over) or reopened for another one, it is left alone.
+      const mine=()=>QP_PRINTER===printer && $("quickPrintModal").classList.contains("show");
+      ok=await pushTo(printer, true, { noRowCancel:true, onJob:(d,job)=>{ if(mine()) qpUploadTick(d,job); } }, prefs);
+      if(!ok && mine()){
+        // Failed: say why here too (the card's strip has Retry); back to Cancel + Start print.
+        const u=UPLOADS.get(String(printer));
+        $("qpStatus").className="pstatus err";
+        $("qpStatus").textContent=u && u.state==="failed" ? t("fleet.upload.failed_title",{pct:u.pct, file:stripExt(u.name)})+" — "+u.reason : t("fleet.modal.quickprint.status_start_failed");
+        $("qpProgress").style.display="none";
+        qpFooter("idle");
+      }
     }
-    if(ok) closeQuickPrintModal();
+    if(ok && QP_PRINTER===printer) closeQuickPrintModal();
   } finally {
     btn.disabled=false;
   }
@@ -7041,6 +7170,14 @@ async function doQuickPrint(){
 function wireFleetCardEvents(){
   const wrap=$("fleet");
   wrap.addEventListener("click", e=>{
+    const retryBtn=e.target.closest("button[data-upload-retry]");
+    if(retryBtn){
+      const id=parseInt(retryBtn.dataset.uploadRetry,10), u=UPLOADS.get(String(id));
+      if(u && u.retry){ retryBtn.disabled=true; pushTo(id, u.retry.start, null, u.retry.prefs, null, u.retry.plate, u.retry); }
+      return;
+    }
+    const dismissBtn=e.target.closest("button[data-upload-dismiss]");
+    if(dismissBtn){ setUploadState(parseInt(dismissBtn.dataset.uploadDismiss,10), null); return; }
     const cancelBtn=e.target.closest("button[data-cancel-upload]");
     if(cancelBtn){ cancelBtn.disabled=true; cancelUpload(cancelBtn.dataset.cancelUpload, parseInt(cancelBtn.dataset.printer,10)); return; }
     const idBtn=e.target.closest("button[data-id]");
@@ -7214,10 +7351,13 @@ let PUSHES=0;
 // that should mirror this job's progress alongside the fleet card/button.
 // `plate` is only meaningful for a multi-plate project (a Bambu .3mf); every
 // other file has exactly one, and the server ignores it.
-async function pushTo(printer, start, extraUI, prefs, onProgress, plate){
-  if(!SELECTED){ return false; }
-  const map={};
-  if(ALLOW_MAPPING) neededColorsOrSlot().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
+// resend: Retry from a failed upload strip — the original file, mapping,
+// source and plate, instead of whatever is selected now.
+async function pushTo(printer, start, extraUI, prefs, onProgress, plate, resend){
+  if(!SELECTED && !resend){ return false; }
+  const file=resend ? resend.file : SELECTED;
+  const map=resend ? { ...resend.map } : {};
+  if(!resend && ALLOW_MAPPING) neededColorsOrSlot().forEach(n=>{ const v=MAPSEL[printer+":"+n.i]; if(v!==undefined) map[n.i]=parseInt(v,10); });
   const mapped=Object.keys(map).length;
   // Same reason as printQueuedFile: the card holding this line is rebuilt when
   // the job's phase badge clears, so the message has to live in the store the
@@ -7230,11 +7370,13 @@ async function pushTo(printer, start, extraUI, prefs, onProgress, plate){
   PUSHES++;
   let ok=false;
   try{
-    const src=SEND_SOURCE?{root:SEND_SOURCE.root,library:SEND_SOURCE.library}:{};
+    const src=resend ? resend.src : (SEND_SOURCE?{root:SEND_SOURCE.root,library:SEND_SOURCE.library}:{});
     // The colours mapped above are MAP's plate: a card's own Print button
     // passes no plate, and must start that same plate (M7.1).
-    if(plate==null&&MAP&&MAP.plate) plate=MAP.plate;
-    const r=await postJSON("/api/print",{file:SELECTED,printer,start,map,prefs,plate,...src});
+    if(!resend){
+      if(plate==null&&MAP&&MAP.plate) plate=MAP.plate;
+    }
+    const r=await postJSON("/api/print",{file,printer,start,map,prefs,plate,...src});
     const d=await r.json(); if(!r.ok||d.error||(!d.jobId&&d.mode!=="pending")) throw new Error(d.error||("HTTP "+r.status));
     if(d.mode==="pending"){
       // Printer's busy — server queued the file instead of racing an upload
@@ -7244,6 +7386,9 @@ async function pushTo(printer, start, extraUI, prefs, onProgress, plate){
       if(extraUI) setRowUI(extraUI, 100, "ok", t("fleet.print.status_queued_short"));
       ok=true;
     } else {
+      // The card's upload strip, with what Retry needs to send it again.
+      setUploadState(printer, { state:"uploading", name:String(file).split("/").pop(), pct:0, sent:0, total:0,
+        retry:{ file, start, map:{ ...map }, prefs, plate, src } });
       ok=await pollJob(d.jobId, st, start, mapped, pct=>setSendFill(printer, start, pct), extraUI, prefs, printer, onProgress);
     }
   }catch(e){
@@ -7347,23 +7492,40 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
       // Cancel is offered only while the server says the bytes are still going out.
       const cancellable=!!d.cancellable && !d.done && printerId!=null;
       setUploadCancel(printerId, cancellable ? jobId : null);
-      if(extraUI) setRowCancel(extraUI, cancellable ? jobId : null, printerId);
+      if(extraUI && !extraUI.noRowCancel) setRowCancel(extraUI, cancellable ? jobId : null, printerId);
+      if(extraUI && extraUI.onJob) extraUI.onJob(d, jobId);
+      const strip=printerId!=null ? UPLOADS.get(String(printerId)) : null;
       if(d.error){
         const msg=d.cancelled ? t("fleet.print.upload_cancelled") : d.error;
         // Order matters: clearOverride() re-renders synchronously, so the
         // message has to be written AFTER the card it belongs on has been
         // rebuilt, not before.
         clearOverride();
-        setStatus("pstatus err", msg);
+        if(d.cancelled){
+          // Cancelled by the user: the strip just goes away, no message.
+          setUploadState(printerId, null);
+        } else if(strip && d.failedPhase==="upload"){
+          // The strip says what happened, with Retry and Dismiss.
+          setUploadState(printerId, { ...strip, state:"failed", reason:uploadFailureReason(d.errorCode, d.error) });
+        } else {
+          setUploadState(printerId, null);
+          setStatus("pstatus err", msg);
+        }
         if(extraUI) setRowUI(extraUI, 100, "err", msg);
         fill(null);
         return false;
       }
+      // Past the upload (mapping, starting, done): the strip's job is over.
+      if(strip && strip.state==="uploading" && d.phase!=="upload") setUploadState(printerId, null);
       // The button itself fills as the upload progress bar — no bar below.
       // The card reads "Idle" while a file is being pushed to the printer --
       // nothing in Klipper's own state changes during an upload. Same
       // client-side badge mechanism the mapping/leveling phases already use.
-      if(d.phase==="upload") setOverride("upload",{statusColor:"var(--busy)",statusTxt:t("printer_status.uploading")});
+      // A printing printer keeps its own badge: the strip carries the upload.
+      const host=FLEET.find(f=>f.id===printerId);
+      const printingNow=!!(host && (host.state==="printing" || host.state==="paused"));
+      if(d.phase==="upload" && !printingNow) setOverride("upload",{statusColor:"var(--busy)",statusTxt:t("printer_status.uploading")});
+      if(d.phase==="upload") patchUploadProgress(printerId, d);
       if(d.phase==="upload" && d.total){
         const pct=Math.min(100,Math.round(d.sent/d.total*100));
         fill(pct);
@@ -7411,7 +7573,14 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
         return true;
       }
     }
-  } finally { clearOverride(); if(printerId!=null) setUploadCancel(printerId, null); if(extraUI) setRowCancel(extraUI, null); }
+  } finally {
+    clearOverride(); if(printerId!=null) setUploadCancel(printerId, null); if(extraUI) setRowCancel(extraUI, null);
+    // However the job ended, an upload still showing as running is over: a
+    // finished one leaves the card to its Loaded / printing state, and a
+    // failed one has already turned its strip red (that one stays).
+    const left=printerId!=null ? UPLOADS.get(String(printerId)) : null;
+    if(left && left.state==="uploading") setUploadState(printerId, null);
+  }
 }
 
 // A row's "Cancel upload" (Send dialog, Quick Print): one button created when

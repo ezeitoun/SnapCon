@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 85,
+    "version": 86,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-08"
   },
@@ -391,6 +391,23 @@
       "blocked_summary": "No enviado: {names} no puede imprimir este archivo tal como está.",
       "plate_label": "Placa a imprimir",
       "plate_option": "Placa {n}"
+    },
+    "upload": {
+      "uploading_next": "Subiendo a continuación: {file}",
+      "uploading": "Subiendo: {file}",
+      "detail": "{pct}% · {sent} de {total} MB",
+      "detail_sent": "{sent} MB enviados",
+      "starting": "Iniciando la subida…",
+      "failed_title": "La subida falló al {pct}%: {file}",
+      "waiting_title": "Esperando a que termine la subida",
+      "cancel_not_yet_title": "La subida todavía está empezando",
+      "dialog_title": "Subiendo {file}",
+      "reason_lost_connection": "Se perdió la conexión con la impresora",
+      "reason_timeout": "La impresora dejó de responder",
+      "reason_unreachable": "No se pudo contactar con la impresora",
+      "reason_rejected": "La impresora rechazó el archivo",
+      "reason_file_unreadable": "No se pudo leer el archivo de la carpeta de G-code",
+      "reason_unknown": "La subida se detuvo"
     }
   },
   "health": {

@@ -1911,6 +1911,54 @@
   .queued-banner{margin:10px 0 0;padding:9px 12px;border-radius:8px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
   .queued-banner.work{background:color-mix(in srgb,var(--accent) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);color:var(--ink-dim);}
   .queued-banner-text{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  /* ---- The card's upload strip (uploadStripHtml): the banner position, the
+     accent-tinted look of .queued-banner.work, a 3px bar along its bottom
+     edge. Failed: red-tinted, with Retry and Dismiss. Compact and Camera view
+     keep it to one line (title + percentage, Cancel upload, the bar). ---- */
+  .upload-strip{position:relative; display:flex; align-items:center; gap:10px; margin:10px 0 0; padding:9px 12px 12px; border-radius:8px; overflow:hidden;
+    background:color-mix(in srgb,var(--busy) 10%,var(--panel-2)); border:1px solid color-mix(in srgb,var(--busy) 30%,transparent);}
+  .upload-strip-text{flex:1; min-width:0; display:flex; flex-direction:column; gap:2px;}
+  .upload-strip-title{display:flex; align-items:baseline; gap:6px; min-width:0; font-size:12px; font-weight:600; color:var(--ink);}
+  .upload-strip-name{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .upload-strip-pct{display:none; font-family:var(--mono); font-size:11px; font-weight:600; color:var(--ink-dim); flex:none;}
+  .upload-strip-detail{font-family:var(--mono); font-size:11px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .upload-strip-actions{display:flex; gap:6px; flex:none;}
+  .upload-strip-btn{flex:none; font:inherit; font-size:11.5px; font-weight:600; padding:4px 11px; border-radius:999px; cursor:pointer;
+    background:var(--panel); color:var(--ink); border:1px solid color-mix(in srgb,var(--ink) 28%,transparent);}
+  .upload-strip-btn.quiet{background:transparent; color:var(--ink-dim);}
+  .upload-strip-btn.danger{background:transparent; color:var(--bad); border-color:color-mix(in srgb,var(--bad) 50%,transparent);}
+  .upload-strip-btn:disabled{opacity:.5; cursor:default;}
+  .upload-strip-btn:focus-visible{outline:2px solid var(--signal); outline-offset:2px;}
+  @media (hover:hover) and (pointer:fine){
+    .upload-strip-btn:not(:disabled):hover{background:color-mix(in srgb,var(--ink) 8%,var(--panel));}
+    .upload-strip-btn.danger:not(:disabled):hover{background:color-mix(in srgb,var(--bad) 12%,transparent);}
+  }
+  .upload-strip-bar{position:absolute; left:0; right:0; bottom:0; height:3px; background:color-mix(in srgb,var(--ink) 8%,transparent);}
+  .upload-strip-fill{height:100%; background:var(--busy);}
+  .upload-strip.failed{background:color-mix(in srgb,var(--bad) 10%,var(--panel-2)); border-color:color-mix(in srgb,var(--bad) 35%,transparent);}
+  .upload-strip.failed .upload-strip-title{display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:color-mix(in srgb,var(--bad) 70%,var(--ink));}
+  .upload-strip.failed .upload-strip-fill{background:var(--bad);}
+  /* A failed strip keeps the file name readable: when the card is narrow,
+     Retry and Dismiss move under the text (right-aligned) rather than
+     squeezing it. The reason is the point: it wraps rather than being cut. */
+  .upload-strip.failed{flex-wrap:wrap; row-gap:8px;}
+  .upload-strip.failed .upload-strip-text{flex:1 1 220px;}
+  .upload-strip.failed .upload-strip-actions{margin-left:auto;}
+  .upload-strip.failed .upload-strip-detail{white-space:normal; font-family:inherit; font-size:11.5px;}
+  body.compact .upload-strip, body.camview .upload-strip{padding:7px 10px 10px;}
+  body.compact .upload-strip-detail, body.camview .upload-strip-detail{display:none;}
+  body.compact .upload-strip-pct, body.camview .upload-strip-pct{display:inline;}
+  /* The Print options dialog's upload block. */
+  .qp-upload{margin-top:10px; padding:10px 12px; border:1px solid var(--line-soft); border-radius:8px; background:var(--panel-2);}
+  .qp-upload-head{display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:8px;}
+  .qp-upload-title{min-width:0; font-size:13px; font-weight:600; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .qp-upload-detail{flex:none; font-family:var(--mono); font-size:11px; color:var(--ink-dim);}
+  .qp-upload-track{height:6px; border-radius:3px; background:color-mix(in srgb,var(--ink) 8%,transparent); overflow:hidden;}
+  .qp-upload-fill{height:100%; width:0; background:var(--busy); transition:width .3s ease;}
+  @media (prefers-reduced-motion: reduce){ .qp-upload-fill{transition:none;} }
+  /* The danger outline style: .btn.danger alone sets no background, which
+     leaves the browser's grey button face showing (its hover tint stays). */
+  #qpCancelUpload:not(:hover){background:transparent;}
   .queued-banner.ready{background:color-mix(in srgb,var(--signal) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--signal) 32%,transparent);color:var(--ink-dim);}
   .queued-banner.err{background:color-mix(in srgb,var(--bad) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);color:var(--ink-dim);}
 

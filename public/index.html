@@ -1591,16 +1591,16 @@
         <div class="qp-extruder-footer" id="qpExtruderFooter"></div>
       </div>
       <div class="pstatus" aria-live="polite" id="qpStatus" style="margin-top:10px"></div>
-      <!-- Real upload progress (same {fillEl,statusEl} hookup pushTo/pollJob
-           already drive for the send-modal's per-printer rows) — hidden
-           until an upload actually starts (printing an already-queued file
-           has no bytes to upload, so it never shows this). -->
-      <div class="qp-progress" id="qpProgress" style="display:none;position:relative;overflow:hidden;border:1px solid var(--line-soft);border-radius:8px;padding:9px 12px;margin-top:10px">
-        <div class="send-row-fill" id="qpFill"></div>
-        <span class="send-status-txt" id="qpUploadStatus" style="position:relative"></span>
+      <!-- Upload progress, driven by pollJob() through the onJob hook —
+           hidden until an upload actually starts (printing an already-queued
+           file has no bytes to upload, so it never shows this). -->
+      <div class="qp-upload" id="qpProgress" style="display:none">
+        <div class="qp-upload-head"><span class="qp-upload-title" id="qpUploadTitle"></span><span class="qp-upload-detail" id="qpUploadDetail"></span></div>
+        <div class="qp-upload-track"><div class="qp-upload-fill" id="qpUploadFill"></div></div>
       </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
         <button class="btn ghost" id="qpCancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn danger" id="qpCancelUpload" data-i18n="fleet.print.cancel_upload" style="display:none">Cancel upload</button>
         <button class="btn primary" id="qpPrint" data-i18n="fleet.modal.quickprint.start_print_button">Start print</button>
       </div>
     </div>

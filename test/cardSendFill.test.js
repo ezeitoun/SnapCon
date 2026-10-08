@@ -63,7 +63,11 @@ test("starting and ending a send re-render the card; a new percentage is painted
   assert.equal(renders, 2, "ending twice is harmless");
 });
 
-test("both card layouts render the Upload and Print buttons through sendBtnAttrs", () => {
-  assert.equal((appSrc.match(/\$\{sendBtnAttrs\(p,false,canSend&&canAct\(\)\)\} data-id="\$\{p\.id\}" data-start="0"/g) || []).length, 2);
-  assert.equal((appSrc.match(/\$\{sendBtnAttrs\(p,true,p\.online&&!busy&&!maintMode&&canAct\(\)\)\} data-id="\$\{p\.id\}" data-start="1"/g) || []).length, 2);
+test("the card and the list row render the Upload and Print buttons through sendBtnAttrs", () => {
+  // The list row: exactly as before (its button still fills).
+  assert.equal((appSrc.match(/\$\{sendBtnAttrs\(p,false,canSend&&canAct\(\)\)\} data-id="\$\{p\.id\}" data-start="0"/g) || []).length, 1);
+  assert.equal((appSrc.match(/\$\{sendBtnAttrs\(p,true,p\.online&&!busy&&!maintMode&&canAct\(\)\)\} data-id="\$\{p\.id\}" data-start="1"/g) || []).length, 1);
+  // The card: no fill (its upload strip shows progress); both disabled while a send runs.
+  assert.equal((appSrc.match(/\$\{sendBtnAttrs\(p,false,canSend&&canAct\(\),\{card:true\}\)\} data-id="\$\{p\.id\}" data-start="0"/g) || []).length, 1);
+  assert.equal((appSrc.match(/\$\{sendBtnAttrs\(p,true,p\.online&&!busy&&!maintMode&&canAct\(\),\{card:true\}\)\} data-id="\$\{p\.id\}" data-start="1"/g) || []).length, 1);
 });

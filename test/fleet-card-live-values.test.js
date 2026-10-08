@@ -41,7 +41,7 @@ function extractFn(name) {
 
 // Both client-only stores cardSignature() consults: the phase badge and the
 // result line a print/upload action last wrote (see setCardStatus).
-const sandbox = { STATUS_OVERRIDE: new Map(), CARD_STATUS: new Map(), UPLOAD_CANCEL: new Map(), SEND_FILL: new Map(), JSON };
+const sandbox = { STATUS_OVERRIDE: new Map(), CARD_STATUS: new Map(), UPLOAD_CANCEL: new Map(), SEND_FILL: new Map(), UPLOADS: new Map(), JSON };
 vm.createContext(sandbox);
 // cardSignature resolves the displayed file through the same helper the card
 // and list view use, so the real one comes along rather than a stand-in that
@@ -216,7 +216,7 @@ test("exactly six fields are absent from the signature — nothing else silently
     "activeExt", "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
     "filename", "forceDefaults", "heads", "lastSeenAt", "message", "name",
     "online", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
-    "transport", "uploadCancel", "url"
+    "transport", "uploadCancel", "uploadStrip", "url"
   ]);
   for (const gone of ["progress", "elapsed", "bed", "hotend", "filamentUsed", "layer"]) {
     assert.equal(gone in sig, false, gone + " must stay out of the signature");

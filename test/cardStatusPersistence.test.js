@@ -121,11 +121,9 @@ test("cardSignature includes the card status, or the message would not repaint",
     "a changed message must change the signature, exactly as statusOverride does");
 });
 
-test("an upload that can be cancelled puts a Cancel upload button in that card's status line only", () => {
+test("no Cancel upload link in the status line (the upload strip has the button)", () => {
   vm.runInContext('UPLOAD_CANCEL.set("7", "j123")', sandbox);
-  const html = call("cardStatusHtml", { id: 7 });
-  assert.match(html, /<button type="button" class="pstatus-cancel" data-cancel-upload="j123" data-printer="7">fleet\.print\.cancel_upload<\/button><\/div>$/);
-  assert.doesNotMatch(call("cardStatusHtml", { id: 8 }), /pstatus-cancel/);
+  assert.doesNotMatch(call("cardStatusHtml", { id: 7 }), /cancel-upload|pstatus-cancel/);
 });
 
 test("buildCardHtml renders the stored message rather than a hardcoded empty div", () => {
