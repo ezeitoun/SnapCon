@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 89,
+    "version": 90,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-09"
   },
@@ -1632,8 +1632,6 @@
     "f_any_material": "Cualquier material",
     "sort_name": "Nombre",
     "sort_recent": "Añadidos recientemente",
-    "type_printable": "Listo para imprimir",
-    "type_project": "Proyecto 3MF",
     "type_source": "Modelo fuente",
     "clear_filters": "Quitar filtros",
     "show_more": "Mostrar más ({shown} de {total})",
@@ -2046,6 +2044,14 @@
     "scan_err_unknown": "no se puede leer",
     "empty_own_files_one": "No hay modelos directamente en esta carpeta. Activa Incluir subcarpetas para ver el que hay debajo.",
     "empty_own_files_other": "No hay modelos directamente en esta carpeta. Activa Incluir subcarpetas para ver los {count} que hay debajo.",
-    "sort_attention": "Primero los que requieren atención"
+    "sort_attention": "Primero los que requieren atención",
+    "tag_sliced": "laminado",
+    "tag_title_gcode": "G-code, listo para imprimir",
+    "tag_title_3mf_sliced": "3MF con placas laminadas",
+    "tag_title_3mf": "3MF, hay que laminarlo",
+    "tag_title_source": "Modelo de origen, hay que laminarlo",
+    "type_gcode": "G-code",
+    "type_3mf_sliced": "3MF laminado",
+    "type_3mf": "3MF"
   }
 }

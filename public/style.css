@@ -19,6 +19,11 @@
     --ink:#ECEEF2; --ink-dim:#9AA0AC; --ink-faint:#6A7180;
     --signal:#FFB200; --ok:#46C18C; --idle:#545B69; --bad:#E06A5C; --busy:#5B9BF0; --offline:#8A7F6A;
     --violet:#7B61FF; --violet-soft:#A78BFA;
+    /* Library file-type tags (library.js): their colours, and the glass they
+       sit on over a thumbnail — dark glass here, a light tint of the tag's
+       own colour in the light theme (--type-tint is how much of it). */
+    --type-3mf:#A98BF5; --type-3mf-ink:#C4B1FA; --type-gcode-ink:#8FBFFA; --type-neutral:#FFFFFF;
+    --type-base:rgba(16,18,24,.62); --type-tint:0%;
     /* Two more status colors statusColorText() (app.js) needs — Paused,
        Complete — that don't map onto any token above; previously hardcoded
        hex inline in that function, which is why they couldn't adapt to a
@@ -55,6 +60,11 @@
     --ink:#ECEEF2; --ink-dim:#9AA0AC; --ink-faint:#6A7180;
     --signal:#FFB200; --ok:#46C18C; --idle:#545B69; --bad:#E06A5C; --busy:#5B9BF0; --offline:#8A7F6A;
     --violet:#7B61FF; --violet-soft:#A78BFA;
+    /* Library file-type tags (library.js): their colours, and the glass they
+       sit on over a thumbnail — dark glass here, a light tint of the tag's
+       own colour in the light theme (--type-tint is how much of it). */
+    --type-3mf:#A98BF5; --type-3mf-ink:#C4B1FA; --type-gcode-ink:#8FBFFA; --type-neutral:#FFFFFF;
+    --type-base:rgba(16,18,24,.62); --type-tint:0%;
     /* Two more status colors statusColorText() (app.js) needs — Paused,
        Complete — that don't map onto any token above; previously hardcoded
        hex inline in that function, which is why they couldn't adapt to a
@@ -117,6 +127,8 @@
     --paused:#8A6508; --complete:#0F766E;
     --idle:#5B6472; --offline:#756A52;
     --violet:#5B3FC4; --violet-soft:#6D4FD1;
+    --type-3mf:#7A5BDA; --type-3mf-ink:#5B3FC4; --type-gcode-ink:#1858A8; --type-neutral:#171A1D;
+    --type-base:var(--panel); --type-tint:12%;
     --accent:var(--busy); --warn:var(--signal);
     --tb-bg:var(--panel); --tb-divider:var(--line); --tb-divider-strong:#C5CCD4;
     --tb-text:var(--ink); --tb-text-2:var(--ink-dim); --tb-muted:var(--ink-faint);
@@ -2312,6 +2324,15 @@
   .lib-well img{width:86%; height:86%; object-fit:contain; filter:drop-shadow(0 6px 10px rgba(0,0,0,.35));}
   .lib-noimg{display:flex; align-items:center; justify-content:center; width:46%; aspect-ratio:1/1; border-radius:14px; border:1px dashed var(--line); color:var(--ink-faint); font-size:30px; font-weight:700;}
   .lib-noimg.is-sm{width:70%; border-radius:8px; font-size:13px;}
+  /* File-type tags, bottom-left of the card's picture (library.js typeTagsHtml). */
+  .lib-types{position:absolute; left:8px; bottom:8px; right:8px; display:flex; flex-wrap:wrap; gap:5px; pointer-events:none;}
+  .lib-type{--c:var(--busy); --ci:var(--type-gcode-ink); pointer-events:auto; display:inline-flex; align-items:center; gap:4px; height:22px; padding:0 7px 0 6px; border-radius:6px;
+    background:color-mix(in srgb,var(--c) var(--type-tint),var(--type-base)); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+    border:1px solid color-mix(in srgb,var(--c) 55%,transparent); color:var(--ci); font-family:var(--mono); font-size:11px; font-weight:600; line-height:1; white-space:nowrap; cursor:pointer;}
+  .lib-type svg{width:12px; height:12px; flex:none;}
+  .lib-type.is-3mf{--c:var(--type-3mf); --ci:var(--type-3mf-ink);}
+  .lib-type.is-source{--c:var(--type-neutral); --ci:var(--ink-dim); border-color:color-mix(in srgb,var(--type-neutral) 22%,transparent);}
+  @media (hover:hover) and (pointer:fine){ .lib-type:hover{border-color:var(--c);} .lib-type.is-source:hover{border-color:color-mix(in srgb,var(--type-neutral) 45%,transparent);} }
   .lib-badges{position:absolute; top:7px; left:7px; right:7px; display:flex; flex-wrap:wrap; gap:4px; pointer-events:none;}
   .lib-badge{display:inline-flex; align-items:center; padding:1px 7px; border-radius:999px; font-size:10.5px; font-weight:700; border:1px solid var(--line); background:var(--panel); color:var(--ink-dim); white-space:nowrap;}
   .lib-badge.is-warn{color:var(--warn); border-color:color-mix(in srgb,var(--warn) 50%,transparent);}
@@ -2386,6 +2407,7 @@
     background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 6px 10px 8px; box-shadow:0 12px 32px color-mix(in srgb,black 35%,transparent);}
   .lib-sheet[hidden]{display:none;}
   .lib-grid > .lib-empty{grid-column:1 / -1;}
+  .lib-meta:empty{display:none;}
   .lib-card-folder{display:flex; align-items:center; gap:5px; min-width:0; font-size:11px; color:var(--ink-faint);}
   .lib-card-folder .lib-ico{width:12px; height:12px;}
   .lib-card-folder-txt{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}

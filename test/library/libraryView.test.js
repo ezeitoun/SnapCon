@@ -78,13 +78,13 @@ test("filters: printer family, location, type and material, with facet counts", 
   const names = r => r.models.map(m => m.name).sort();
   assert.deepEqual(names(V.listModels(db, { family: "flashforge-ad5x" })), ["Beardie"]);
   assert.deepEqual(names(V.listModels(db, { root: "nas" })), ["Gecko", "Santa"]);
-  assert.deepEqual(names(V.listModels(db, { type: "project" })), ["Santa"]);
+  assert.deepEqual(names(V.listModels(db, { type: "3mf" })), ["Santa"]);
   assert.deepEqual(names(V.listModels(db, { material: "petg" })), ["Beardie"]);
   const f = V.facets(db);
   assert.equal(f.total, 3);
   assert.deepEqual(f.families.map(x => [x.key, x.count]).sort(), [["flashforge-ad5x", 1], ["snapmaker-u1", 1]]);
   assert.deepEqual(f.materials.map(x => [x.key, x.count]), [["PETG", 1], ["PLA", 1]]);
-  assert.deepEqual(f.types.map(x => [x.key, x.count]), [["printable", 2], ["project", 1]]);
+  assert.deepEqual(f.types.map(x => [x.key, x.count]), [["gcode", 2], ["3mf", 1]]);
   const santa = V.modelDetail(db, modelUuid(db, "Santa.3mf"));
   assert.equal(santa.projects[0].plates.length, 2);
   assert.equal(santa.projects[0].setUpFor.family, "snapmaker-u1", "an unsliced project says what it is set up for");

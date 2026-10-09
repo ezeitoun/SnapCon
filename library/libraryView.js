@@ -125,10 +125,27 @@ const SORTS = {
   attention: { col: "(CASE WHEN m.id IN (SELECT value FROM json_each(?)) THEN '0' ELSE '1' END || lower(m.name))", dir: "ASC", needsIds: true },
 };
 const needsAttention = att => [...att.perModel.entries()].filter(([, rs]) => rs.some(r => r.level !== "info")).map(([id]) => id);
+// A file's type as the card's tags and the Type filter show it (pure): G-code
+// ready to print; a 3MF with sliced plates inside (the scan sets its role to
+// "sliced" from its content, indexStore.js); a 3MF that needs slicing; a
+// source model (STL, STEP…). Anything else — images, documents, archives —
+// has none: a zip is never part of a Model (docs/TODO.md §26).
+const GCODE_EXTS = ["gcode", "gco", "g", "gx", "bgcode"];
+function fileTypeOf(ext, role) {
+  ext = String(ext || "").toLowerCase();
+  if (ext === "3mf") return role === "sliced" ? "3mf_sliced" : role === "project" ? "3mf" : null;
+  if (role === "sliced" && GCODE_EXTS.includes(ext)) return "gcode";
+  if (role === "source") return "source";
+  return null;
+}
+const TYPE_ORDER = ["gcode", "3mf_sliced", "3mf", "source"];
+// The Type filter: the same types, over a Model's own (not hidden) files.
+const ownFile = "SELECT model_id FROM files WHERE entry_path = '' AND hidden = 0";
 const TYPES = {
-  printable: "m.id IN (SELECT f.model_id FROM files f JOIN variants v ON v.file_id = f.id WHERE f.entry_path = '')",
-  project: "m.id IN (SELECT f.model_id FROM files f JOIN projects p ON p.file_id = f.id WHERE f.entry_path = '')",
-  source: "m.id IN (SELECT model_id FROM files WHERE role = 'source' AND entry_path = '')",
+  gcode: `m.id IN (${ownFile} AND role = 'sliced' AND lower(ext) IN (${GCODE_EXTS.map(e => `'${e}'`).join(", ")}))`,
+  "3mf_sliced": `m.id IN (${ownFile} AND lower(ext) = '3mf' AND role = 'sliced')`,
+  "3mf": `m.id IN (${ownFile} AND lower(ext) = '3mf' AND role = 'project')`,
+  source: `m.id IN (${ownFile} AND role = 'source')`,
 };
 // Words, each a prefix ("skel rex" finds "Skeleton T-Rex"), or joined
 // ("t rex" finds "TinyTREX"): see searchTerms.js. FTS5 syntax typed by a
@@ -306,6 +323,18 @@ function cards(db, rows, att) {
     FROM files f WHERE f.entry_path = '' AND f.model_id IN (SELECT value FROM json_each(?)) GROUP BY f.model_id`).all(idsJson).map(r => [r.id, r]));
   const printed = new Map(db.prepare("SELECT model_id, print_count, print_count_confirmed, print_count_filename, last_printed_at FROM model_stats WHERE model_id IN (SELECT value FROM json_each(?))")
     .all(idsJson).map(r => [r.model_id, r]));
+  // The card's tags: one per type among its own files, in TYPE_ORDER. A
+  // source tag shows its file's extension (stl, step…): the largest source
+  // file's, as source models have no thumbnail to pick one by.
+  const types = new Map();
+  for (const f of db.prepare(`SELECT model_id, ext, role, size FROM files WHERE entry_path = '' AND hidden = 0 AND model_id IN (SELECT value FROM json_each(?))
+      ORDER BY size DESC, id`).all(idsJson)) {
+    const type = fileTypeOf(f.ext, f.role);
+    if (!type) continue;
+    if (!types.has(f.model_id)) types.set(f.model_id, new Map());
+    const t = types.get(f.model_id);
+    if (!t.has(type)) t.set(type, type === "source" ? String(f.ext || "").toLowerCase() : type === "gcode" ? "gcode" : "3mf");
+  }
   const variants = new Map(db.prepare(`SELECT f.model_id AS id, count(*) AS n FROM variants v JOIN files f ON f.id = v.file_id
     WHERE f.entry_path = '' AND f.model_id IN (SELECT value FROM json_each(?)) GROUP BY f.model_id`).all(idsJson).map(r => [r.id, r.n]));
   const fams = new Map();
@@ -330,6 +359,7 @@ function cards(db, rows, att) {
       cover: covers.get(r.id) || null,
       files: c.files || 0, variants: variants.get(r.id) || 0, projects: c.projects || 0, sources: c.sources || 0,
       families: fams.get(r.id) || [], materials: mats.get(r.id) || [],
+      types: TYPE_ORDER.filter(k => types.has(r.id) && types.get(r.id).has(k)).map(k => ({ type: k, ext: types.get(r.id).get(k) })),
       locations: rootIds.map(id => ({ id, name: (roots.get(id) || {}).name || id })),
       offline: offlineRoots.length ? (offlineRoots.length === rootIds.length ? "all" : "some") : null,
       missing: c.missing || 0, unreadable: c.unreadable || 0,
@@ -557,4 +587,4 @@ function attentionCounts(db, { printerVisible = () => true } = {}) {
   return counts;
 }
 
-module.exports = { listModels, folderTree, folderCondition, cleanFolder, facets, modelDetail, attentionList, attentionCounts, levelOf, ftsQuery, modelContext };
+module.exports = { fileTypeOf, listModels, folderTree, folderCondition, cleanFolder, facets, modelDetail, attentionList, attentionCounts, levelOf, ftsQuery, modelContext };

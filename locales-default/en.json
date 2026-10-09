@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 89,
+    "version": 90,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-09"
   },
@@ -1632,8 +1632,6 @@
     "f_any_material": "Any material",
     "sort_name": "Name",
     "sort_recent": "Recently added",
-    "type_printable": "Ready to print",
-    "type_project": "3MF project",
     "type_source": "Source model",
     "clear_filters": "Clear filters",
     "show_more": "Show more ({shown} of {total})",
@@ -2046,6 +2044,14 @@
     "scan_err_unknown": "it can’t be read",
     "empty_own_files_one": "No models directly in this folder. Turn on Include subfolders to see the one below it.",
     "empty_own_files_other": "No models directly in this folder. Turn on Include subfolders to see the {count} below it.",
-    "sort_attention": "Needs attention first"
+    "sort_attention": "Needs attention first",
+    "tag_sliced": "sliced",
+    "tag_title_gcode": "G-code, ready to print",
+    "tag_title_3mf_sliced": "3MF with sliced plates",
+    "tag_title_3mf": "3MF, needs slicing",
+    "tag_title_source": "Source model, needs slicing",
+    "type_gcode": "G-code",
+    "type_3mf_sliced": "3MF sliced",
+    "type_3mf": "3MF"
   }
 }

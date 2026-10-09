@@ -258,7 +258,12 @@
     else grid.insertAdjacentHTML("beforeend", L.models.slice(start).map(cardHtml).join(""));
     grid.querySelectorAll(".lib-card:not([data-wired])").forEach(c=>{
       c.dataset.wired="1";
-      c.addEventListener("click",e=>{ if(e.metaKey||e.ctrlKey||e.button===1) return; e.preventDefault(); go("/library/m/"+c.dataset.uuid); });
+      c.addEventListener("click",e=>{
+        // A type tag sets the Type filter; the card's link must not open.
+        const tag=e.target.closest(".lib-type");
+        if(tag){ e.preventDefault(); e.stopPropagation(); setTypeFilter(tag.dataset.type); return; }
+        if(e.metaKey||e.ctrlKey||e.button===1) return; e.preventDefault(); go("/library/m/"+c.dataset.uuid);
+      });
     });
     fitFolders();
     const more=$("libMore");
@@ -283,6 +288,11 @@
       if(n&&n.count) return tn("library.empty_own_files",n.count);
     }
     return anyFilter()?t("library.no_match"):t("library.empty");
+  }
+  function setTypeFilter(type){
+    L.filters.type=type;
+    const el=$("libType"); if(el) el.value=[...el.options].some(o=>o.value===type)?type:"";
+    loadModels(true);
   }
   const anyFilter=()=>{ const f=L.filters; return !!(f.q||f.printer||f.location||f.type||f.material||f.attention||f.hidden); };
   function renderActive(){
@@ -310,16 +320,40 @@
       ? `<img class="${cls||"lib-cover-img"}" loading="lazy" decoding="async" alt="" data-initial="${esc((name||"?").trim().charAt(0).toUpperCase())}" src="${thumbUrl(cover.thumb)}">`
       : `<span class="lib-noimg" aria-hidden="true">${esc((name||"?").trim().charAt(0).toUpperCase())}</span>`;
   }
+  // The card's detail line. A single file says nothing about itself here:
+  // its type tag already does ("PLA · 1 print", not "1 file · PLA · 1 print"). Pure.
+  function cardMetaHtml(m){
+    const what=m.variants>1?tn("library.n_variants",m.variants):m.projects&&!m.variants?tn("library.n_projects",m.projects):m.files>1?tn("library.n_files",m.files):"";
+    return [what?esc(what):"", m.materials.length?esc(m.materials.slice(0,3).join(", ")):"",
+      m.prints?`<span title="${esc(printsLine(m.prints))}">${esc(tn("library.n_prints",m.prints.count))}</span>`:""].filter(Boolean).join(" · ");
+  }
+  // One tag per file type in the Model (gcode, 3mf · sliced, 3mf, then its
+  // source file's extension), bottom-left of the picture. Clicking one sets
+  // the Type filter (mouse only; the Type menu is the keyboard's way). Pure.
+  const TYPE_ICONS={
+    gcode:`<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5h6v3H3z M4.5 4.5h3l-1 3h-1z M6 7.5v1.5 M3.5 10.5h5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" stroke-linecap="round"/></svg>`,
+    cube:`<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.2 10.4 3.6 6 6 1.6 3.6z" fill="currentColor" fill-opacity=".35"/><path d="M6 1.2 10.4 3.6v4.8L6 10.8 1.6 8.4V3.6zM1.6 3.6 6 6l4.4-2.4M6 6v4.8" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>`,
+    cubeOutline:`<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.2 10.4 3.6v4.8L6 10.8 1.6 8.4V3.6zM1.6 3.6 6 6l4.4-2.4M6 6v4.8" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>`,
+  };
+  function typeTagsHtml(types){
+    if(!types||!types.length) return "";
+    return `<span class="lib-types">${types.map(x=>{
+      const k=x.type;
+      const label=k==="3mf_sliced"?`3mf · ${t("library.tag_sliced")}`:k==="source"?x.ext:k==="gcode"?"gcode":"3mf";
+      const cls=k==="gcode"?"":k==="source"?" is-source":" is-3mf";
+      const icon=k==="gcode"?TYPE_ICONS.gcode:k==="source"?TYPE_ICONS.cubeOutline:TYPE_ICONS.cube;
+      return `<span class="lib-type${cls}" data-type="${esc(k)}" title="${esc(t("library.tag_title_"+k))}">${icon}<span>${esc(label)}</span></span>`;
+    }).join("")}</span>`;
+  }
   function cardHtml(m){
-    const meta=m.variants>1?tn("library.n_variants",m.variants):m.projects&&!m.variants?tn("library.n_projects",m.projects):m.files>1?tn("library.n_files",m.files):t("library.one_file");
     const att=m.attention&&m.attention.count?`<span class="lib-badge ${m.attention.level==="action"?"is-bad":"is-warn"}" title="${esc(tn("library.attention_title",m.attention.count))}">${esc(m.attention.level==="action"?t("library.badge_action"):t("library.badge_review"))}</span>`:"";
     const off=m.offline?`<span class="lib-badge is-off" title="${esc(m.offline==="all"?t("library.offline_card_title"):t("library.offline_some_title"))}">${esc(t("library.badge_offline"))}</span>`:
       m.missing||m.unreadable?`<span class="lib-badge is-bad" title="${esc(t("library.missing_card_title"))}">${esc(m.missing?t("library.badge_missing"):t("library.badge_unreadable"))}</span>`:"";
     return `<a class="lib-card${m.offline==="all"?" is-offline":""}" href="/library/m/${esc(m.uuid)}" data-uuid="${esc(m.uuid)}">
-      <span class="lib-well">${coverHtml(m.cover,m.name)}<span class="lib-badges">${att}${off}</span></span>
+      <span class="lib-well">${coverHtml(m.cover,m.name)}<span class="lib-badges">${att}${off}</span>${typeTagsHtml(m.types)}</span>
       <span class="lib-card-body">
         <span class="lib-name" title="${esc(m.name)}">${esc(m.name)}</span>
-        <span class="lib-meta">${esc(meta)}${m.materials.length?` · ${esc(m.materials.slice(0,3).join(", "))}`:""}${m.prints?` · <span title="${esc(printsLine(m.prints))}">${esc(tn("library.n_prints",m.prints.count))}</span>`:""}</span>
+        <span class="lib-meta">${cardMetaHtml(m)}</span>
         ${m.families.length?`<span class="lib-fams">${familyChips(m.families,2)}</span>`:""}${folderLineHtml(m.folder)}
       </span></a>`;
   }
