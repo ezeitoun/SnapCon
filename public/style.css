@@ -2326,6 +2326,78 @@
   .lib-fam.is-idle b{display:inline-block; min-width:14px; padding:0 4px; border-radius:999px; background:color-mix(in srgb,var(--ok) 22%,transparent); color:var(--ok); font-size:10px; text-align:center;}
   .lib-fam.is-more{color:var(--ink-faint);}
   .lib-more{display:flex; justify-content:center; padding:18px 0 4px;}
+  /* ---- Folders (library.js): the panel beside the grid at 1024px and up, a
+     sheet under the Folders button below that; the breadcrumb row with
+     Include subfolders; Rescan; the folder line on a card. ---- */
+  .lib-split.has-folders{display:grid; grid-template-columns:240px minmax(0,1fr); gap:16px; align-items:start; margin-bottom:-16px;}
+  /* Sticky stops at its container's bottom: the grid side reaches 16px lower
+     (taken back by the margin above), so at the end of the scroll the panel
+     still ends 16px above the visible bottom, not 32. */
+  .lib-split.has-folders .lib-main{padding-bottom:16px;}
+  .lib-main{min-width:0;}
+  /* Sticky at the top; its height is fitted by fitFolders() (library.js) so
+     its bottom stays 16px above the bottom of what is visible. The header
+     stays put; only the tree scrolls. */
+  .lib-folders{position:sticky; top:8px; display:flex; flex-direction:column; min-height:160px; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 6px 10px 8px; overflow:hidden;}
+  .lib-folders[hidden]{display:none;}
+  .lib-folders .lib-tree-wrap{flex:1 1 auto; min-height:0; overflow:auto;}
+  .lib-folders-head{display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:2px 4px 8px 6px;}
+  .lib-folders-title{min-width:0;}
+  .lib-folders-title h2{margin:0; font-size:13px; font-weight:600; color:var(--ink);}
+  .lib-scan-line{margin-top:2px; font-family:var(--mono); font-size:10.5px; color:var(--ink-faint);}
+  .lib-scan-err{margin-top:4px; font-size:11.5px; line-height:1.35; color:var(--bad);}
+  .lib-scan-err[hidden]{display:none;}
+  .lib-rescan{flex:none; display:inline-flex; align-items:center; gap:5px; font:inherit; font-size:11.5px; font-weight:600; padding:3px 10px 3px 8px; border-radius:999px; cursor:pointer;
+    background:transparent; color:var(--ink); border:1px solid color-mix(in srgb,var(--ink) 28%,transparent);}
+  .lib-rescan.is-icon{padding:4px; width:26px; height:26px; justify-content:center;}
+  .lib-rescan.is-icon .lib-rescan-txt{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0);}
+  .lib-rescan:disabled{cursor:default; color:var(--ink-dim);}
+  .lib-rescan:focus-visible{outline:2px solid var(--signal); outline-offset:2px;}
+  @media (hover:hover) and (pointer:fine){ .lib-rescan:not(:disabled):hover{background:color-mix(in srgb,var(--ink) 8%,transparent);} }
+  .lib-ico{width:14px; height:14px; flex:none;}
+  .lib-rescan.is-running .lib-rescan-ico{animation:libspin 1s linear infinite;}
+  .lib-tree, .lib-tree ul{list-style:none; margin:0; padding:0;}
+  .lib-tree-row{display:flex; align-items:center; padding-left:calc(var(--d) * 14px); border-radius:6px;}
+  .lib-tree-row.is-sel{background:color-mix(in srgb,var(--busy) 16%,transparent);}
+  .lib-tree-tw{flex:none; width:18px; height:26px; display:inline-flex; align-items:center; justify-content:center; background:none; border:0; padding:0; color:var(--ink-faint); cursor:pointer; border-radius:4px;}
+  span.lib-tree-tw{cursor:default;}
+  .lib-tree-caret{width:0; height:0; border-left:5px solid currentColor; border-top:4px solid transparent; border-bottom:4px solid transparent; transition:transform .12s ease;}
+  .lib-tree-tw[aria-expanded="true"] .lib-tree-caret{transform:rotate(90deg);}
+  .lib-tree-pick{flex:1; min-width:0; display:flex; align-items:center; gap:7px; height:26px; padding:0 8px 0 2px; background:none; border:0; font:inherit; font-size:12.5px; color:var(--ink); text-align:left; cursor:pointer; border-radius:6px;}
+  .lib-tree-pick .lib-ico{color:var(--ink-dim);}
+  .lib-tree-name{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .lib-tree-n{flex:none; font-family:var(--mono); font-size:11px; color:var(--ink-faint);}
+  .lib-tree-row.is-sel .lib-tree-pick{font-weight:600;}
+  .lib-tree-row.is-zero .lib-tree-pick{opacity:.5;}
+  .lib-tree-pick:focus-visible, .lib-tree-tw:focus-visible{outline:2px solid var(--signal); outline-offset:-2px;}
+  @media (hover:hover) and (pointer:fine){ .lib-tree-row:not(.is-sel):hover{background:color-mix(in srgb,var(--ink) 6%,transparent);} }
+  /* The filter row's folder tools: Include subfolders, the Folders button
+     (narrow screens) or Rescan (when no location has subfolders). */
+  .lib-f.lib-f-tools{flex:0 0 auto; display:flex; align-items:flex-end; min-height:38px;}
+  .lib-f-tools:empty{display:none;}
+  .lib-tools-scan{display:inline-flex; align-items:center; gap:8px; padding-bottom:7px;}
+  .lib-tools-scan-txt .lib-scan-line{margin:0;}
+  .lib-f-check .switch-row{align-items:center;}
+  .lib-f-check .switch-label{font-size:12.5px;}
+  .lib-folders-btn-wrap .lib-folders-btn{height:38px;}
+  .lib-folders-btn-wrap{position:relative; display:none; align-items:center; gap:6px;}
+  .lib-folders-btn{display:inline-flex; align-items:center; gap:6px;}
+  .lib-sheet{position:absolute; top:calc(100% + 6px); left:0; z-index:40; width:min(320px, calc(100vw - 32px)); max-height:60vh; overflow:auto;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 6px 10px 8px; box-shadow:0 12px 32px color-mix(in srgb,black 35%,transparent);}
+  .lib-sheet[hidden]{display:none;}
+  .lib-grid > .lib-empty{grid-column:1 / -1;}
+  .lib-card-folder{display:flex; align-items:center; gap:5px; min-width:0; font-size:11px; color:var(--ink-faint);}
+  .lib-card-folder .lib-ico{width:12px; height:12px;}
+  .lib-card-folder-txt{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  @media (max-width:1023px){
+    .lib-split.has-folders{display:block;}
+    .lib-folders{display:none;}
+    .lib-folders-btn-wrap{display:inline-flex;}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .lib-rescan.is-running .lib-rescan-ico{animation:none;}
+    .lib-tree-caret{transition:none;}
+  }
 
   .lib-back{display:inline-block; margin:14px 0 4px; color:var(--accent); font-size:13px; font-weight:600; text-decoration:none;}
   .lib-back:hover{text-decoration:underline;}

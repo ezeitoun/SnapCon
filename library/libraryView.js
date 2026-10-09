@@ -118,7 +118,13 @@ function coversFor(db, ids) {
 const SORTS = {
   name: { col: "lower(m.name)", dir: "ASC" },
   recent: { col: "m.created_at", dir: "DESC" },
+  // Models that need attention (the attention filter's rule) first, then
+  // the rest, each in name order. One text key ("0"/"1" + the name), so
+  // keyset paging works as for the others; its list of ids is a bound
+  // parameter (needsAttention), never text in the SQL.
+  attention: { col: "(CASE WHEN m.id IN (SELECT value FROM json_each(?)) THEN '0' ELSE '1' END || lower(m.name))", dir: "ASC", needsIds: true },
 };
+const needsAttention = att => [...att.perModel.entries()].filter(([, rs]) => rs.some(r => r.level !== "info")).map(([id]) => id);
 const TYPES = {
   printable: "m.id IN (SELECT f.model_id FROM files f JOIN variants v ON v.file_id = f.id WHERE f.entry_path = '')",
   project: "m.id IN (SELECT f.model_id FROM files f JOIN projects p ON p.file_id = f.id WHERE f.entry_path = '')",
@@ -129,7 +135,35 @@ const TYPES = {
 // person is never passed through.
 const { ftsQuery } = require("./searchTerms");
 
-function listModels(db, { q = "", family = "", root = "", type = "", material = "", attention = false, hidden = false, sort = "name", cursor = null, limit = 60, printerVisible } = {}) {
+// A folder of a location, as the Library page selects it: `folder` is the
+// path relative to the location ("" its top), `subfolders` whether the
+// folders below it count, and `loose` the top's own files only. Folders are
+// read from the files that are present: a deleted folder's files stay in the
+// index as missing for 30 days (MISSING_GRACE_MS), but the folder is gone.
+// Compared with substr, not LIKE: LIKE ignores ASCII case and treats % and _
+// as wildcards, and folder names may differ only in case.
+function cleanFolder(folder) {
+  if (folder == null) return null;
+  return String(folder).split("/").filter(Boolean).join("/");
+}
+function folderCondition(root, folder, { subfolders = true, loose = false } = {}) {
+  if (!root) return null;
+  const present = "SELECT model_id FROM files WHERE root_id = ? AND entry_path = '' AND state = 'present'";
+  const top = { sql: `m.id IN (${present} AND instr(rel_path, '/') = 0)`, args: [root] };
+  if (loose) return top;
+  const f = cleanFolder(folder);
+  if (f == null) return null;
+  if (f === "" && !subfolders) return top;
+  if (f === "") return null;   // the whole location: the location filter alone, as before folders existed
+  const prefix = f + "/";
+  return subfolders
+    ? { sql: `m.id IN (${present} AND substr(rel_path, 1, ?) = ?)`, args: [root, prefix.length, prefix] }
+    : { sql: `m.id IN (${present} AND substr(rel_path, 1, ?) = ? AND instr(substr(rel_path, ?), '/') = 0)`, args: [root, prefix.length, prefix, prefix.length + 1] };
+}
+
+// The conditions every listing shares: the grid and the folder counts use
+// the same ones, so a count always matches the grid it leads to.
+function modelWhere(db, { q = "", family = "", root = "", type = "", material = "", attention = false, hidden = false, folder = null, subfolders = true, loose = false, printerVisible } = {}, att) {
   // A merged-away Model is never listed (its files are in the survivor); a
   // hidden one only when hidden Models are asked for (M6, recoverable).
   const where = ["m.merged_into IS NULL", hidden ? "m.hidden = 1" : "m.hidden = 0", "EXISTS (SELECT 1 FROM files f WHERE f.model_id = m.id AND f.entry_path = '')"];
@@ -138,29 +172,120 @@ function listModels(db, { q = "", family = "", root = "", type = "", material = 
   if (fq) { where.push("m.id IN (SELECT rowid FROM model_fts WHERE model_fts MATCH ?)"); args.push(fq); }
   if (family) { where.push("m.id IN (SELECT model_id FROM model_families WHERE printer_family = ?)"); args.push(family); }
   if (root) { where.push("m.id IN (SELECT model_id FROM files WHERE root_id = ? AND entry_path = '')"); args.push(root); }
+  const fc = folderCondition(root, folder, { subfolders, loose });
+  if (fc) { where.push(fc.sql); args.push(...fc.args); }
   if (type && TYPES[type]) where.push(TYPES[type]);
   if (material) {
     where.push(`m.id IN (SELECT f.model_id FROM files f JOIN variants v ON v.file_id = f.id, json_each(v.filaments_json) j
       WHERE upper(json_extract(j.value, '$.type')) = upper(?))`);
     args.push(material);
   }
-  const att = attentionIndex(db, { printerVisible });
+  att = att || attentionIndex(db, { printerVisible });
   if (attention) {
-    const ids = [...att.perModel.entries()].filter(([, rs]) => rs.some(r => r.level !== "info")).map(([id]) => id);
-    where.push("m.id IN (SELECT value FROM json_each(?))"); args.push(JSON.stringify(ids));
+    where.push("m.id IN (SELECT value FROM json_each(?))"); args.push(JSON.stringify(needsAttention(att)));
   }
+  return { where, args, att };
+}
+
+function listModels(db, opts = {}) {
+  const { sort = "name", cursor = null, limit = 60, root = "", folder = null, subfolders = true, loose = false } = opts;
+  const { where, args, att } = modelWhere(db, opts);
   const s = SORTS[sort] || SORTS.name;
   const total = db.prepare(`SELECT count(*) AS n FROM models m WHERE ${where.join(" AND ")}`).get(...args).n;
   const page = Math.max(1, Math.min(PAGE_MAX, limit | 0 || 60));
+  // The sort key's own parameters, bound each time it appears (SELECT, the
+  // cursor comparison, ORDER BY), in that order.
+  const sa = s.needsIds ? [JSON.stringify(needsAttention(att))] : [];
   const kw = [...where], ka = [...args];
   const cur = decodeCursor(cursor);
-  if (cur) { kw.push(`(${s.col}, m.id) ${s.dir === "ASC" ? ">" : "<"} (?, ?)`); ka.push(cur[0], cur[1]); }
+  if (cur) { kw.push(`(${s.col}, m.id) ${s.dir === "ASC" ? ">" : "<"} (?, ?)`); ka.push(...sa, cur[0], cur[1]); }
   const rows = db.prepare(`SELECT m.id, m.uuid, m.name, m.designer, m.created_at, ${s.col} AS sortv FROM models m WHERE ${kw.join(" AND ")}
-    ORDER BY ${s.col} ${s.dir}, m.id ${s.dir} LIMIT ?`).all(...ka, page + 1);
+    ORDER BY ${s.col} ${s.dir}, m.id ${s.dir} LIMIT ?`).all(...sa, ...ka, ...sa, page + 1);
   const more = rows.length > page;
   const pageRows = rows.slice(0, page);
   const last = pageRows[pageRows.length - 1];
-  return { total, models: cards(db, pageRows, att), next: more && last ? encodeCursor([last.sortv, last.id]) : null };
+  const models = cards(db, pageRows, att);
+  // Below a selected folder, each card says where under it the Model's files are.
+  const f = cleanFolder(folder);
+  if (root && f != null && subfolders && !loose) {
+    const where_ = folderPaths(db, pageRows.map(r => r.id), root, f);
+    models.forEach((m, i) => { m.folder = where_.get(pageRows[i].id) || null; });
+  }
+  return { total, models, next: more && last ? encodeCursor([last.sortv, last.id]) : null };
+}
+
+// Where a Model's files sit below the selected folder: null when one of them
+// is directly in it, one path when they share a subfolder, and every path
+// when they are spread over several ("2 folders"). Present files only.
+function folderPaths(db, ids, root, folder) {
+  const out = new Map();
+  if (!ids.length) return out;
+  const prefix = folder ? folder + "/" : "";
+  const dirs = new Map();
+  for (const r of db.prepare(`SELECT model_id, rel_path FROM files WHERE root_id = ? AND entry_path = '' AND state = 'present'
+      AND model_id IN (SELECT value FROM json_each(?)) AND substr(rel_path, 1, ?) = ?`).all(root, JSON.stringify(ids), prefix.length, prefix)) {
+    const rel = r.rel_path.slice(prefix.length);
+    const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    if (!dirs.has(r.model_id)) dirs.set(r.model_id, new Set());
+    dirs.get(r.model_id).add(dir);
+  }
+  for (const [id, set] of dirs) {
+    if (set.has("")) continue;
+    const paths = [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    out.set(id, paths.length === 1 ? { path: paths[0] } : { paths });
+  }
+  return out;
+}
+
+// The Folders panel (Library page): each location's folders, from its present
+// files, with how many Models are in each (and below it) under the active
+// filters — `count` — and with none — `total`, so a folder the filters empty
+// stays listed, dimmed, instead of the tree jumping. A location's own row
+// counts exactly what the grid shows for it; "loose" is its top's own files.
+// Sorted by name, case-insensitive. One location, or all of them.
+function folderTree(db, opts = {}) {
+  const { root = "" } = opts;
+  const { where, args, att } = modelWhere(db, { ...opts, root: "", folder: null });
+  const matching = new Set(db.prepare(`SELECT m.id FROM models m WHERE ${where.join(" AND ")}`).all(...args).map(r => r.id));
+  const base = modelWhere(db, { hidden: opts.hidden }, att);
+  const visible = new Set(db.prepare(`SELECT m.id FROM models m WHERE ${base.where.join(" AND ")}`).all(...base.args).map(r => r.id));
+  const roots = db.prepare("SELECT id, name, enabled FROM roots ORDER BY name COLLATE NOCASE").all().filter(r => r.enabled && (!root || r.id === root));
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const out = [];
+  for (const r of roots) {
+    // The location's own row: the same condition as the Location filter.
+    const inRoot = new Set(db.prepare("SELECT DISTINCT model_id FROM files WHERE root_id = ? AND entry_path = '' AND model_id IS NOT NULL").all(r.id).map(x => x.model_id));
+    const nodes = new Map();   // folder path -> { name, path, count:Set, total:Set, children:Set }
+    const loose = { count: new Set(), total: new Set() };
+    const node = p => {
+      if (!nodes.has(p)) nodes.set(p, { name: p.slice(p.lastIndexOf("/") + 1), path: p, count: new Set(), total: new Set(), children: new Set() });
+      return nodes.get(p);
+    };
+    for (const f of db.prepare("SELECT model_id, rel_path FROM files WHERE root_id = ? AND entry_path = '' AND state = 'present' AND model_id IS NOT NULL").all(r.id)) {
+      if (!visible.has(f.model_id)) continue;
+      const hit = matching.has(f.model_id);
+      let dir = f.rel_path.includes("/") ? f.rel_path.slice(0, f.rel_path.lastIndexOf("/")) : "";
+      if (dir === "") { loose.total.add(f.model_id); if (hit) loose.count.add(f.model_id); continue; }
+      let child = null;
+      for (;;) {
+        const n = node(dir);
+        n.total.add(f.model_id); if (hit) n.count.add(f.model_id);
+        if (child) n.children.add(child);
+        const up = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+        if (!up) break;
+        child = dir; dir = up;
+      }
+    }
+    const build = p => {
+      const n = nodes.get(p);
+      return { name: n.name, path: n.path, count: n.count.size, total: n.total.size, children: [...n.children].map(build).sort(byName) };
+    };
+    const top = [...nodes.keys()].filter(p => !p.includes("/")).map(build).sort(byName);
+    let count = 0, total = 0;
+    for (const id of inRoot) { if (visible.has(id)) { total++; if (matching.has(id)) count++; } }
+    out.push({ id: r.id, name: r.name, count, total, children: top, loose: loose.total.size && top.length ? { count: loose.count.size, total: loose.total.size } : null });
+  }
+  return { count: matching.size, total: visible.size, roots: out };
 }
 const encodeCursor = v => Buffer.from(JSON.stringify(v)).toString("base64url");
 function decodeCursor(c) {
@@ -432,4 +557,4 @@ function attentionCounts(db, { printerVisible = () => true } = {}) {
   return counts;
 }
 
-module.exports = { listModels, facets, modelDetail, attentionList, attentionCounts, levelOf, ftsQuery, modelContext };
+module.exports = { listModels, folderTree, folderCondition, cleanFolder, facets, modelDetail, attentionList, attentionCounts, levelOf, ftsQuery, modelContext };

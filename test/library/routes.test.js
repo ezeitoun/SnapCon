@@ -58,7 +58,10 @@ test("view and regular users can list locations but not see their folders or cha
     assert.equal(list.body.roots[0].path, undefined, "a folder can be an internal UNC path");
     assert.equal((await s.call(who, "POST", "/api/library/roots", { path: s.base })).status, 403);
     assert.equal((await s.call(who, "DELETE", "/api/library/roots/gcode")).status, 403);
-    assert.equal((await s.call(who, "POST", "/api/library/roots/gcode/rescan")).status, 403);
+    // Rescan (library.rescan): Regular may, View may not; neither sees the folder.
+    const rs = await s.call(who, "POST", "/api/library/roots/gcode/rescan");
+    assert.equal(rs.status, who === "regular" ? 200 : 403);
+    if (who === "regular") assert.equal(rs.body.path, undefined, "a folder can be an internal UNC path");
     assert.equal((await s.call(who, "POST", "/api/library/backup")).status, 403);
     const st = await s.call(who, "GET", "/api/library/status");
     assert.equal(st.status, 200);

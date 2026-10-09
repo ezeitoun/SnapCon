@@ -37,8 +37,13 @@ function registerLibraryRoutes(app, { library, requireAuth, actorFromReq }) {
     send(res, () => library.updateRoot(req.params.id, req.body || {}, actorFromReq(req))));
   app.delete("/api/library/roots/:id", requireAuth, need("library.sources.manage"), (req, res) =>
     send(res, () => library.removeRoot(req.params.id, actorFromReq(req))));
-  app.post("/api/library/roots/:id/rescan", requireAuth, need("library.sources.manage"), (req, res) =>
-    send(res, () => library.rescan(req.params.id)));
+  // Rescan: Settings (managers) and the Library page (anyone with
+  // library.rescan). Only a manager's answer carries the location's folder.
+  app.post("/api/library/roots/:id/rescan", requireAuth, need("library.rescan"), (req, res) =>
+    send(res, async () => {
+      const v = await library.rescan(req.params.id);
+      return library.can(req.user, "library.sources.manage") ? v : library.scanState(req.params.id);
+    }));
   app.post("/api/library/backup", requireAuth, need("library.backup"), (req, res) =>
     send(res, () => library.backupNow("manual")));
   app.post("/api/library/rebuild", requireAuth, need("library.sources.manage"), (req, res) =>
@@ -67,12 +72,21 @@ function registerLibraryRoutes(app, { library, requireAuth, actorFromReq }) {
   const str = (v, max = 200) => (typeof v === "string" ? v.slice(0, max) : "");
   app.get("/api/library/overview", requireAuth, need("library.view"), (req, res) => send(res, () => library.overview(req.user)));
   app.get("/api/library/facets", requireAuth, need("library.view"), (req, res) => send(res, () => library.facets()));
+  // The filters of the grid, shared by the models and their folder counts.
+  // `folder` is relative to the location (`location`); `subfolders=0` keeps
+  // to the folder's own files, `loose=1` to the location's top files.
+  const filtersOf = q => ({
+    q: str(q.q), family: str(q.printer, 80), root: str(q.location, 80), type: str(q.type, 20),
+    material: str(q.material, 40), attention: q.attention === "1", hidden: q.hidden === "1",
+    folder: typeof q.folder === "string" ? q.folder.slice(0, 1024) : null, subfolders: q.subfolders !== "0", loose: q.loose === "1",
+  });
   app.get("/api/library/models", requireAuth, need("library.view"), (req, res) =>
     send(res, () => library.browse({
-      q: str(req.query.q), family: str(req.query.printer, 80), root: str(req.query.location, 80), type: str(req.query.type, 20),
-      material: str(req.query.material, 40), attention: req.query.attention === "1", hidden: req.query.hidden === "1", sort: str(req.query.sort, 10) || "name",
+      ...filtersOf(req.query), sort: str(req.query.sort, 10) || "name",
       cursor: str(req.query.cursor, 400) || null, limit: Math.max(1, Math.min(120, parseInt(req.query.limit, 10) || 60)),
     }, req.user)));
+  app.get("/api/library/folders", requireAuth, need("library.view"), (req, res) =>
+    send(res, () => library.folders(filtersOf(req.query), req.user)));
   app.get("/api/library/models/:uuid", requireAuth, need("library.view"), (req, res) => send(res, () => library.model(req.params.uuid, req.user)));
   app.get("/api/library/attention", requireAuth, need("library.view"), (req, res) => send(res, () => library.attention(req.user)));
 

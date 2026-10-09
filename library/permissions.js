@@ -14,6 +14,7 @@ const CAPABILITIES = [
   "library.edit.metadata", "library.edit.collections", "library.edit.cover", "library.edit.grouping",
   "library.review", "library.hide",
   "library.sources.manage", "library.backup", "library.diagnostics", "library.files.delete",
+  "library.rescan",
 ];
 
 const VIEW = ["library.view", "library.download"];
@@ -21,11 +22,15 @@ const EDIT = ["library.edit.metadata", "library.edit.collections", "library.edit
   "library.review", "library.hide"];
 // library.files.delete is future work (D2) and is seeded for no role.
 const ADMIN_ONLY = ["library.sources.manage", "library.backup", "library.diagnostics"];
+// Rescan a location from the Library page: re-reads what is there, changes
+// nothing a person decided. Managing locations (add, remove, change) stays
+// library.sources.manage.
+const RESCAN = ["library.rescan"];
 
 const ROLE_DEFAULTS = {
   view: [...VIEW],
-  regular: [...VIEW, ...EDIT],
-  admin: [...VIEW, ...EDIT, ...ADMIN_ONLY],
+  regular: [...VIEW, ...EDIT, ...RESCAN],
+  admin: [...VIEW, ...EDIT, ...RESCAN, ...ADMIN_ONLY],
 };
 
 function seedRoleDefaults(db) {

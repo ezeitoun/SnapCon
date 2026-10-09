@@ -972,6 +972,7 @@ only.
 |---|---|---|---|
 | `library.view`, `library.download` | ✓ | ✓ | ✓ |
 | `library.edit.metadata` · `library.edit.collections` · `library.edit.cover` · `library.edit.grouping` · `library.review` · `library.hide` | | ✓ | ✓ |
+| `library.rescan` (rescan a location from the Library page; answers never carry its folder) | | ✓ | ✓ |
 | `library.sources.manage` · `library.backup` · `library.diagnostics` · `library.files.delete` (future) | | | ✓ |
 
 - Printing stays on the existing `requireRegular` + `printerVisibleTo` + maintenance +

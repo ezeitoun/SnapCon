@@ -86,6 +86,24 @@ function createLibraryService({
     };
   }
 
+  // A location's scan, as the Library page shows it: whether a scan is
+  // running or waiting, when the last one finished, and why the location
+  // can't be read — in words that never carry its folder (the page shows
+  // none; Settings shows managers the full message).
+  const SAFE_ERRORS = /^(folder not found|not a folder|not readable \([A-Z]+\))$/;
+  function scanState(id) {
+    const r = store.roots.get(id);
+    if (!r) throw new LibraryError(404, "not_found", "No such location.");
+    const s = probe.get(id);
+    const failing = r.status === "error" || r.status === "offline";
+    return {
+      id: r.id, name: r.name, status: r.status,
+      scanning: !!(scanning && scanning.rootId === id), queued: scanQueue.includes(id), checking: !!(s && s.inFlight),
+      lastScanAt: r.last_scan_at || null,
+      error: failing ? (SAFE_ERRORS.test(r.last_error || "") ? r.last_error : r.status === "offline" ? "not reachable" : "can't be read") : null,
+    };
+  }
+
   // ---- the indexer ----
 
   // Queue a scan of a location. A scan already queued or running is not
@@ -645,6 +663,8 @@ function createLibraryService({
     // M5: the Library itself, from the index alone (never a file read).
     browse: (opts, user) => { requireAvailable(); return libraryView.listModels(store.db, { ...(opts || {}), printerVisible: pid => printerVisible(user, pid) }); },
     facets: () => { requireAvailable(); return libraryView.facets(store.db); },
+    folders: (opts, user) => { requireAvailable(); return libraryView.folderTree(store.db, { ...(opts || {}), printerVisible: pid => printerVisible(user, pid) }); },
+    scanState,
     model: (uuid, user) => {
       requireAvailable();
       const m = libraryView.modelDetail(store.db, String(uuid || ""), { printerVisible: pid => printerVisible(user, pid) });
@@ -670,11 +690,11 @@ function createLibraryService({
     overview: user => {
       requireAvailable();
       const can = {};
-      for (const [k, cap] of Object.entries({ grouping: "library.edit.grouping", metadata: "library.edit.metadata", cover: "library.edit.cover", hide: "library.hide", review: "library.review", diagnostics: "library.diagnostics" })) {
+      for (const [k, cap] of Object.entries({ grouping: "library.edit.grouping", metadata: "library.edit.metadata", cover: "library.edit.cover", hide: "library.hide", review: "library.review", diagnostics: "library.diagnostics", rescan: "library.rescan" })) {
         can[k] = !!authz && authz.can(user, cap);
       }
       const s = status();
-      const roots = store.roots.list().filter(r => r.enabled).map(r => ({ id: r.id, name: r.name, status: r.status, offline: r.status === "offline", lastOkAt: r.last_ok_at || null }));
+      const roots = store.roots.list().filter(r => r.enabled).map(r => ({ ...scanState(r.id), offline: r.status === "offline", lastOkAt: r.last_ok_at || null }));
       const ix = s.indexer;
       return {
         roots,
