@@ -17,7 +17,8 @@ locales/
 .claude/
 .agents/
 skills-lock.json
-CLAUDE.md
+# Claude Code's private, machine-specific instructions (CLAUDE.md itself is tracked)
+CLAUDE.local.md
 CODE_REVIEW.md
 SECURITY_REVIEW.md
 VERIFIED_CODE_REVIEW.md
