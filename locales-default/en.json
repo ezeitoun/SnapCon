@@ -3,7 +3,7 @@
     "locale": "en",
     "language": "English",
     "nativeName": "English",
-    "version": 91,
+    "version": 92,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-09"
   },
@@ -407,7 +407,8 @@
       "reason_unreachable": "Couldn’t reach the printer",
       "reason_rejected": "The printer refused the file",
       "reason_file_unreadable": "Couldn’t read the file from the G-code folder",
-      "reason_unknown": "The upload stopped"
+      "reason_unknown": "The upload stopped",
+      "cancel_view_only_title": "View-only users can’t cancel uploads"
     }
   },
   "health": {

@@ -1588,6 +1588,21 @@ app.get("/api/local-thumbnail", requireAuth, async (req, res) => {
 const JOBS = new Map();   // jobId -> { phase, sent, total, done, error, result, ts }
 const newJobId = () => "j" + Date.now() + Math.random().toString(16).slice(2, 6);
 
+// The upload a printer's fleet row reports while it is going out, so every
+// tab — not only the one that started it — shows the card's upload strip
+// (TODO §24). Only /api/print jobs carry printerId; only their upload phase
+// counts (mapping/starting/done are the starting tab's business), and the
+// newest wins if two overlap. Who may see it is the row's own visibility;
+// cancelling stays behind /api/print-cancel's role and printer checks.
+function activeUploadFor(printerId) {
+  let best = null, bestId = null;
+  for (const [id, job] of JOBS) {
+    if (job.printerId !== printerId || job.done || job.phase !== "upload") continue;
+    if (!best || job.ts > best.ts) { best = job; bestId = id; }
+  }
+  return best ? { jobId: bestId, file: best.file || "", sent: best.sent || 0, total: best.total || 0, cancellable: !!best.cancelUpload } : null;
+}
+
 // Normal cleanup happens when /api/print-status reads a finished job — but if
 // the tab closed mid-upload nobody ever polls, so sweep abandoned finished
 // jobs too. Every completion path (success or error) sets done.
@@ -2830,6 +2845,8 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // firmware mod). Synchronous and I/O-free by the same contract
     // getCapabilities has; null for every connector that speaks only one.
     const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)), lastSeenAt: lastSeenIso(p) };
+    const up = activeUploadFor(p.id);
+    if (up) row.upload = up;
     const qf = queuedFile.get(i);
     const pl = pendingLoad.get(i);
     // queuedFile (uploading/ready/error) reflects the retry sweep actually

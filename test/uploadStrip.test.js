@@ -28,6 +28,7 @@ const sandbox = {
   esc: s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"),
   stripExt: n => String(n || "").replace(/\.[^./\\]+$/, ""),
   UPLOAD_CANCEL: new Map(), SEND_FILL: new Map(),
+  canAct: () => true,   // a Regular or Admin user (View-only: test/uploadCrossTab.test.js)
 };
 vm.createContext(sandbox);
 vm.runInContext("const UPLOADS = new Map();\nthis.UPLOADS = UPLOADS;\n" + line("const UPLOAD_FAILURE_REASONS = {") + "\n" +
@@ -136,7 +137,7 @@ test("progress is patched in place; state changes rebuild; cancel is quiet; an u
   assert.match(poll, /else if\(strip && d\.failedPhase==="upload"\)\{[\s\S]*?state:"failed", reason:uploadFailureReason\(d\.errorCode, d\.error\)/);
   assert.match(poll, /if\(strip && strip\.state==="uploading" && d\.phase!=="upload"\) setUploadState\(printerId, null\);/, "finished: gone, the card shows Loaded / printing");
   assert.doesNotMatch(extractFn("patchUploadProgress"), /renderFleet/, "a progress tick never rebuilds");
-  assert.match(appSrc, /uploadStrip:UPLOADS\.has\(String\(p\.id\)\) \? UPLOADS\.get\(String\(p\.id\)\)\.state\+"\|"\+UPLOADS\.get\(String\(p\.id\)\)\.name : null/);
+  assert.match(appSrc, /uploadStrip:UPLOADS\.has\(String\(p\.id\)\) \? uploadStripKey\(UPLOADS\.get\(String\(p\.id\)\)\) : null/);
 });
 
 // ---- the Print options dialog's footer ----

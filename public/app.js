@@ -428,13 +428,57 @@ function setSendFill(printerId, start, pct){
 }
 
 // ---- The card's upload strip ----
-// One per printer while a send from this tab is uploading, or after its
-// upload failed (until Retry or Dismiss): String(printer id) ->
-// { state:"uploading"|"failed", name, pct, sent, total, reason, retry }.
+// One per printer while an upload is going out, or after one this tab started
+// failed (until Retry or Dismiss): String(printer id) ->
+// { state:"uploading"|"failed", origin:"local"|"fleet", jobId, name, pct,
+//   sent, total, cancellable (fleet), reason, retry (local) }.
+// "local": started by this tab, which polls its job every 400 ms (pollJob)
+// and owns the entry — the fleet data never overrides it. "fleet": started
+// elsewhere (another tab, user or device, or this tab before a reload), as
+// reported by /api/fleet's row.upload (reconcileFleetUploads); it goes away
+// when the row stops reporting it. A failed upload stays only in the tab
+// that started it (its Retry needs that tab's send settings).
 // Shown in the banner position by uploadStripHtml(); progress is patched in
-// place (patchUploadProgress), and only a state change rebuilds the card (it
-// is in cardSignature()). Only the tab that started the upload has it.
+// place (paintUploadProgress), and only a state change rebuilds the card (it
+// is in cardSignature()).
 const UPLOADS = new Map();
+// Jobs that have ended here (finished, failed, cancelled, or gone from the
+// fleet data): a fleet answer built just before the end must not bring one
+// back. jobId -> when; pruned after JOB_ENDED_KEEP_MS.
+const UPLOAD_ENDED = new Map();
+const JOB_ENDED_KEEP_MS = 15 * 60 * 1000;
+// Fold the fleet rows' running uploads into UPLOADS. Returns the printers
+// whose strip needs a rebuild (it appeared, went away, changed job, or can
+// now be cancelled) and those that only need their progress painted. A
+// "local" entry is never touched. Pure apart from the two maps it is given.
+function reconcileFleetUploads(rows, uploads, ended, now){
+  const rebuild=new Set(), paint=new Set(), seen=new Set();
+  for(const [id, at] of ended) if(now-at>JOB_ENDED_KEEP_MS) ended.delete(id);
+  for(const row of rows||[]){
+    if(!row) continue;
+    const key=String(row.id); seen.add(key);
+    const cur=uploads.get(key), up=row.upload;
+    if(cur && cur.origin!=="fleet") continue;
+    if(up && up.jobId && !ended.has(up.jobId)){
+      const pct=up.total ? Math.min(100, Math.round(up.sent/up.total*100)) : 0;
+      if(!cur || cur.jobId!==up.jobId){
+        uploads.set(key, { state:"uploading", origin:"fleet", jobId:up.jobId, name:up.file, sent:up.sent, total:up.total, pct, cancellable:!!up.cancellable });
+        rebuild.add(key);
+        continue;
+      }
+      if(up.sent>=cur.sent){ cur.sent=up.sent; cur.total=up.total; cur.pct=pct; paint.add(key); }
+      if(cur.cancellable!==!!up.cancellable){ cur.cancellable=!!up.cancellable; rebuild.add(key); }
+    } else if(cur){
+      ended.set(cur.jobId, now);
+      uploads.delete(key);
+      rebuild.add(key);
+    }
+  }
+  // A printer no longer in the answer (removed, or no longer visible).
+  for(const [key, u] of uploads) if(u.origin==="fleet" && !seen.has(key)){ ended.set(u.jobId, now); uploads.delete(key); rebuild.add(key); }
+  for(const k of rebuild) paint.delete(k);
+  return { rebuild, paint };
+}
 function uploadMB(bytes){ const s=(Math.max(0,bytes||0)/1048576).toFixed(1); return s.endsWith(".0") ? s.slice(0,-2) : s; }
 // "34% · 15.6 of 46 MB"; "15.6 MB sent" when the total isn't known yet. Pure.
 function uploadDetailText(pct, sent, total){
@@ -471,13 +515,20 @@ function uploadStripHtml(p){
   }
   // On a printing printer the file is the next job; the print itself keeps its badge and progress.
   const next=p.state==="printing"||p.state==="paused";
-  const job=UPLOAD_CANCEL.get(String(p.id));
+  // Cancel: this tab's own job once pollJob says it can be; another tab's
+  // from the fleet data. View-only users see why they can't (the server
+  // checks the role again on /api/print-cancel).
+  const job=u.origin==="fleet" ? (u.cancellable ? u.jobId : null) : UPLOAD_CANCEL.get(String(p.id));
+  const why=!canAct() ? t("fleet.upload.cancel_view_only_title") : !job ? t("fleet.upload.cancel_not_yet_title") : null;
   return `<div class="upload-strip">`+
     `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}"><span class="upload-strip-name">${esc(t(next?"fleet.upload.uploading_next":"fleet.upload.uploading",{file:name}))}</span><span class="upload-strip-pct" data-live="upload-pct">${u.pct}%</span></div>`+
     `<div class="upload-strip-detail" data-live="upload-detail">${esc(uploadDetailText(u.pct,u.sent,u.total))}</div></div>`+
-    `<button type="button" class="upload-strip-btn danger" data-cancel-upload="${esc(job||"")}" data-printer="${esc(p.id)}"${job?"":` disabled title="${esc(t("fleet.upload.cancel_not_yet_title"))}"`}>${esc(t("fleet.print.cancel_upload"))}</button>`+
+    `<button type="button" class="upload-strip-btn danger" data-cancel-upload="${esc(job||"")}" data-printer="${esc(p.id)}"${why?` disabled title="${esc(why)}"`:""}>${esc(t("fleet.print.cancel_upload"))}</button>`+
     bar+`</div>`;
 }
+// What about a strip rebuilds its card: its state, file and job, and (for
+// another tab's upload) whether it can be cancelled yet. Progress is painted.
+const uploadStripKey=u=>[u.state, u.name, u.jobId||"", u.origin==="fleet"&&u.cancellable?"c":""].join("|");
 // A state change (uploading, failed, gone) rebuilds the card.
 function setUploadState(printerId, entry){
   if(printerId==null) return;
@@ -485,11 +536,17 @@ function setUploadState(printerId, entry){
   if(entry) UPLOADS.set(key, entry); else if(UPLOADS.has(key)) UPLOADS.delete(key); else return;
   renderFleet({incremental:true});
 }
-// A progress tick: written into the strip on screen, no rebuild.
+// A progress tick from this tab's own job poll: no rebuild.
 function patchUploadProgress(printerId, d){
   const u=UPLOADS.get(String(printerId));
   if(!u || u.state!=="uploading" || !d.total) return;
   u.sent=d.sent; u.total=d.total; u.pct=Math.min(100, Math.round(d.sent/d.total*100));
+  paintUploadProgress(printerId);
+}
+// The strip's percentage, detail and bar written in place from its entry.
+function paintUploadProgress(printerId){
+  const u=UPLOADS.get(String(printerId));
+  if(!u || u.state!=="uploading") return;
   const card=document.querySelector(`#fleet .pcard[data-pid="${printerId}"]`);
   if(!card) return;
   const set=(sel,txt)=>{ const el=card.querySelector(sel); if(el && el.textContent!==txt) el.textContent=txt; };
@@ -5778,6 +5835,10 @@ async function loadFleet(){
     if(body!==FLEET_PREV_BODY){ // unchanged payload → the DOM already shows this state
       FLEET_PREV_BODY=body;
       FLEET=JSON.parse(body);
+      // Uploads started elsewhere (TODO §24): new or ended ones change the
+      // cards' signatures, so this render rebuilds them; progress is
+      // painted in place right after it.
+      const ups=reconcileFleetUploads(FLEET, UPLOADS, UPLOAD_ENDED, Date.now());
       // The one call site that opts into incremental rendering — see
       // reconcileFleetCards()/cardSignature(). Every other renderFleet()
       // call site (sort/filter/view-mode/etc. changes) keeps full-rebuild
@@ -5786,6 +5847,7 @@ async function loadFleet(){
       // all of them represent "refetch from server and reconcile," so all
       // of them benefit from diffing here, not just the timer tick.
       renderFleet({ incremental: true });
+      for(const id of ups.paint) paintUploadProgress(id);
       updateAllPrinterRowStatuses();
       // Firmware-tab checkboxes are gated on live printer state — a printer
       // that just started printing must stop being selectable here too.
@@ -6237,7 +6299,7 @@ function cardSignature(p){
     // Which button is filling, not how far: the percentage is patched in place.
     sendFill:SEND_FILL.has(String(p.id)) ? SEND_FILL.get(String(p.id)).start : null,
     // The upload strip's state and file; its progress is patched in place.
-    uploadStrip:UPLOADS.has(String(p.id)) ? UPLOADS.get(String(p.id)).state+"|"+UPLOADS.get(String(p.id)).name : null
+    uploadStrip:UPLOADS.has(String(p.id)) ? uploadStripKey(UPLOADS.get(String(p.id))) : null
   });
 }
 // "Check again" on the monitoring-only note. The operator has just switched
@@ -7391,7 +7453,7 @@ async function pushTo(printer, start, extraUI, prefs, onProgress, plate, resend)
       ok=true;
     } else {
       // The card's upload strip, with what Retry needs to send it again.
-      setUploadState(printer, { state:"uploading", name:String(file).split("/").pop(), pct:0, sent:0, total:0,
+      setUploadState(printer, { state:"uploading", origin:"local", jobId:d.jobId, name:String(file).split("/").pop(), pct:0, sent:0, total:0,
         retry:{ file, start, map:{ ...map }, prefs, plate, src } });
       ok=await pollJob(d.jobId, st, start, mapped, pct=>setSendFill(printer, start, pct), extraUI, prefs, printer, onProgress);
     }
@@ -7582,6 +7644,7 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
     // However the job ended, an upload still showing as running is over: a
     // finished one leaves the card to its Loaded / printing state, and a
     // failed one has already turned its strip red (that one stays).
+    UPLOAD_ENDED.set(jobId, Date.now());
     const left=printerId!=null ? UPLOADS.get(String(printerId)) : null;
     if(left && left.state==="uploading") setUploadState(printerId, null);
   }

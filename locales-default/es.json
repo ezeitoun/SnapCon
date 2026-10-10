@@ -3,7 +3,7 @@
     "locale": "es",
     "language": "Spanish",
     "nativeName": "Español",
-    "version": 91,
+    "version": 92,
     "snapconVersion": "0.8.0",
     "updated": "2026-10-09"
   },
@@ -407,7 +407,8 @@
       "reason_unreachable": "No se pudo contactar con la impresora",
       "reason_rejected": "La impresora rechazó el archivo",
       "reason_file_unreadable": "No se pudo leer el archivo de la carpeta de G-code",
-      "reason_unknown": "La subida se detuvo"
+      "reason_unknown": "La subida se detuvo",
+      "cancel_view_only_title": "Los usuarios de solo lectura no pueden cancelar subidas"
     }
   },
   "health": {
