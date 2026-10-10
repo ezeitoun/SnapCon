@@ -179,7 +179,7 @@
   <aside class="side">
     <div class="head">
       <div class="sort-wrap">
-        <button class="refresh icon-btn" id="fileSortBtn" data-i18n-title="global.file_sort.title_new" title="Sort: Newest"><img src="/file-sort.svg" class="side-icon" data-i18n-alt="global.topbar.sort_alt" alt="Sort"></button>
+        <button class="refresh icon-btn" id="fileSortBtn" data-i18n-title="global.file_sort.title_new" title="Sort: newest"><img src="/file-sort.svg" class="side-icon" data-i18n-alt="global.topbar.sort_alt" alt="Sort"></button>
         <div class="sort-menu left" id="fileSortMenu">
           <button class="sort-opt" data-fsort="new"><span class="sort-check" id="fsc-new"></span><span data-i18n="global.file_sort.option_new">Newest</span></button>
           <button class="sort-opt" data-fsort="old"><span class="sort-check" id="fsc-old"></span><span data-i18n="global.file_sort.option_old">Oldest</span></button>
@@ -190,7 +190,7 @@
         </div>
       </div>
       <div class="head-btns">
-        <button class="refresh icon-btn" id="newFolderBtn" data-i18n-title="files.new_folder_title" title="Create a new folder here"><img src="/new-folder.svg" class="side-icon" data-i18n-alt="files.new_folder_alt" alt="New Folder"></button>
+        <button class="refresh icon-btn" id="newFolderBtn" data-i18n-title="files.new_folder_title" title="Create a new folder here"><img src="/new-folder.svg" class="side-icon" data-i18n-alt="files.new_folder_alt" alt="New folder"></button>
         <button class="refresh icon-btn" id="uploadFilesBtn" data-i18n-title="files.upload_title" title="Upload files from this computer"><img src="/upload-file.svg" class="side-icon" data-i18n-alt="files.upload_alt" alt="Upload"></button>
         <button class="refresh icon-btn" id="refresh" data-i18n-title="common.refresh" title="Refresh"><img src="/refresh-icon.svg" class="side-icon" data-i18n-alt="common.refresh" alt="Refresh"></button>
       </div>
@@ -373,7 +373,7 @@
           <div class="settings-section-title" data-i18n="maintenance.application_section_title">Application</div>
           <div class="settings-section-body">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <button class="btn ghost" id="dockerRestartBtn" data-i18n="maintenance.docker_restart_button">Restart App</button>
+              <button class="btn ghost" id="dockerRestartBtn" data-i18n="maintenance.docker_restart_button">Restart app</button>
               <span class="settings-help" data-i18n="maintenance.docker_restart_help">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
               <span class="pstatus" aria-live="polite" id="dockerRestartStatus"></span>
             </div>
@@ -422,10 +422,10 @@
 
         <label class="fl" for="setDefaultView" style="margin-top:14px"><span data-i18n="settings.view.default_view_label">Default view to launch</span> <span class="hint" data-i18n="settings.view.default_view_hint">which view the app opens to on load</span></label>
         <select class="field" id="setDefaultView" style="max-width:220px">
-          <option value="regular" data-i18n="settings.view.view_option_full">Full View</option>
-          <option value="compact" data-i18n="settings.view.view_option_compact">Compact View</option>
-          <option value="camera" data-i18n="settings.view.view_option_camera">Camera View</option>
-          <option value="list" data-i18n="settings.view.view_option_list">List View</option>
+          <option value="regular" data-i18n="settings.view.view_option_full">Full view</option>
+          <option value="compact" data-i18n="settings.view.view_option_compact">Compact view</option>
+          <option value="camera" data-i18n="settings.view.view_option_camera">Camera view</option>
+          <option value="list" data-i18n="settings.view.view_option_list">List view</option>
           <option value="printfarm" data-i18n="settings.view.view_option_printfarm">Print Farm</option>
         </select>
 
@@ -435,10 +435,10 @@
           <option value="classic" data-i18n="settings.view.card_layout_classic">Classic</option>
         </select>
 
-        <label class="fl" for="setSiteName" style="margin-top:14px"><span data-i18n="settings.view.site_name_label">Site Name</span> <span class="hint" data-i18n="settings.view.site_name_hint">shown in the topbar next to the SnapCon logo — leave blank to show nothing</span></label>
+        <label class="fl" for="setSiteName" style="margin-top:14px"><span data-i18n="settings.view.site_name_label">Site name</span> <span class="hint" data-i18n="settings.view.site_name_hint">shown in the topbar next to the SnapCon logo — leave blank to show nothing</span></label>
         <input class="field" id="setSiteName" data-i18n-placeholder="settings.view.site_name_placeholder" placeholder="e.g. Shop Floor 2" maxlength="60" style="max-width:220px" />
 
-        <label class="fl" for="setCameraRefresh" style="margin-top:14px"><span data-i18n="settings.view.camera_refresh_label">Camera View refresh interval</span> <span class="hint" data-i18n="settings.view.camera_refresh_hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
+        <label class="fl" for="setCameraRefresh" style="margin-top:14px"><span data-i18n="settings.view.camera_refresh_label">Camera view refresh interval</span> <span class="hint" data-i18n="settings.view.camera_refresh_hint">seconds between camera image refreshes — floored to protect printer camera hardware from being polled too often</span></label>
         <input class="field" id="setCameraRefresh" type="number" min="3" max="60" placeholder="6" style="max-width:100px" />
 
         <label class="switch-row" for="setCameraStagger" style="margin-top:14px"><input type="checkbox" role="switch" id="setCameraStagger" class="switch-input" checked><span class="switch-text"><span class="switch-label" data-i18n="settings.view.camera_stagger_label">Stagger camera refresh across printers</span><span class="switch-desc" data-i18n="settings.view.camera_stagger_desc">spreads snapshot requests across the refresh interval instead of firing them all at once — recommended for larger fleets</span></span></label>
@@ -449,7 +449,7 @@
       <div class="settings-container">
 
         <div class="settings-section">
-          <label class="switch-row" for="ntfEnabled"><input type="checkbox" role="switch" id="ntfEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.enable_label" style="font-size:16px;font-weight:500">Enable Notifications</span></span></label>
+          <label class="switch-row" for="ntfEnabled"><input type="checkbox" role="switch" id="ntfEnabled" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.notif.enable_label" style="font-size:16px;font-weight:500">Enable notifications</span></span></label>
           <div class="settings-section-desc" data-i18n="settings.notif.enable_desc">Push alerts about your fleet, sent by a background watcher independent of whether the dashboard is open.</div>
         </div>
 
@@ -588,7 +588,7 @@
       <div class="set-panel" id="tab-printers" style="display:none">
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
         <input class="field" id="printerSearch" data-i18n-placeholder="settings.printers.toolbar_search_placeholder" placeholder="Search printers…" data-i18n-aria-label="settings.printers.toolbar_search_aria" aria-label="Search printers" style="max-width:264px;flex:1;min-width:160px" />
-        <button class="btn ghost" id="collapseAll" style="white-space:nowrap;flex:none">Collapse All</button>
+        <button class="btn ghost" id="collapseAll" style="white-space:nowrap;flex:none">Collapse all</button>
         <button class="btn ghost" id="addPrinter" data-i18n="settings.printers.add_button" style="white-space:nowrap;flex:none">+ Add</button>
         <button class="btn ghost" id="discover" style="white-space:nowrap;flex:none;display:flex;align-items:center;gap:6px">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12h-8a1 1 0 1 0 -1 1v8a9 9 0 0 0 9 -9" /><path d="M16 9a5 5 0 1 0 -7 7" /><path d="M20.486 9a9 9 0 1 0 -11.482 11.495" /></svg> <span data-i18n="settings.printers.discover_button">Discover</span>
@@ -677,19 +677,19 @@
               <input class="field" id="bootPassword" type="password" placeholder="Password" data-i18n-placeholder="settings.users.password_label" style="max-width:150px" autocomplete="new-password">
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:10px">
-              <button class="btn primary" id="bootSubmit" data-i18n="settings.users.bootstrap_submit">Create Admin</button>
+              <button class="btn primary" id="bootSubmit" data-i18n="settings.users.bootstrap_submit">Create admin</button>
               <span class="pstatus" aria-live="polite" id="bootStatus"></span>
             </div>
           </div>
         </div>
         <div class="setcard" style="margin-top:10px">
-          <div class="fl" style="margin-bottom:8px" data-i18n="settings.users.otp_config_title">OTP Configuration</div>
+          <div class="fl" style="margin-bottom:8px" data-i18n="settings.users.otp_config_title">OTP configuration</div>
           <label style="display:flex;align-items:center;gap:6px">
             <input type="radio" name="otpService" id="otpSvcResend" value="resend" checked> Resend
           </label>
           <div id="otpResendBody" style="margin:8px 0 12px 24px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-              <span class="pi-lbl" data-i18n="settings.users.resend_api_key_label">Resend API Key</span>
+              <span class="pi-lbl" data-i18n="settings.users.resend_api_key_label">Resend API key</span>
               <input class="field" id="setResendKey" type="password" placeholder="re_..." style="max-width:280px" autocomplete="off">
             </div>
             <label class="fl" for="setResendFrom" style="margin-top:10px" data-i18n="settings.users.from_address_label">From address</label>
@@ -758,7 +758,7 @@
           <div id="raRegisterBlock" style="display:none">
             <div class="settings-label" data-i18n="settings.remote_access.verification_needed_label">Verification needed</div>
             <div class="settings-help" data-i18n="settings.remote_access.verification_needed_desc">One-time step: open this link and complete the verification challenge in your browser to finish setting up this device.</div>
-            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener" data-i18n="settings.remote_access.open_verification_page" style="margin-top:10px;align-self:flex-start">Open Verification Page</a>
+            <a class="btn primary" id="raRegisterOpenBtn" href="#" target="_blank" rel="noopener" data-i18n="settings.remote_access.open_verification_page" style="margin-top:10px;align-self:flex-start">Open verification page</a>
           </div>
 
           <div id="raConnectedBlock" class="settings-section-body">
@@ -853,7 +853,7 @@
       </div>
 
       <div class="setcard" id="printerPoolsCard" style="margin-top:10px;display:none">
-        <div class="fl" style="margin-bottom:8px" data-i18n="settings.queue.printer_pools_title">Printer Pools</div>
+        <div class="fl" style="margin-bottom:8px" data-i18n="settings.queue.printer_pools_title">Printer pools</div>
         <div class="settings-help" style="margin-bottom:10px" data-i18n="settings.queue.printer_pools_desc">Each printer belongs to one pool, which defines how the bed gets cleared between prints. "Unassigned" is built in and protected. G-code and API bed-clear are coming in a later update — every pool is Manual for now.</div>
         <div id="printerPoolsList"></div>
         <div class="row" style="margin-top:8px">
@@ -968,17 +968,17 @@
 
     <div class="queue-dashboard" id="queueDashboard">
       <div class="queue-stat-cards">
-        <div class="queue-stat-card queue-stat-util"><span class="queue-stat-value" id="queueUtilPct">0%</span><span class="queue-stat-label" data-i18n="queue.stat_utilization">Fleet Utilization</span><span class="queue-stat-frac" id="queueUtilFrac">(0/0)</span></div>
+        <div class="queue-stat-card queue-stat-util"><span class="queue-stat-value" id="queueUtilPct">0%</span><span class="queue-stat-label" data-i18n="queue.stat_utilization">Fleet utilization</span><span class="queue-stat-frac" id="queueUtilFrac">(0/0)</span></div>
         <div class="queue-stat-card queue-stat-printing"><span class="queue-stat-value" id="statPrinting">0</span><span class="queue-stat-label" data-i18n="queue.stat_printing">Printing</span></div>
         <div class="queue-stat-card queue-stat-idle"><span class="queue-stat-value" id="statIdle">0</span><span class="queue-stat-label" data-i18n="queue.stat_idle">Idle</span></div>
-        <div class="queue-stat-card queue-stat-awaiting"><span class="queue-stat-value" id="statAwaiting">0</span><span class="queue-stat-label" data-i18n="queue.stat_awaiting">Awaiting Sign-off</span></div>
-        <div class="queue-stat-card queue-stat-parts"><span class="queue-stat-value" id="statPartsToday">0</span><span class="queue-stat-label" data-i18n="queue.stat_parts_today">Parts Today</span></div>
+        <div class="queue-stat-card queue-stat-awaiting"><span class="queue-stat-value" id="statAwaiting">0</span><span class="queue-stat-label" data-i18n="queue.stat_awaiting">Awaiting sign-off</span></div>
+        <div class="queue-stat-card queue-stat-parts"><span class="queue-stat-value" id="statPartsToday">0</span><span class="queue-stat-label" data-i18n="queue.stat_parts_today">Parts today</span></div>
       </div>
       <div class="settings-warning" id="queueViewStoreWarning" style="display:none;margin-bottom:10px"></div>
       <div id="queueDashboardBody"></div>
     </div>
 
-    <div class="sechead" id="jobsechead"><h2 data-i18n="fleet.job.section_title">Selected Model</h2><span class="count" id="needcount"></span></div>
+    <div class="sechead" id="jobsechead"><h2 data-i18n="fleet.job.section_title">Selected model</h2><span class="count" id="needcount"></span></div>
     <div class="jobloading" id="jobloading"><div class="jlname" id="jlname"></div><div class="jlbar"><div class="jlfill"></div></div></div>
     <div class="jobcard" id="jobcard">
       <div class="jobcard-hdr">
@@ -1005,7 +1005,7 @@
           <div class="camtabs" id="camTabs">
             <button data-camtab="all" data-i18n="fleet.toolbar.tab_all">All</button>
             <button data-camtab="printing" data-i18n="printer_status.printing">Printing</button>
-            <button data-camtab="attention" data-i18n="fleet.toolbar.tab_attention">Attention Needed</button>
+            <button data-camtab="attention" data-i18n="fleet.toolbar.tab_attention">Attention needed</button>
             <button data-camtab="idle" data-i18n="printer_status.idle">Idle</button>
             <button data-camtab="offline" data-i18n="printer_status.offline">Offline</button>
             <span class="cambar-divider"></span>
@@ -1017,7 +1017,7 @@
               <span id="camSelCount" data-i18n="fleet.toolbar.select_all">Select all</span>
             </label>
             <span id="camBulkActions"></span>
-            <button id="camEditTags" class="btn ghost" data-i18n="fleet.toolbar.edit_tags">Edit Tags</button>
+            <button id="camEditTags" class="btn ghost" data-i18n="fleet.toolbar.edit_tags">Edit tags</button>
           </div>
         </div>
         <span id="camBulkMsg" class="pstatus" aria-live="polite"></span>
@@ -1191,7 +1191,7 @@
 
   <div class="modal" id="langEditorModal">
     <div class="modalbox" style="max-width:900px">
-      <div class="modalhdr"><span data-i18n="settings.language_editor.title">Language Editor</span><button class="modalx" id="langEditorX">✕</button></div>
+      <div class="modalhdr"><span data-i18n="settings.language_editor.title">Language editor</span><button class="modalx" id="langEditorX">✕</button></div>
 
       <div id="langChipsRow" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
 
@@ -1559,13 +1559,13 @@
       <div class="settings-help" id="sendQueueSource" hidden style="margin-bottom:6px"></div>
       <div id="sendQueueFiles" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px"></div>
       <div class="maint-field" style="margin-bottom:10px">
-        <label class="fl" for="sendQueuePool" data-i18n="queue.printer_pool_label">Printer Pool</label>
+        <label class="fl" for="sendQueuePool" data-i18n="queue.printer_pool_label">Printer pool</label>
         <select class="field" id="sendQueuePool" style="max-width:100%"></select>
       </div>
       <div class="maint-field" style="margin-bottom:10px" id="sendQueueModeWrap">
         <label class="fl" data-i18n="queue.how_to_send_label">How to send</label>
         <div style="display:flex;gap:14px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="print-on-all" checked> <span data-i18n="queue.mode_print_on_all">Print on All</span></label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="print-on-all" checked> <span data-i18n="queue.mode_print_on_all">Print on all</span></label>
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="radio" name="sendQueueMode" value="distribute"> <span data-i18n="queue.mode_distribute">Distribute</span></label>
         </div>
       </div>
