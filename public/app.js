@@ -2918,6 +2918,10 @@ function wireUI(){
   $("snaprefresh").addEventListener("click", loadSnapshot);
   $("browseBtn").addEventListener("click", ()=>openBrowse("setFolder"));
   $("browseLogsBtn").addEventListener("click", ()=>openBrowse("setLogsFolder"));
+  // A sync destination longer than its field shows in full as the tooltip.
+  // Read on hover: the value is set from several places (settings load,
+  // Browse, Discard), none of which fires an input event.
+  document.querySelectorAll(".sync-dest input").forEach(inp=>inp.addEventListener("mouseenter",()=>{ inp.title=inp.value; }));
   $("browseCameraBtn").addEventListener("click", ()=>openBrowse("setCameraFolder"));
   $("browseFirmwareBtn").addEventListener("click", ()=>openBrowse("setFirmwareFolder"));
   $("browseGcodeSyncBtn").addEventListener("click", ()=>openBrowse("setGcodeSyncFolder"));

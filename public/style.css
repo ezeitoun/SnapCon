@@ -1738,12 +1738,21 @@
   .lib-root-actions{display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding-top:18px;}
   /* Printer sync's What/Destination/Delete-after table — a plain div grid,
      not a native <table>, matching this file's existing row patterns. Each
-     .sync-row (including the header) shares one column template so the
-     three rows and their header line up. */
+     row is two lines: What and Delete after on top, the Destination field
+     (with Browse) across the full width below, so a full network path such
+     as \\192.168.2.18\SnapCon\G-Code Archive fits (it did not beside two
+     other columns: 307px needed, 274px at most). Delete after's stepper
+     needs 120px for a 3-digit value. The header line keeps What and Delete
+     after; each Destination field carries its own aria-label. */
   .sync-table{display:flex; flex-direction:column;}
-  .sync-row{display:grid; grid-template-columns:104px minmax(0,1fr) 128px; gap:12px; align-items:center; padding:10px 0;}
+  .sync-row{display:grid; grid-template-columns:minmax(0,1fr) 120px; grid-template-areas:"what del" "dest dest"; column-gap:12px; row-gap:8px; align-items:center; padding:10px 0;}
+  .sync-row > :nth-child(1){grid-area:what;}
+  .sync-row > :nth-child(2){grid-area:dest;}
+  .sync-row > :nth-child(3){grid-area:del;}
+  .sync-head{grid-template-areas:"what del"; row-gap:0;}
+  .sync-head > :nth-child(2){display:none;}
   .sync-row + .sync-row{border-top:1px solid var(--line-soft);}
-  .sync-head{padding-bottom:8px; padding-top:0; font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint);}
+  .sync-head{padding-bottom:8px; padding-top:0; font-size:11.5px; font-weight:700; color:var(--ink-faint);}
   .sync-what{font-size:13px; font-weight:600; color:var(--ink);}
   .sync-what-sub{font-size:11.5px; font-weight:400; color:var(--ink-faint); margin-top:2px; line-height:1.4;}
   .sync-dest{display:flex; gap:8px;}
