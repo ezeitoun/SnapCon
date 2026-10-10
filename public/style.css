@@ -852,6 +852,14 @@
   .fwstat-label{font-size:11px; color:var(--accent); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .fwstat-label.warn{color:var(--warn);}
   .fwstat .prog-track{height:4px; margin-top:5px;}
+  /* The upload bar eases between once-a-second polls instead of stepping.
+     Firmware cards only: the slot keeps its .prog-fill between ticks
+     (renderFirmwareRowStatus keys on shape), so the transition has something
+     to animate; the shared .prog-fill is left alone (TODO §7). */
+  .fwstat .prog-fill{transition:width .6s ease;}
+  @media (prefers-reduced-motion:reduce){ .fwstat .prog-fill{transition:none;} }
+  .fw-msg:empty{display:none;}
+  .fw-msg{display:block; margin:6px 0 8px;}
   .fwstat-chip{display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px;
     background:var(--panel); border:1px solid var(--line-soft); color:var(--ink-dim); white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis; max-width:100%;}

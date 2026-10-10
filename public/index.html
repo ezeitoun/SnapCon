@@ -647,10 +647,14 @@
             <span class="settings-help" id="fwSelInfo"></span>
           </div>
 
+          <!-- Messages from the controls above (Refresh versions, Choose image,
+               a rejected deploy): above the cards, next to what caused them,
+               not a screen away below the grid. -->
+          <span class="pstatus fw-msg" aria-live="polite" id="fwStatus"></span>
+
           <!-- 3. Grouped by outcome. Built by renderFirmwareList(). -->
           <div id="fwResults"></div>
           <div class="browse-empty" id="fwNoMatches" style="display:none" data-i18n="settings.firmware.no_matches">No printers match this search</div>
-          <span class="pstatus" aria-live="polite" id="fwStatus"></span>
         </div>
 
         <!-- 6. Footer: batch progress, a safe stop, and the scoped action. -->
