@@ -5,6 +5,8 @@ capture-*.log
 gcode/*.gcode
 gcode/*.mapped.gcode
 config.json
+# Local copies/backups of config.json (they hold the same secrets)
+config.json.*
 users.json
 queued-files.json
 notify-token.json
