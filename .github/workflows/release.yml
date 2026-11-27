@@ -13,7 +13,7 @@ name: release
 #
 # The three reliable targets (Linux, Windows, Apple-Silicon mac) build and the
 # draft is made promptly. Intel-Mac is a SEPARATE best-effort job: GitHub's free
-# macos-13 runners are often unavailable for a long time, so it must NOT block the
+# Intel macOS runners are often unavailable for a long time, so it must NOT block the
 # release. It adds its binary to the release that already exists, draft or
 # published, if/when it runs, and can neither create nor publish one; if it never
 # gets a runner, the release has the other three.
@@ -39,7 +39,7 @@ jobs:
         include:
           - { runner: ubuntu-latest,  target: node22-linux-x64,    out: SnapCon-Linux-x64 }
           - { runner: windows-latest, target: node22-win-x64,      out: SnapCon-Windows-x64.exe }
-          - { runner: macos-14,       target: node22-macos-arm64,  out: SnapCon-macOS-AppleSilicon }
+          - { runner: macos-15,       target: node22-macos-arm64,  out: SnapCon-macOS-AppleSilicon }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -139,12 +139,12 @@ jobs:
           body_path: release-body.md
 
   # Best-effort Intel-Mac build. Runs after the release exists and adds its
-  # binary to it. continue-on-error so a stuck/unavailable macos-13 runner never
+  # binary to it. continue-on-error so a stuck/unavailable Intel runner never
   # fails the overall release.
   build-intel:
     name: build SnapCon-macOS-Intel (best effort)
     needs: release
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 60
     continue-on-error: true
     steps:
