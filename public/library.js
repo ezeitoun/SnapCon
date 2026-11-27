@@ -25,6 +25,8 @@
     scan:{ running:false, targets:[], error:null, timer:null },
     // M6: what was just done, with its Undo; files ticked for Separate/Move.
     flash:null, selected:new Set(),
+    // Models ticked in the grid (uuid -> name), to hide or delete together.
+    pick:new Map(),
   };
 
   // ---- data ----
@@ -58,6 +60,9 @@
       if(typeof closeQueueDashboard==="function") closeQueueDashboard();
       if(typeof closeHealthPage==="function") closeHealthPage();
       if(window.UtilizationPage) UtilizationPage.close();
+      // The file manager is closed when the Library opens (owner, 2026-11-27),
+      // the way its own button closes it; it is not reopened on the way out.
+      if(typeof FILES_OPEN!=="undefined" && FILES_OPEN){ FILES_OPEN=false; applyFilesOpen(); }
       L.open=true;
       $("libraryPage").classList.add("show");
       hideFleet(true);
@@ -70,6 +75,7 @@
   function closePage(){
     if(!L.open) return;
     L.open=false; L.req++; L.gridKept=false;
+    L.pick.clear(); closeCardMenu();
     $("libraryPage").classList.remove("show");
     hideFleet(false);
     $("libraryBtn").title=t("library.title");
@@ -193,6 +199,7 @@
           <div class="lib-active" id="libActive"></div>
           <div class="lib-grid" id="libGrid" aria-live="polite"></div>
           <div class="lib-more" id="libMore"></div>
+          <div class="lib-selbar" id="libPickBar" hidden></div>
         </div>
       </div>`;
     $("libSort").value=f.sort;
@@ -262,12 +269,19 @@
     grid.querySelectorAll(".lib-card:not([data-wired])").forEach(c=>{
       c.dataset.wired="1";
       c.addEventListener("click",e=>{
+        // The card's checkbox picks the Model; the card's link must not open.
+        if(e.target.closest(".lib-card-sel")){ e.preventDefault(); e.stopPropagation(); togglePick(c.dataset.uuid, c.querySelector(".lib-name").textContent); return; }
         // A type tag sets the Type filter; the card's link must not open.
         const tag=e.target.closest(".lib-type");
         if(tag){ e.preventDefault(); e.stopPropagation(); setTypeFilter(tag.dataset.type); return; }
         if(e.metaKey||e.ctrlKey||e.button===1) return; e.preventDefault(); go("/library/m/"+c.dataset.uuid);
       });
+      c.addEventListener("contextmenu",e=>{
+        if(!can("hide")) return;      // the browser's own menu for anyone else
+        e.preventDefault(); openCardMenu(e, c.dataset.uuid, c.querySelector(".lib-name").textContent);
+      });
     });
+    syncPick();
     fitFolders();
     const more=$("libMore");
     more.innerHTML=L.next?`<button type="button" class="btn ghost" id="libMoreBtn">${esc(t("library.show_more",{shown:L.models.length,total:L.total}))}</button>`:"";
@@ -358,7 +372,205 @@
         <span class="lib-name" title="${esc(m.name)}">${esc(m.name)}</span>
         <span class="lib-meta">${cardMetaHtml(m)}</span>
         ${m.families.length?`<span class="lib-fams">${familyChips(m.families,2)}</span>`:""}${folderLineHtml(m.folder)}
-      </span></a>`;
+      </span>${can("hide")?`<label class="lib-card-sel" title="${esc(t("library.pick_title"))}"><input type="checkbox" class="checkbox-input lib-card-selbox" data-uuid="${esc(m.uuid)}" aria-label="${esc(t("library.pick_aria",{name:m.name}))}"${L.pick.has(m.uuid)?" checked":""}></label>`:""}</a>`;
+  }
+
+  // ---- picking Models in the grid: hide or delete several (owner, 2026-11-27) ----
+  // Each card has a checkbox (for someone who may hide Models). A bar under
+  // the grid, or a right-click on a card, offers Hide and Delete for the
+  // picked Models; a right-click on a card that is not picked acts on that
+  // card alone and leaves the selection as it is.
+  //
+  // Hide is the Library's own action, one Model at a time, each undoable from
+  // "Show hidden models".
+  // Delete does not delete anything itself: it hands the Models' print files
+  // in the G-code folder to the File Browser's delete (POST /api/files/delete:
+  // Move to Trash, or permanently for a signed-in Admin; docs/file-delete.md,
+  // with its in-use checks and its audit), and then hides each Model whose
+  // named files all went. Everything else a Model holds stays where it is:
+  // pictures and documents, files in another location, files inside a 3MF,
+  // and files that are missing or cannot be reached now.
+  function canDeleteModels(){
+    return can("hide") && typeof canAct==="function" && !!canAct();
+  }
+  // What is offered for picked Models. The grid shows either the hidden
+  // Models ("Show hidden models") or the others, never both, so one answer
+  // holds for every card on it: a hidden Model is offered Unhide, not Hide.
+  function pickOffers(showingHidden){
+    return [showingHidden?"unhide":"hide", ...(canDeleteModels()?["delete"]:[])];
+  }
+  function pickLabel(kind, n){
+    return tn(kind==="delete"?"library.delete_n_btn":kind==="unhide"?"library.unhide_n_btn":"library.hide_n_btn", n);
+  }
+  function pickRun(kind, targets){
+    (kind==="delete"?deleteModels:kind==="unhide"?unhideModels:hideModels)(targets);
+  }
+  function pickTargets(pick, uuid, name){
+    return pick.has(uuid) ? [...pick].map(([u,n])=>({ uuid:u, name:n })) : [{ uuid, name }];
+  }
+  function pickTitle(kind, targets){
+    const n=targets.length;
+    if(kind==="delete") return n===1 ? t("library.delete_title",{name:targets[0].name}) : tn("library.delete_n_title",n);
+    return n===1 ? t("library.hide_title",{name:targets[0].name}) : tn("library.hide_n_title",n);
+  }
+  // detail: GET /api/library/models/<uuid>. files: paths in the G-code folder
+  // that the delete will name, each once; kept: how many other files stay.
+  function modelDeletePlan(detail){
+    const seen=new Set(), files=[]; let kept=0;
+    const take=f=>{
+      if(!f) return;
+      const key=(f.root||"")+"\n"+(f.path||"");
+      if(seen.has(key)) return;
+      seen.add(key);
+      const ok=f.root==="gcode" && !!f.path && !f.container && !f.entry && !/(^|\/)\.\.(\/|$)/.test(f.path)
+        && /\.(gcode|gco|g|gx|3mf)$/i.test(f.path) && (f.availability==null || f.availability==="ok");
+      if(ok) files.push(f.path); else kept++;
+    };
+    const each=f=>{ take(f); for(const d of (f&&f.duplicates)||[]) take(d); };
+    for(const v of detail.printables||[]) each(v.file);
+    for(const p of detail.projects||[]) each(p.file);
+    for(const o of detail.others||[]) each(o);
+    return { uuid:detail.uuid, name:detail.name, files, kept };
+  }
+  // deleted: the paths the delete reported as done.
+  function modelsToHideAfterDelete(plans, deleted){
+    return plans.filter(p=>p.files.every(f=>deleted.has(f))).map(p=>p.uuid);
+  }
+  function pickListHtml(lines){
+    const shown=lines.slice(0,10).map(x=>`<li title="${esc(x)}">${esc(x)}</li>`);
+    if(lines.length>10) shown.push(`<li>${esc(t("files.delete_confirm_more",{count:lines.length-10}))}</li>`);
+    return `<ul class="delete-files-list">${shown.join("")}</ul>`;
+  }
+  function togglePick(uuid, name){
+    if(L.pick.has(uuid)) L.pick.delete(uuid); else L.pick.set(uuid, name);
+    syncPick();
+  }
+  function syncPick(){
+    // In a timer: the card's click is cancelled so that its link does not
+    // open, and a cancelled click puts a checkbox back as it was.
+    setTimeout(()=>{
+      document.querySelectorAll(".lib-card-selbox").forEach(x=>{
+        x.checked=L.pick.has(x.dataset.uuid);
+        const c=x.closest(".lib-card"); if(c) c.classList.toggle("is-picked", x.checked);
+      });
+    },0);
+    const bar=$("libPickBar"); if(!bar) return;
+    const n=L.pick.size;
+    bar.hidden=!n;
+    if(!n){ bar.innerHTML=""; return; }
+    const targets=()=>[...L.pick].map(([uuid,name])=>({ uuid, name }));
+    const offers=pickOffers(L.filters.hidden), first=offers[0];
+    bar.innerHTML=`<span>${esc(tn("library.picked_n",n))}</span>
+      <button type="button" class="btn ghost btn-sm" id="libPickHide">${esc(pickLabel(first,n))}</button>
+      ${offers.includes("delete")?`<button type="button" class="btn danger btn-sm" id="libPickDelete">${esc(pickLabel("delete",n))}</button>`:""}
+      <button type="button" class="btn ghost btn-sm" id="libPickClear">${esc(t("library.clear_selection"))}</button>`;
+    $("libPickHide").addEventListener("click",()=>pickRun(first,targets()));
+    if($("libPickDelete")) $("libPickDelete").addEventListener("click",()=>pickRun("delete",targets()));
+    $("libPickClear").addEventListener("click",()=>{ L.pick.clear(); syncPick(); });
+  }
+  function closeCardMenu(){
+    const m=$("libCtx"); if(m) m.remove();
+    document.removeEventListener("click",closeCardMenu);
+    document.removeEventListener("keydown",cardMenuKey);
+    window.removeEventListener("scroll",closeCardMenu,true);
+    window.removeEventListener("resize",closeCardMenu);
+  }
+  function cardMenuKey(e){ if(e.key==="Escape") closeCardMenu(); }
+  function openCardMenu(e, uuid, name){
+    closeCardMenu();
+    const targets=pickTargets(L.pick, uuid, name), n=targets.length;
+    const m=document.createElement("div");
+    m.id="libCtx"; m.className="lib-menu-list lib-ctx"; m.setAttribute("role","menu");
+    m.innerHTML=pickOffers(L.filters.hidden).map(k=>`<button type="button" role="menuitem"${k==="delete"?' class="is-danger"':""} data-do="${k}">${esc(pickLabel(k,n))}</button>`).join("");
+    document.body.appendChild(m);
+    m.style.left=Math.max(4,Math.min(e.clientX, window.innerWidth-m.offsetWidth-4))+"px";
+    m.style.top=Math.max(4,Math.min(e.clientY, window.innerHeight-m.offsetHeight-4))+"px";
+    m.addEventListener("click",ev=>{
+      const b=ev.target.closest("button"); if(!b) return;
+      ev.stopPropagation(); closeCardMenu();
+      pickRun(b.dataset.do, targets);
+    });
+    // After this right-click has finished, so that it does not close the menu.
+    setTimeout(()=>{
+      if(!$("libCtx")) return;
+      document.addEventListener("click",closeCardMenu);
+      document.addEventListener("keydown",cardMenuKey);
+      window.addEventListener("scroll",closeCardMenu,true);
+      window.addEventListener("resize",closeCardMenu);
+    },0);
+    m.querySelector("button").focus();
+  }
+  function hideModels(targets){
+    const n=targets.length; if(!n) return;
+    dialog({ title:pickTitle("hide",targets), confirm:n===1?t("library.hide_ok"):tn("library.hide_n_ok",n),
+      body:`<p>${esc(n===1?t("library.hide_help"):t("library.hide_n_help"))}</p>${n>1?pickListHtml(targets.map(x=>x.name)):""}`,
+      onConfirm:async()=>{
+        let last=null, done=0;
+        try{
+          for(const x of targets){ last=await post("/api/library/actions",{ kind:"hide", model:x.uuid }); L.pick.delete(x.uuid); done++; }
+        }finally{
+          // Also when one failed part-way: the grid shows what was hidden.
+          if(done){
+            L.gridKept=false;
+            L.flash={ text:n===1?t("library.done_hide",{name:targets[0].name}):tn("library.done_hide_n",done), actionId:n===1&&last?last.actionId:undefined };
+            render();
+          }
+        }
+      } });
+  }
+  // Nothing to confirm: unhiding only brings Models back, as the single
+  // "Unhide model" on a Model's page does.
+  async function unhideModels(targets){
+    let done=0, last=null;
+    try{
+      for(const x of targets){ last=await post("/api/library/actions",{ kind:"unhide", model:x.uuid }); L.pick.delete(x.uuid); done++; }
+      L.flash={ text:targets.length===1?t("library.done_unhide",{name:targets[0].name}):tn("library.done_unhide_n",done), actionId:targets.length===1&&last?last.actionId:undefined };
+    }catch(e){ L.flash={ text:errText(e), error:true }; }
+    L.gridKept=false;
+    render();
+  }
+  async function deleteModels(targets){
+    const n=targets.length; if(!n) return;
+    L.flash={ text:t("library.delete_loading") }; renderBars();
+    let plans=[];
+    try{ for(const x of targets) plans.push(modelDeletePlan(await api("/api/library/models/"+encodeURIComponent(x.uuid)))); }
+    catch(e){ L.flash={ text:errText(e), error:true }; renderBars(); return; }
+    L.flash=null; renderBars();
+    const files=[...new Set(plans.flatMap(p=>p.files))], kept=plans.reduce((s,p)=>s+p.kept,0);
+    const permanentOk=typeof canDeletePermanently==="function"&&canDeletePermanently();
+    const days=typeof FILE_TRASH_DAYS!=="undefined"?FILE_TRASH_DAYS:30;
+    dialog({ title:pickTitle("delete",targets), confirm:tn("library.delete_ok",n), danger:true,
+      body:(files.length?`<p>${esc(tn("library.delete_files_line",files.length))}</p>${pickListHtml(files)}`:`<p>${esc(t("library.delete_nothing"))}</p>`)
+        +(kept?`<p class="settings-help">${esc(tn("library.delete_kept_line",kept))}</p>`:"")
+        +`<p class="settings-help">${esc(tn("library.delete_then_hidden",n))}</p>`
+        +(files.length?`<div class="fl" style="margin-top:14px">${esc(t("files.delete_method_label"))}</div>
+          <div class="delete-mode-row"><input type="radio" name="libDelMode" id="libDelTrash" checked><label for="libDelTrash">${esc(t("files.delete_mode_trash"))}</label></div>
+          <div class="settings-help delete-mode-help">${esc(t("files.delete_mode_trash_help",{days}))}</div>`
+          +(permanentOk?`<div class="delete-mode-row"><input type="radio" name="libDelMode" id="libDelPermanent"><label for="libDelPermanent">${esc(t("files.delete_mode_permanent"))}</label></div>
+          <div class="settings-help err delete-mode-help">${esc(t("files.delete_mode_permanent_help"))}</div>`:""):""),
+      onConfirm:async el=>{
+        const perm=el.querySelector("#libDelPermanent");
+        const mode=permanentOk&&perm&&perm.checked?"permanent":"trash";
+        // Permanent asks once more, naming what goes (as the File Browser does).
+        if(mode==="permanent"&&files.length&&!confirm(files.length===1?t("files.delete_permanent_confirm_one",{path:files[0]}):t("files.delete_permanent_confirm_other",{count:files.length}))){
+          throw new Error(t("library.delete_not_done"));
+        }
+        const deleted=new Set(), failed=[];
+        for(let i=0;i<files.length;i+=500){
+          const r=await post("/api/files/delete",{ files:files.slice(i,i+500).map(splitFilePath), mode });
+          for(const x of r.results||[]){
+            const p=(x.sub?x.sub+"/":"")+x.name;
+            if(x.ok) deleted.add(x.path||p); else failed.push(p+" ("+x.error+")");
+          }
+        }
+        let hidden=0;
+        for(const uuid of modelsToHideAfterDelete(plans, deleted)){ await post("/api/library/actions",{ kind:"hide", model:uuid }); L.pick.delete(uuid); hidden++; }
+        L.gridKept=false;
+        L.flash=failed.length
+          ? { text:t("library.delete_partial",{done:deleted.size,total:files.length,names:failed.slice(0,5).join(", ")}), error:true }
+          : { text:t("library.done_delete",{files:deleted.size,models:hidden}) };
+        render();
+      } });
   }
 
   // ---- folders (the Folders panel, breadcrumb, Include subfolders, Rescan) ----
@@ -764,14 +976,35 @@
     const k={offline:"badge_offline",missing:"badge_missing",unreadable:"badge_unreadable"}[a]||"badge_missing";
     return `<span class="lib-badge ${a==="offline"?"is-off":"is-bad"}" title="${esc(t("library.avail_"+a+"_title"))}">${esc(t("library."+k))}</span>`;
   }
-  function swatches(fil){
-    return fil.length?`<span class="lib-swatches">${fil.slice(0,8).map(x=>`<span class="lib-sw" style="--sw:${/^#[0-9a-f]{3,8}$/i.test(x.color||"")?x.color:"transparent"}" title="${esc([x.type,x.vendor,x.color,x.grams!=null?fmtG(x.grams):null].filter(Boolean).join(" · "))}"></span>`).join("")}<span class="lib-sw-txt">${esc([...new Set(fil.map(x=>x.type).filter(Boolean))].join(", "))}</span></span>`:"";
+  // What a file's filament costs at the price in Settings > General (app.js
+  // holds the price per kilogram and the currency symbol): filament only, the
+  // same rule as the file browser. null when no price is set or no weight is
+  // known — never a zero that would read as "free".
+  function filamentCostText(grams){
+    const price=typeof FILAMENT_COST!=="undefined"?Number(FILAMENT_COST):0;
+    if(!(price>0)||!(grams>0)) return null;
+    return (typeof CURRENCY!=="undefined"&&CURRENCY?CURRENCY:"$")+((price/1000)*grams).toFixed(2);
+  }
+  // One line for a printable file's filament: the file's total, then each
+  // filament it uses (colour, type, grams), then the estimated cost. A file
+  // with one filament does not repeat the total beside it.
+  function filamentLineHtml(v){
+    const fil=v.filaments||[], SHOWN=8;
+    const sum=fil.reduce((n,x)=>n+(x.grams>0?x.grams:0),0);
+    const total=v.weightG>0?v.weightG:(sum>0?sum:null);
+    if(!fil.length&&total==null) return "";
+    const totalText=total!=null?fmtG(total):null;
+    const chip=x=>{
+      const g=x.grams!=null?fmtG(x.grams):null;
+      return `<span class="lib-fil-chip" title="${esc([x.type,x.vendor,x.color,g].filter(Boolean).join(" · "))}"><span class="lib-sw" style="--sw:${/^#[0-9a-f]{3,8}$/i.test(x.color||"")?x.color:"transparent"}"></span>${x.type?`<span class="lib-fil-type">${esc(x.type)}</span>`:""}${g&&!(fil.length===1&&g===totalText)?`<span class="lib-fil-g">${esc(g)}</span>`:""}</span>`;
+    };
+    const cost=filamentCostText(total);
+    return `<div class="lib-fil"><span class="lib-fil-lbl">${esc(t("library.weight"))}</span>${totalText?`<span class="lib-fil-total">${esc(totalText)}</span>`:""}${fil.slice(0,SHOWN).map(chip).join("")}${fil.length>SHOWN?`<span class="lib-dim">${esc(tn("library.and_more",fil.length-SHOWN))}</span>`:""}${cost?`<span class="lib-fil-cost">${esc(t("fleet.modal.pfile.est_cost_label"))} <b>${esc(cost)}</b></span>`:""}</div>`;
   }
   function variantHtml(v){
     const f=v.file;
     const facts=[
       v.estSeconds?`<span title="${esc(t("library.est_time"))}">${esc(fmtDuration(v.estSeconds))}</span>`:null,
-      v.weightG?`<span title="${esc(t("library.weight"))}">${esc(fmtG(v.weightG))}</span>`:null,
       v.copies>1?`<span>${esc(tn("library.copies",v.copies))}</span>`:null,
       v.layerHeight?`<span>${esc(v.layerHeight+" mm")}</span>`:null,
       v.nozzle?`<span>${esc(t("library.nozzle",{d:v.nozzle}))}</span>`:null,
@@ -792,7 +1025,7 @@
         <div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(f.name)}</span>${plate}${availHtml(f.availability)}</div>
         <div class="lib-var-where" title="${esc(f.rootName+" · "+f.path)}">${esc(f.rootName)} · ${esc(f.path)}</div>
         <div class="lib-var-facts">${printerHtml(v.printer)}${v.profile.printer?`<span class="lib-prof" title="${esc([v.profile.printer,v.profile.print].filter(Boolean).join(" · "))}">${esc(v.profile.printer)}</span>`:""}${v.slicer?`<span class="lib-dim">${esc(v.slicer)}</span>`:""}${facts.join("")}</div>
-        ${swatches(v.filaments)}
+        ${filamentLineHtml(v)}
         ${f.duplicates.length?`<div class="lib-var-dup">${esc(tn("library.also_at",f.duplicates.length,{where:f.duplicates.map(d=>d.rootName+" · "+d.path).join("; ")}))}</div>`:""}
         <div class="lib-explains">${whyHereHtml(f.why)}${whyPrinterHtml(v.printer)}</div>
       </div>

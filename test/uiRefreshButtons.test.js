@@ -40,10 +40,16 @@ test("Stop and the other destructive actions are outlined: transparent, red text
   assert.match(outlined.body, /border:1px solid var\(--bad\)/);
 });
 
-test("no minimum height on card chips or compact pills; 44px only on dialog, settings and page buttons", () => {
+test("no 44px minimum on card chips or compact pills; 44px only on dialog, settings and page buttons", () => {
   for (const r of withProp("min-height", "\\s*44px")) for (const s of splitTop(r.sel)) assert.doesNotMatch(s, /btn-chip|cc-pill/, s);
   assert.ok(R.some(r => /min-height:\s*0/.test(r.body) && splitTop(r.sel).some(s => s.includes(".pcard") && s.includes(".btn"))), "buttons inside a printer card are exempt");
-  assert.equal(withProp("min-height").filter(r => splitTop(r.sel).some(s => /btn-chip/.test(s))).length, 0);
+  // Chips had no height of their own until the owner's mockup of 2026-11-27
+  // gave the card's action row 36px (test/cardActionRowRefresh.test.js).
+  // Nothing else sets one on a chip.
+  const chipHeights = withProp("min-height").filter(r => splitTop(r.sel).some(s => /btn-chip/.test(s)));
+  assert.equal(chipHeights.length, 1);
+  for (const s of splitTop(chipHeights[0].sel)) assert.match(s, /^html\.ui-refresh \.pcard \.foot\b/, s);
+  assert.match(chipHeights[0].body, /min-height:36px/);
 });
 
 test("the hero glow: dialog main actions only, each one real and inside a dialog", () => {

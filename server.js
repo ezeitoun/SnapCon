@@ -1,9 +1,9 @@
-// server.js — SnapCon  ·  v2026.11.0
+// server.js — SnapCon  ·  v2026.11.1
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "2026.11.0";
+const VERSION = "2026.11.1";
 
 const express = require("express");
 const fs = require("fs");
@@ -5501,10 +5501,7 @@ app.get("/api/session", (req, res) => {
 app.post("/api/session/theme", requireAuth, (req, res) => {
   if (!req.user.id) return res.status(400).json({ error: "Per-user theme requires User Access Management" });
   const theme = req.body && req.body.theme;
-  // UI-REFRESH: "awareness" (the design refresh's third theme) is accepted
-  // whether or not this browser has the preview on; the browser shows it as
-  // dark while the preview is off, without changing what is saved.
-  if (theme !== "light" && theme !== "dark" && theme !== "awareness") return res.status(400).json({ error: "theme must be \"light\", \"dark\" or \"awareness\"" });
+  if (theme !== "light" && theme !== "dark") return res.status(400).json({ error: "theme must be \"light\" or \"dark\"" });
   const u = USERS.find(x => x.id === req.user.id);
   if (!u) return res.status(404).json({ error: "User not found" });
   u.theme = theme;

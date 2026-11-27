@@ -8,7 +8,7 @@
 //    for three digits, and every width cap leaves room for the − and +
 //    buttons plus that.
 // Checked here by the rules; measured in a browser in every view and theme
-// (Full, Compact, Camera; Night, Day, Awareness; refresh on and off).
+// (Full, Compact, Camera; Night and Day; refresh on and off).
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");

@@ -200,9 +200,15 @@
   .multiselect-bar{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 14px; border-bottom:1px solid var(--line-soft); background:var(--panel-2); font-size:12px; color:var(--ink-dim);}
   .multiselect-bar .btn{padding:4px 10px; font-size:11.5px;}
   #fileOpStatus:empty{padding:0; margin:0;}
-  .filter{padding:11px 14px; border-bottom:1px solid var(--line-soft);}
-  .filter input{width:100%; font:inherit; font-size:13px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:7px; padding:8px 11px;}
+  .filter{position:relative; padding:11px 14px; border-bottom:1px solid var(--line-soft);}
+  .filter input{width:100%; font:inherit; font-size:13px; color:var(--ink); background:var(--panel-2); border:1px solid var(--line); border-radius:7px; padding:8px 34px 8px 11px;}
   .filter input::placeholder{color:var(--ink-faint);}
+  /* Leaves the search: shown only while the box holds text (the field's own
+     state decides, so the two cannot disagree). Esc in the box does the same. */
+  .filter-clear{position:absolute; right:19px; top:50%; transform:translateY(-50%); display:flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; border:0; border-radius:6px; background:transparent; color:var(--ink-faint); font:inherit; font-size:12px; line-height:1; cursor:pointer;}
+  .filter-clear:hover{color:var(--ink); background:color-mix(in srgb,var(--ink) 10%,transparent);}
+  .filter-clear:focus-visible{outline:2px solid var(--accent); outline-offset:1px;}
+  .filter input:placeholder-shown ~ .filter-clear{display:none;}
   .list{flex:1; overflow:auto; padding:8px;}
   .folder-back{display:flex;align-items:center;gap:6px;width:100%;text-align:left;cursor:pointer;background:transparent;border:1px solid var(--line-soft);border-radius:8px;padding:9px 12px;margin-bottom:4px;color:var(--ink-dim);font:inherit;font-size:12px;font-weight:600;}
   .folder-back:hover{background:var(--panel);color:var(--ink);}
@@ -259,8 +265,15 @@
   .jobcard{background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:15px 17px; margin-top:12px; display:none;}
   .jobcard.show{display:block;}
   .jobcard-hdr{display:grid; grid-template-columns:auto 1fr; gap:0 12px; align-items:start;}
-  .jthumb{grid-column:1; width:96px; height:96px; object-fit:contain; border-radius:7px; border:1px solid var(--line); background:var(--bg); align-self:start;}
-  .jobcard-hdr-text{grid-column:2; display:flex; flex-direction:column; min-width:0;}
+  /* The picture is as tall as the text beside it (118 to 151px for the files
+     measured), in a 132px column: it was a fixed 96px square with room to
+     spare above and below (owner, 2026-11-27). height:0 keeps it out of the
+     row's sizing, so the text alone decides the card's height; min-height:100%
+     then gives it the row's. The text's own minimum is the old picture's
+     96px, so a file with little to say keeps the card it had. */
+  .jthumb{grid-column:1; width:132px; height:0; min-height:100%; max-height:160px; object-fit:contain; border-radius:7px; border:1px solid var(--line); background:var(--bg); align-self:stretch;}
+  .jobcard-hdr-text{grid-column:2; display:flex; flex-direction:column; min-width:0; min-height:96px;}
+  @media (max-width:520px){ .jthumb{width:96px;} }
   .jobcard .jt{font-size:15px; font-weight:700; word-break:break-all;}
   .fs-badge{width:18px; height:18px; vertical-align:middle; margin-left:5px; flex-shrink:0;}
   .jobcard .jmeta{font-family:var(--mono); font-size:11.5px; color:var(--ink-dim); margin-top:3px;}
@@ -382,11 +395,55 @@
   .h .lab{padding:5px 6px 7px; text-align:center;}
   .h .ht{font-family:var(--mono); font-size:9px; color:var(--ink-faint); letter-spacing:.08em;}
   .h .hm{font-size:10px; color:var(--ink-dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-  /* flex-wrap: four actions (a completed print: Upload, Print, Preheat, Print
-     again; a print with objects to exclude) do not fit a standard 300px card
-     with readable labels, so the last one moves to a second row instead of
-     overflowing the card. Three or fewer stay on one row, as before. */
-  .pcard .foot{display:flex; align-items:center; gap:9px; justify-content:space-between; flex-wrap:wrap;}
+  /* The card's actions: one compact row, the main action on the left, each
+     pill as wide as its own content, 8px between them (owner, 2026-11-27).
+     Cards are 300px and up, and four pills with their icons and 10px sides
+     need about 345 to 375px of row depending on the font. A narrower row
+     gives way in steps instead of sending the fourth action to a second row
+     (which is what happened while each pill was held to a quarter of the
+     row). The icons are never left out: a row without them looked wrong
+     (owner, the same day). Four actions, step by step:
+       1. the sides the pills had before (6px);
+       2. 4px sides, 6px between pills;
+       3. 3px sides, 4px between, an 11.5px label and a 14px icon;
+       4. 2px sides, 3px between, an 11px label and a 13px icon.
+     In steps 1 to 3 the four pills share what is left of the row, so it
+     ends at the card's edge. In step 4 they are their own width again: if
+     even that does not fit, the row wraps (flex-wrap, the last resort, also
+     for longer translated labels) and no pill is stretched across the card.
+     Nothing leaves the card and no label is cut.
+     The steps are container queries on the row. Their widths are in ch, the
+     width of a digit in the row's font, so they follow a wide or a narrow
+     system font; the row carries the pills' own font size and weight for
+     that reason. 23.5ch and 19ch are the longest four and three English
+     labels together at 12px, measured in two fonts (22.1 to 23.1ch, 16 to
+     18.7ch); the px part is the pills' sides, borders and icons and the space
+     between them. That space is a margin on the pills, not a gap on the row,
+     because a row cannot restyle itself from its own width.
+     min-height is the height the 15px icon gives a pill, kept at every step. */
+  .pcard .foot{display:flex; align-items:center; gap:8px 0; justify-content:flex-start; flex-wrap:wrap; container-type:inline-size; container-name:cardfoot; font-size:12px; font-weight:600;}
+  .pcard .foot > .btn-chip{flex:0 0 auto; padding:8px 10px; min-height:33px;}
+  .pcard .foot > .btn-chip:not(:last-child){margin-inline-end:8px;}
+  @container cardfoot (max-width: calc(19ch + 142px)){
+    .pcard .foot > .btn-chip{padding:8px 6px; gap:4px;}
+  }
+  @container cardfoot (max-width: calc(23.5ch + 192px)){
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip{flex:1 0 auto; padding:8px 6px; gap:4px;}
+  }
+  @container cardfoot (max-width: calc(23.5ch + 156px)){
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip{padding:8px 4px; gap:3px;}
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip:not(:last-child){margin-inline-end:6px;}
+  }
+  @container cardfoot (max-width: calc(23.5ch + 130px)){
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip{padding:8px 3px; font-size:11.5px;}
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip img{width:14px; height:14px;}
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip:not(:last-child){margin-inline-end:4px;}
+  }
+  @container cardfoot (max-width: calc(22.5ch + 112px)){
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip{flex:0 0 auto; padding:8px 2px; font-size:11px;}
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip img{width:13px; height:13px;}
+    .pcard .foot:has(> .btn-chip:nth-child(4)) > .btn-chip:not(:last-child){margin-inline-end:3px;}
+  }
   .pcard .foot-idle{margin-top:10px;}
   /* A printer with no filament-heads capability (e.g. Creality V3 Plus) skips
      the whole .afc-section block — without this, the card grid's default row
@@ -2111,8 +2168,9 @@
   body.compact .sechead:has(#needcount),
   body.compact #jobloading,
   body.compact #jobcard{font-size:11px;}
-  /* hide the file panel's colour hints */
-  body.compact .needstrip,body.compact .jcompat,body.compact .nohint{display:none;}
+  /* The file panel's filaments, "Sliced for" line and hint are shown here as
+     in every view (they were hidden in Compact and Camera until 2026-11-27):
+     the panel is above the fleet, not part of a printer's card. */
 
   /* ---- Compact card (buildCompactCardHtml in app.js) ---- */
   /* Its own markup, so every rule here is scoped to .cc-* or .cc-card.
@@ -2207,7 +2265,7 @@
      visible too, unlike compact: this is a fleet-grid density mode, not a
      distinct page. */
   body.camview .stats-bar,
-  body.camview .cmap,body.camview .needstrip,body.camview .jcompat,body.camview .nohint,
+  body.camview .cmap,
   body.camview .afc-lanes,
   body.camview .klipper-err-body,body.camview .klipper-err-link{display:none;}
   body.camview .fleet{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));}
@@ -2481,6 +2539,13 @@
   .lib-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(176px,1fr)); gap:14px;}
   .lib-card{display:flex; flex-direction:column; min-width:0; background:var(--panel); border:1px solid var(--line-soft); border-radius:10px; overflow:hidden; color:inherit; text-decoration:none; transition:border-color .15s ease, transform .15s ease;}
   .lib-card:hover{border-color:var(--ink-faint); transform:translateY(-1px);}
+  /* A Model's checkbox, bottom right of its card; a picked card is outlined. */
+  .lib-card{position:relative;}
+  .lib-card-sel{position:absolute; right:6px; bottom:6px; display:flex; padding:5px; border-radius:7px; background:var(--panel); cursor:pointer;}
+  .lib-card.is-picked{border-color:var(--accent);}
+  /* The right-click menu of a Model card: the Library's menu list, at the pointer. */
+  .lib-menu-list.lib-ctx{position:fixed; right:auto; margin:0; z-index:60; min-width:200px;}
+  .lib-menu-list button.is-danger{color:var(--bad);}
   .lib-card:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
   .lib-card.is-offline .lib-well img{opacity:.55; filter:grayscale(.6);}
   .lib-well{position:relative; display:flex; align-items:center; justify-content:center; aspect-ratio:1/1; overflow:hidden;
@@ -2591,7 +2656,7 @@
 
   .lib-back{display:inline-block; margin:14px 0 4px; color:var(--accent); font-size:13px; font-weight:600; text-decoration:none;}
   .lib-back:hover{text-decoration:underline;}
-  .lib-model-hero{display:grid; grid-template-columns:minmax(240px,340px) minmax(0,1fr); gap:22px; padding:8px 0 6px;}
+  .lib-model-hero{display:grid; grid-template-columns:minmax(240px,min(440px,40%)) minmax(0,1fr); gap:22px; padding:8px 0 6px;}
   .lib-well-lg{border-radius:12px; border:1px solid var(--line-soft);}
   .lib-strip{display:flex; gap:6px; margin-top:8px; overflow-x:auto; padding-bottom:4px;}
   .lib-thumb{flex:none; width:52px; height:52px; padding:3px; border-radius:7px; border:1px solid var(--line-soft); background:var(--panel-2); cursor:pointer;}
@@ -2614,10 +2679,10 @@
   .lib-famgroup-hd{display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 12px; background:var(--panel-2); border-bottom:1px solid var(--line-soft);}
   .lib-famgroup-name{font-weight:700; font-size:13.5px;}
   .lib-famgroup-n{font-family:var(--mono); font-size:11px; color:var(--ink-faint);}
-  .lib-var{display:grid; grid-template-columns:64px minmax(0,1fr) auto; gap:12px; padding:10px 12px; border-top:1px solid var(--line-soft); align-items:start;}
+  .lib-var{display:grid; grid-template-columns:112px minmax(0,1fr) auto; gap:14px; padding:10px 12px; border-top:1px solid var(--line-soft); align-items:start;}
   .lib-famgroup-hd + .lib-var{border-top:none;}
   .lib-var.is-unavailable .lib-var-thumb img{opacity:.5;}
-  .lib-var-thumb{display:flex; align-items:center; justify-content:center; width:64px; height:64px; border-radius:8px; background:var(--panel-2); overflow:hidden;}
+  .lib-var-thumb{display:flex; align-items:center; justify-content:center; width:112px; height:112px; border-radius:8px; background:var(--panel-2); overflow:hidden;}
   .lib-var-thumb img{width:100%; height:100%; object-fit:contain;}
   .lib-var-main{min-width:0;}
   .lib-var-title{display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0;}
@@ -2632,9 +2697,16 @@
   .lib-conf.is-decision{color:var(--violet-soft); border-color:color-mix(in srgb,var(--violet-soft) 45%,transparent);}
   .lib-conf.is-dim{color:var(--ink-faint);}
   .lib-conf.is-bad{color:var(--bad); border-color:color-mix(in srgb,var(--bad) 45%,transparent);}
-  .lib-swatches{display:flex; align-items:center; gap:4px; margin-top:6px;}
-  .lib-sw{width:12px; height:12px; border-radius:50%; background:var(--sw); border:1px solid color-mix(in srgb,var(--ink) 25%,transparent);}
-  .lib-sw-txt{font-size:11.5px; color:var(--ink-dim); margin-left:4px;}
+  /* A file's filament: the total, each filament (colour, type, grams), the
+     estimated cost. Wraps as one list. */
+  .lib-fil{display:flex; flex-wrap:wrap; align-items:center; gap:5px 14px; margin-top:7px; font-size:12px; color:var(--ink-dim);}
+  .lib-fil-lbl{color:var(--ink-faint);}
+  .lib-fil-total{margin-left:-8px; font-weight:650; color:var(--ink);}
+  .lib-fil-chip{display:inline-flex; align-items:center; gap:6px; min-width:0;}
+  .lib-fil-type{color:var(--ink);}
+  .lib-fil-g{font-family:var(--mono); font-size:11px; color:var(--ink-faint);}
+  .lib-fil-cost b{font-weight:650; color:var(--ink);}
+  .lib-sw{flex:none; width:14px; height:14px; border-radius:50%; background:var(--sw); border:1px solid color-mix(in srgb,var(--ink) 25%,transparent);}
   .lib-var-dup{font-size:11.5px; color:var(--ink-faint); margin-top:4px;}
   .lib-var-act{display:flex; flex-direction:column; gap:6px; align-items:stretch;}
   .lib-explains{display:flex; flex-wrap:wrap; gap:4px 16px; margin-top:6px;}
@@ -2685,9 +2757,9 @@
   }
   @media (max-width:760px){
     .lib-model-hero{grid-template-columns:minmax(0,1fr);}
-    .lib-model-hero .lib-gallery{max-width:360px;}
-    .lib-var{grid-template-columns:52px minmax(0,1fr);}
-    .lib-var-thumb{width:52px; height:52px;}
+    .lib-model-hero .lib-gallery{max-width:440px;}
+    .lib-var{grid-template-columns:76px minmax(0,1fr);}
+    .lib-var-thumb{width:76px; height:76px;}
     .lib-var-act{grid-column:1 / -1; flex-direction:row;}
     .lib-var-act .btn{flex:1;}
   }

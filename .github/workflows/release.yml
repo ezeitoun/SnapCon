@@ -93,6 +93,8 @@ jobs:
 
           Download the build for your OS, put it in its own folder, and run it — no Node.js needed. A browser opens to the dashboard; use **Settings** to add your printers.
 
+          **Upgrading from an earlier version?** Put the new file in the folder your SnapCon already runs from, in place of the old one, and start it there. It reads your settings, printers and files from that folder; there is nothing to import.
+
           **First-launch security warning (the apps are unsigned):**
           - **Windows:** SmartScreen may say "Windows protected your PC" -> **More info -> Run anyway**.
           - **macOS:** right-click the file -> **Open** (or run `xattr -dr com.apple.quarantine <file>` once).

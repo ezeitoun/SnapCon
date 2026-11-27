@@ -1,7 +1,7 @@
 // test/uiRefreshReadability.test.js — the readability fixes after Part 6
 // (owner, 2026-11-06): one focus-ring colour per theme; lane words in theme
 // ink, the filament colour only in borders and accents; readable empty
-// lanes; "(Virtual)" and the Awareness "Con" above 4.5:1.
+// lanes; "(Virtual)" above 4.5:1.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
@@ -44,9 +44,8 @@ test("empty lanes keep the dashed border without the classic opacity on their te
   assert.match(block, /\.rf-lane\.empty \.rf-lane-name\{ color:var\(--ink-dim\); \}/);
 });
 
-test("(Virtual) and the Awareness brand", () => {
+test("(Virtual) in theme ink", () => {
   assert.match(block, /html\.ui-refresh \.hdr-transport\{ opacity:1; color:var\(--ink-faint\); \}/);
-  assert.match(block, /html\.ui-refresh\[data-theme="awareness"\] \.tb-name-con\{ color:color-mix\(in srgb, var\(--tb-accent\) 72%, var\(--ink\)\); \}/);
 });
 
 test("Camera view's missing-thumbnail placeholder: faint ink at full opacity under the switch only", () => {

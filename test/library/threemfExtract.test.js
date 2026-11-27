@@ -48,7 +48,27 @@ test("a sliced Bambu .gcode.3mf: MakerWorld metadata, profile, a printable plate
   assert.equal(p.slice.prediction, 9778);
   assert.deepEqual(p.slice.filaments.map(f => [f.type, f.color, f.usedG]), [["PETG", "#000000", 23.77], ["PETG", "#FFFFFF", 24.59]]);
   assert.deepEqual(p.slicedObjects, ["Keyrambit rivals main.stl"]);
-  assert.equal(p.thumbnail.entry, "Metadata/plate_1_small.png", "the small plate picture first");
+  assert.equal(p.thumbnail.entry, "Metadata/plate_1.png", "the full plate picture first");
+});
+
+test("a plate's picture is the largest the file holds: the full plate picture, else the small one", async () => {
+  // Owner, 2026-11-27: the Library kept the small plate picture (128 px in
+  // Bambu-family slicers) although the file also holds the full one (512 px),
+  // so larger pictures on a Model's page looked soft.
+  const plates = [{ no: 1, sliced: true, printerModelId: "N7" }];
+  const entriesOf = buf => extractBuffer(buf).then(r => r.x.plates[0].thumbnail);
+  const dirOf = names => names.map(name => ({ name, rawSize: 1000, compSize: 1000, method: 0, crc: 0 }));
+  const wanted = dir => wantedEntries(dir).map(w => w.name).filter(n => /plate_1.*\.png$/.test(n));
+
+  assert.equal((await entriesOf(build3mf({ plates }))).entry, "Metadata/plate_1.png");
+  // Only one of the two is read from the file, never both.
+  assert.deepEqual(wanted(dirOf(["Metadata/plate_1.png", "Metadata/plate_1_small.png", "Metadata/plate_1.gcode"])), ["Metadata/plate_1.png"]);
+  // Only the small one is there.
+  assert.deepEqual(wanted(dirOf(["Metadata/plate_1_small.png", "Metadata/plate_1.gcode"])), ["Metadata/plate_1_small.png"]);
+  // The full one is over the size limit for a picture: the small one is taken.
+  const big = dirOf(["Metadata/plate_1.png", "Metadata/plate_1_small.png", "Metadata/plate_1.gcode"]);
+  big[0].rawSize = 3 * 1024 * 1024;
+  assert.deepEqual(wanted(big), ["Metadata/plate_1_small.png"]);
 });
 
 test("an unsliced project: plates, objects and source references, and nothing printable", async () => {

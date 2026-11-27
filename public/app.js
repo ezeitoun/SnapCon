@@ -12,7 +12,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||t("fleet.error_panel.unknown_error_title")), description:(entry&&entry.d)||msg||code||'', url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "2026.11.0";
+const VERSION = "2026.11.1";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -738,7 +738,10 @@ function statusColorText(p){
   // Distinct from Updating on purpose: one is work in progress, the other is
   // a wait for the machine to come back. Amber matches the row's own bar.
   if(p.state==="rebooting") return { statusColor:"var(--warn)", statusTxt:t("printer_status.rebooting") };
-  if(printerShowsOffline(p)) return { statusColor:"var(--ink-faint)", statusTxt:t("printer_status.offline") };
+  // Idle and Offline name a token of their own with this design's colour as
+  // the fallback: a theme may give the two states its own colour (the design
+  // refresh's Night does, refresh.css) without touching --ok or --ink-faint.
+  if(printerShowsOffline(p)) return { statusColor:"var(--st-offline, var(--ink-faint))", statusTxt:t("printer_status.offline") };
   if(p.state==="printing") return { statusColor:"var(--busy)", statusTxt:t("printer_status.printing") };
   if(p.state==="paused") return { statusColor:"var(--paused)", statusTxt:t("printer_status.paused") };
   if(p.state==="error") return { statusColor:"var(--bad)", statusTxt:t("printer_status.error") };
@@ -749,7 +752,7 @@ function statusColorText(p){
   if(p.queuedFile&&p.queuedFile.status==='ready') return { statusColor:"var(--signal)", statusTxt:t("printer_status.loaded") };
   if(p.state==="complete") return { statusColor:"var(--complete)", statusTxt:t("printer_status.complete") };
   if(p.state==="cancelled") return { statusColor:"var(--bad)", statusTxt:t("printer_status.cancelled") };
-  return { statusColor:"var(--ok)", statusTxt:t("printer_status.idle") };
+  return { statusColor:"var(--st-idle, var(--ok))", statusTxt:t("printer_status.idle") };
 }
 
 // Whether the card offers Eject -- "this printer is no longer holding a job for
@@ -1397,10 +1400,6 @@ function applyUiRefresh(on){
   try{ localStorage.setItem("snapcon-ui", on ? "refresh" : "classic"); }catch{}
   if(on===uiRefresh()) return;
   document.documentElement.classList.toggle("ui-refresh", on);
-  // A saved Awareness appears or falls back to dark with the switch (Part 2).
-  let saved=null; try{ saved=localStorage.getItem("snapcon-theme"); }catch{}
-  const shown=saved==="awareness" ? shownTheme(saved) : document.documentElement.getAttribute("data-theme")==="awareness" ? "dark" : null;
-  if(shown && document.documentElement.getAttribute("data-theme")!==shown) document.documentElement.setAttribute("data-theme",shown);
   if($("themeBtn")) syncThemeButton();
   // Card markup may differ between the designs: rebuild, as a layout change does.
   if(typeof FLEET!=="undefined" && FLEET.length) renderFleet();
@@ -1946,8 +1945,8 @@ function fleetStatusSummary(list){
 const TB_STATUS = [
   { key:'printing',  word:'printer_status.printing',     pill:'global.topbar.pill_printing',  color:'var(--busy)' },
   { key:'attention', word:'global.topbar.pill_word_attention', pill:'global.topbar.pill_attention', color:'var(--bad)' },
-  { key:'idle',      word:'printer_status.idle',         pill:'global.topbar.pill_idle',      color:'var(--ok)' },
-  { key:'offline',   word:'printer_status.offline',      pill:'global.topbar.pill_offline',   color:'var(--ink-faint)' },
+  { key:'idle',      word:'printer_status.idle',         pill:'global.topbar.pill_idle',      color:'var(--st-idle, var(--ok))' },
+  { key:'offline',   word:'printer_status.offline',      pill:'global.topbar.pill_offline',   color:'var(--st-offline, var(--ink-faint))' },
 ];
 let TB_STATUS_LAST = null;
 // While the fleet hasn't loaded yet or a poll failed, the status cell says
@@ -2338,13 +2337,15 @@ function syncThemeButtonClassic(){
     $("tbSheetTheme").setAttribute("aria-pressed",light?"true":"false");
   }
 }
-// UI-REFRESH: three themes, cycled Day -> Night -> Awareness. A cycle is not
-// a pressed/unpressed toggle, so the refresh drops aria-pressed: the label
+// UI-REFRESH: two themes, Day and Night, the two the classic design has (a
+// third was removed on 2026-11-27; a value still saved under its name is an
+// unknown one, handled as unknown values always were). The refresh's button
+// is not a pressed/unpressed toggle, so it drops aria-pressed: the label
 // names the current theme and the next, the title the next, and the mobile
-// sheet the current one. The glyph is the current theme's: sun (Day), moon
-// (Night), ribbon (Awareness), all Lucide line icons.
-const THEME_CYCLE=["light","dark","awareness"];
-const THEME_GLYPH={ light:"#tb-sun", dark:"#tb-moon", awareness:"#tb-ribbon" };
+// sheet the current one. The glyph is the current theme's: sun (Day) or moon
+// (Night), both Lucide line icons.
+const THEME_CYCLE=["light","dark"];
+const THEME_GLYPH={ light:"#tb-sun", dark:"#tb-moon" };
 function nextThemeRefresh(cur){ const i=THEME_CYCLE.indexOf(cur); return THEME_CYCLE[(i<0?0:i+1)%THEME_CYCLE.length]; }
 function themeName(theme){ return t("global.topbar.theme_name_"+(THEME_CYCLE.includes(theme)?theme:"dark")); }
 function setThemeGlyph(href){ for(const id of ["themeBtn","tbSheetTheme"]){ const u=$(id)&&$(id).querySelector("use"); if(u&&u.getAttribute("href")!==href) u.setAttribute("href",href); } }
@@ -2360,9 +2361,6 @@ function syncThemeButtonRefresh(){
     $("tbSheetTheme").setAttribute("aria-label",t("global.topbar.theme_current_next",{current:themeName(cur),next:themeName(next)}));
   }
 }
-// UI-REFRESH: the theme this browser shows for a saved value. Awareness only
-// while the refresh is on; otherwise dark, and the saved value is kept.
-function shownTheme(saved){ return saved==="awareness" ? (uiRefresh()?"awareness":"dark") : saved; }
 
 // A signed-in user's saved theme is authoritative over whatever this
 // particular browser guessed for first paint (local prefers-color-scheme or
@@ -2372,10 +2370,9 @@ function shownTheme(saved){ return saved==="awareness" ? (uiRefresh()?"awareness
 // waiting on this request. A no-op for accounts that haven't picked a theme
 // yet (theme is null) — they keep following prefers-color-scheme as usual.
 function applyAccountTheme(user){
-  // UI-REFRESH: "awareness" is accepted; shownTheme() shows it as dark while the refresh is off.
-  if(!user || (user.theme!=="light" && user.theme!=="dark" && user.theme!=="awareness")) return;
+  if(!user || (user.theme!=="light" && user.theme!=="dark")) return;
   localStorage.setItem("snapcon-theme",user.theme);
-  const shown=shownTheme(user.theme);
+  const shown=user.theme;
   if(document.documentElement.getAttribute("data-theme")===shown) return;
   document.documentElement.setAttribute("data-theme",shown);
   syncThemeButton();
@@ -3069,7 +3066,7 @@ function wireUI(){
     else openHealthPage();
   });
   $("themeBtn").addEventListener("click", ()=>{
-    // UI-REFRESH: the refresh cycles three themes; classic toggles light/dark.
+    // UI-REFRESH: the refresh steps through its themes (Day and Night, THEME_CYCLE); classic toggles light/dark.
     const cur=document.documentElement.getAttribute("data-theme");
     const next=uiRefresh() ? nextThemeRefresh(cur) : (cur==="light"?"dark":"light");
     document.documentElement.setAttribute("data-theme",next);
@@ -3546,6 +3543,23 @@ $("filter").addEventListener("input", ()=>{
   if(!q){ SEARCH_RESULTS=null; renderList(); return; }
   SEARCH_DEBOUNCE=setTimeout(()=>runSearch(q), 250);
 });
+// Leaving a search without deleting the text by hand: the X in the box, or
+// Esc while the box holds text. Both empty the box and show the folder again.
+// A search still waiting to be sent is dropped here; one already sent is
+// dropped by runSearch when it finds the box changed.
+function clearFileSearch(){
+  clearTimeout(SEARCH_DEBOUNCE);
+  $("filter").value="";
+  SEARCH_RESULTS=null;
+  renderList();
+}
+$("filter").addEventListener("keydown", e=>{
+  // An empty box leaves Esc to whatever else listens for it.
+  if(e.key!=="Escape"||!$("filter").value) return;
+  e.preventDefault();
+  clearFileSearch();
+});
+$("filterClear").addEventListener("click", ()=>{ clearFileSearch(); $("filter").focus(); });
 async function runSearch(q){
   try{
     const sub=CURRENT_SUB;
@@ -6092,7 +6106,7 @@ function renderJob(){
   // printer, so there are no watts to estimate its energy from.
   const totalCost=fCost;
   const metaParts=[...(MAP.meta||[])];
-  if(totalCost>0) metaParts.push("$"+totalCost.toFixed(2));
+  if(totalCost>0) metaParts.push(CURRENCY+totalCost.toFixed(2));
   $("jmeta").textContent=metaParts.join("  ·  ");
   // detected printer — MAP.printerModel is raw slicer-reported data;
   // fileIdentity() maps it to a printer model or one of SnapCon's own brands
@@ -6464,7 +6478,27 @@ const THUMB_MISSING = new Set();
 function thumbImgHtml(p, stem, cls, {fitPart=false}={}){
   const url=`/api/thumbnail?printer=${p.id}&file=${encodeURIComponent(stem)}&t=${thumbToken(p,stem)}`;
   if(THUMB_MISSING.has(url)) return `<span class="stats-thumb-empty">—</span>`;
-  return `<img class="${cls}" src="${url}" data-thumb-url="${esc(url)}" alt=""${fitPart?' onload="thumbFitToPart(this)"':''} onerror="thumbRetry(this)">`;
+  // The zoom this picture was given the last time it loaded, so a redrawn
+  // card shows it zoomed from its first frame (THUMB_FIT).
+  const fit=fitPart?THUMB_FIT.get(url):null;
+  return `<img class="${cls}" src="${url}" data-thumb-url="${esc(url)}" alt=""${fit?` style="transform:${esc(fit)}"`:''}${fitPart?' onload="thumbFitToPart(this)"':''} onerror="thumbRetry(this)">`;
+}
+// Thumbnail URL -> the transform thumbFitToPart() gave that picture. A card is
+// rebuilt whenever something in cardSignature() changes (until 2026-11-27
+// that included every tool change of a multi-colour print). The rebuilt
+// card's <img> is a new element: the picture comes straight from the
+// browser's cache, but its zoom was only applied by its load event, one or
+// two frames later, so the thumbnail jumped on every tool change (reported
+// as a flicker; 7 times in 75 seconds on three printers). The URL carries the
+// job's token, so a new job starts without an entry. Bounded: the oldest
+// entry goes when there are more than a few hundred.
+const THUMB_FIT = new Map();
+function rememberThumbFit(img, transform){
+  const url=img.dataset&&img.dataset.thumbUrl;
+  if(!url) return;
+  if(!transform){ THUMB_FIT.delete(url); return; }
+  THUMB_FIT.delete(url); THUMB_FIT.set(url, transform);
+  if(THUMB_FIT.size>300) THUMB_FIT.delete(THUMB_FIT.keys().next().value);
 }
 // Slicer thumbnails draw the part in the middle of a transparent square, and
 // how much of it the part covers varies a lot (measured on the fleet: 43–86%
@@ -6483,9 +6517,12 @@ function thumbFitToPart(img){
     const k=Math.max(box/W, box/H), ox=(box-W*k)/2, oy=(box-H*k)/2;
     const bx0=ox+f.x0*k, bx1=ox+f.x1*k, by0=oy+f.y0*k, by1=oy+f.y1*k;
     const s=Math.min(1.8, Math.max(1, 0.94*Math.min(box/(bx1-bx0), box/(by1-by0))));
-    if(s<=1.01) return;
+    if(s<=1.01){ if(img.style.transform) img.style.transform=""; rememberThumbFit(img, null); return; }
     const mx=(bx0+bx1)/2-box/2, my=(by0+by1)/2-box/2;
-    img.style.transform=`translate(${(-s*mx).toFixed(1)}px, ${(-s*my).toFixed(1)}px) scale(${s.toFixed(3)})`;
+    const transform=`translate(${(-s*mx).toFixed(1)}px, ${(-s*my).toFixed(1)}px) scale(${s.toFixed(3)})`;
+    // Unchanged for a redrawn card (it already has this from thumbImgHtml).
+    if(img.style.transform!==transform) img.style.transform=transform;
+    rememberThumbFit(img, transform);
   }catch{ /* unreadable (a cross-origin image, say): leave it as it is */ }
 }
 // The part's bounding box in the image's own pixels: where alpha > 8, read
@@ -6575,12 +6612,14 @@ const CARD_CACHE = new Map();
 //   - The MAPSEL self-heal write inside buildCardHtml()'s mapHtml block is a
 //     one-time default-fill side effect, not part of what a signature
 //     should represent.
-// Patches the four values cardSignature() deliberately ignores into a card
+// Patches the values cardSignature() deliberately ignores into a card
 // reconcileFleetCards() decided to keep. Because everything else still
 // invalidates the signature, this function never has to add, remove or
 // re-order an element, change a class, or re-translate a string — it only
 // writes text and individual style properties into nodes that already
 // exist, addressed by explicit data-live hooks in buildCardHtml().
+// The one exception is the toolhead in use: syncCardActiveLane() draws the
+// card's filament lanes again when it changed (the reasons are there).
 //
 // Individual style properties, never the whole `style` attribute:
 // .prog-fill carries a per-card animation-delay seed that holds the
@@ -6634,6 +6673,8 @@ function updateFleetCardLiveValues(card, p){
   // every poll by itself, so it is patched here rather than rebuilding the
   // card. lastSeenAt itself is in the signature.
   setText('[data-live="seen"]', offlineSeenText(p.lastSeenAt, Date.now()));
+  // The toolhead in use: the lanes block is drawn again when it changed.
+  syncCardActiveLane(card, p);
   // The compact card leaves out a line's part whose value is missing.
   if(card.classList && card.classList.contains("cc-card")) syncCompactParts(card);
 }
@@ -6716,7 +6757,9 @@ function cardSignature(p){
     // and its "done/total" tooltip. p.plate.current, the object being
     // printed, changes as the nozzle moves between objects and is not shown.
     plate:p.plate ? { total:p.plate.total, excluded:p.plate.excluded } : null,
-    activeExt:p.activeExt, forceDefaults:p.forceDefaults,
+    // activeExt (the toolhead in use) is absent too: it changes at every
+    // tool change of a multi-colour print. Its hook is syncCardActiveLane().
+    forceDefaults:p.forceDefaults,
     heads:p.heads, capabilities:p.capabilities, tags:p.tags,
     queuedFile:p.queuedFile, stem,
     // Sends waiting for this printer (§37 P3): a state change redraws the card.
@@ -7010,25 +7053,29 @@ function buildCardHtml(p, need, dragEnabled){
             : `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="prog-time-val" data-live="remaining">${fmtRemaining(p.elapsed,p.progress)}</span></div>`)+
           `</div>`)+`</div>`;
       })():""}
-      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?(/* UI-REFRESH Part 5 */uiRefresh()?afcLanesHtmlRefresh(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete',p.printerFamily):afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete')):''}
+      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?cardLanesHtml(p,heads):''}
       ${mapHtml}
       ${printerNoteHtml(p)}
       ${mode?'':`<div class="foot${busy?'':' foot-idle'}">
         ${busy
+          // One row, the main action first (owner, 2026-11-27), by the printer's
+          // state and never by its brand. With a job: Pause or Resume · Plate ·
+          // Cancel · E-Stop. Compact's card has the same order (compactCardActions).
           ? (p.state==="paused"
                 ? `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_resume"))}</span></button>`
                 : `<button class="btn-chip" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""><span>${esc(t("printer.action_pause"))}</span></button>`)
+            + (p.capabilities?.excludeObject&&p.plate&&p.plate.total>1?`<button class="btn-chip" ${canAct()?"":"disabled"} data-plate="${p.id}" title="${esc(t("printer.action_plate_title",{done:p.plate.total-p.plate.excluded,total:p.plate.total}))}"><img src="/plate-icon.svg" alt=""><span>${esc(t("printer.action_plate"))}</span></button>`:"")
             // Visible label corrected from the old "Stop" to match the title,
             // the confirm() dialog's own wording, and the real action
             // (data-act="cancel", an irreversible cancel — not a pause-like
             // stop). Icon/handler unchanged, text only.
             + `<button class="btn-chip danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""><span>${esc(t("common.cancel"))}</span></button>`
-            + (p.capabilities?.excludeObject&&p.plate&&p.plate.total>1?`<button class="btn-chip" ${canAct()?"":"disabled"} data-plate="${p.id}" title="${esc(t("printer.action_plate_title",{done:p.plate.total-p.plate.excluded,total:p.plate.total}))}"><img src="/plate-icon.svg" alt=""><span>${esc(t("printer.action_plate"))}</span></button>`:"")
             + `<button class="btn-chip danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""><span>${esc(t("printer.action_estop"))}</span></button>`
-          : `<button class="btn-chip" ${sendBtnAttrs(p,false,canSend&&canAct(),{card:true})} data-id="${p.id}" data-start="0" title="${sendInFlight(p)?esc(t("fleet.upload.waiting_title")):maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
-            + `<button class="btn-chip" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct(),{card:true})} data-id="${p.id}" data-start="1" title="${sendInFlight(p)?esc(t("fleet.upload.waiting_title")):maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
-            + `<button class="btn-chip" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
+          : `<button class="btn-chip" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct(),{card:true})} data-id="${p.id}" data-start="1" title="${sendInFlight(p)?esc(t("fleet.upload.waiting_title")):maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""><span>${esc(t("printer.action_print"))}</span></button>`
+            // Able to take a job: Print · Reprint (after a finished print) · Upload · Preheat.
             + (p.state==='complete'&&p.filename?`<button class="btn-chip" ${canAct()?"":"disabled"} data-reprint="${p.id}" title="${esc(t("printer.action_reprint_title",{filename:p.filename}))}"><img src="/reprint-icon.svg" alt=""><span>${esc(t("printer.action_reprint"))}</span></button>`:"")
+            + `<button class="btn-chip" ${sendBtnAttrs(p,false,canSend&&canAct(),{card:true})} data-id="${p.id}" data-start="0" title="${sendInFlight(p)?esc(t("fleet.upload.waiting_title")):maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""><span>${esc(t("printer.action_upload"))}</span></button>`
+            + `<button class="btn-chip" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""><span>${esc(t("printer.action_preheat"))}</span></button>`
         }
       </div>`}
       ${cardStatusHtml(p)}`;
@@ -7170,6 +7217,50 @@ function compactSpoolTilesHtmlRefresh(heads, activeExt, printerId, canUnload, fa
   return `<div ${laneGridAttrs(lanes.length,family).replace('class="rf-lanes','class="cc-tiles rf-lanes')}>${tiles}</div>`;
 }
 
+// A card's filament lanes, in the design that is on. One place for each card
+// kind, used when the card is built and again by syncCardActiveLane(), so the
+// two can never draw the lanes differently.
+function cardLanesHtml(p, heads){
+  return (/* UI-REFRESH Part 5 */uiRefresh()?afcLanesHtmlRefresh(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete',p.printerFamily):afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'));
+}
+// UI-REFRESH Part 5: the refresh's 2-column chips, or the classic tiles.
+function compactLanesHtml(p){
+  return (uiRefresh() ? compactSpoolTilesHtmlRefresh(p.heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.printerFamily) : compactSpoolTilesHtml(p.heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament));
+}
+// The toolhead in use (p.activeExt) is not in cardSignature(): on a
+// multi-colour print it changes at every tool change, and while it was in
+// there the whole card was rebuilt each time (hover and keyboard focus lost,
+// the camera picture reloaded, the thumbnail drawn again). This is its hook,
+// called from updateFleetCardLiveValues().
+//
+// It is the one place that function replaces elements instead of writing a
+// text or a style: the active lane differs from the others in its class, its
+// inline colours, its spool drawing and its label, in four different lane
+// designs, so the lanes block is drawn again by the same function that built
+// it and swapped in. Nothing outside that block is touched. What the card
+// shows is read from the card itself (which lane has the "active" class), so
+// there is no second record to keep in step. Clicks on a lane are handled by
+// one listener on the fleet, so the new block needs no wiring; a lane that
+// had keyboard focus gets it back.
+// A card without lanes (offline, an error panel, no filament heads) has no
+// block and is left alone; whether a card has lanes at all depends only on
+// fields that are in the signature.
+function syncCardActiveLane(card, p){
+  const root=card.querySelector(".afc-section, .cc-tiles");
+  if(!root) return;
+  const lanes=root.querySelectorAll(".afc-lane-card, .cc-tile");
+  let shown=-1;
+  for(let i=0;i<lanes.length;i++) if(lanes[i].classList.contains("active")){ shown=i; break; }
+  const head=(p.heads||[])[p.activeExt];
+  const want=head&&head.loaded ? p.activeExt : -1;
+  if(shown===want) return;
+  const html=card.classList.contains("cc-card") ? compactLanesHtml(p) : cardLanesHtml(p, p.heads||[]);
+  if(!html) return;
+  const focused=document.activeElement&&root.contains(document.activeElement) ? document.activeElement.dataset.unloadExt : undefined;
+  root.outerHTML=html;
+  if(focused!==undefined){ const again=card.querySelector(`[data-unload-ext="${focused}"]`); if(again) again.focus(); }
+}
+
 function buildCompactCardHtml(p, dragEnabled){
   const card=document.createElement("div");
   const mode=cardMode(p);
@@ -7273,8 +7364,7 @@ function buildCompactCardHtml(p, dragEnabled){
     body=(staged?fileLine:'')+(p.state==="maintenance"?'':`<div class="cc-ready">${esc(t(staged?"fleet.compact.ready_to_print":"fleet.compact.ready"))}</div>`);
   }
   const tiles=!mode&&p.online&&!hasError&&p.capabilities?.filamentHeads
-    // UI-REFRESH Part 5: the refresh's 2-column chips, or the classic tiles.
-    ? (uiRefresh() ? compactSpoolTilesHtmlRefresh(p.heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.printerFamily) : compactSpoolTilesHtml(p.heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament)) : '';
+    ? compactLanesHtml(p) : '';
 
   // Buttons: the main two, then "···" with every action again and Cancel
   // print / E-Stop at its foot.
@@ -7839,8 +7929,9 @@ function listRowCellsHtml(p){
           : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""></button>`)
       + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""></button>`
       + `<button class="btn-chip icon-only danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
-    : `<button class="btn-chip icon-only" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
-      + `<button class="btn-chip icon-only" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
+    // The cards' order (owner, 2026-11-27): the main action first. A row has no Reprint.
+    : `<button class="btn-chip icon-only" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
+      + `<button class="btn-chip icon-only" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
       + `<button class="btn-chip icon-only" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""></button>`;
   return [
     `<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input" data-camsel="${p.id}"></label>`,
@@ -9447,7 +9538,7 @@ function renderPfileInfo(){
     `<div class="pfi-stats">`+
     (timeSec>0?`<div class="pfi-row"><span class="pfi-lbl">${esc(t("fleet.modal.pfile.print_time_label"))}</span><span class="pfi-val">${fmtDuration(timeSec)}</span></div>`:'')+
     (totalGrams>0?`<div class="pfi-row"><span class="pfi-lbl">${esc(t("fleet.modal.pfile.filament_label"))}</span><span class="pfi-val">${totalGrams.toFixed(1)} g</span></div>`:'')+
-    (totalCost>0?`<div class="pfi-row"><span class="pfi-lbl">${esc(t("fleet.modal.pfile.est_cost_label"))}</span><span class="pfi-val">$${totalCost.toFixed(2)}</span></div>`:'')+
+    (totalCost>0?`<div class="pfi-row"><span class="pfi-lbl">${esc(t("fleet.modal.pfile.est_cost_label"))}</span><span class="pfi-val">${esc(CURRENCY)}${totalCost.toFixed(2)}</span></div>`:'')+
     `</div></div>`;
 }
 

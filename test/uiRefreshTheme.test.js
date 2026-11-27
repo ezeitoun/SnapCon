@@ -1,8 +1,10 @@
 // test/uiRefreshTheme.test.js — Part 2 of the design refresh: the theme
-// button cycles Day -> Night -> Awareness while the refresh is on, and stays
-// exactly today's light/dark toggle while it is off. A saved "awareness"
-// shows as dark with the refresh off and is never overwritten by that, so
-// turning the refresh back on restores it.
+// button. The refresh has two themes, Day and Night, the same two the classic
+// design toggles between; its button names the current and the next theme and
+// shows a sun or a moon. A third theme, Awareness, was removed on 2026-11-27
+// (owner): a browser or an account that still has it saved is treated like
+// any other unknown value, as it always was for one (the OS choice on first
+// paint, ignored for an account).
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
@@ -28,17 +30,16 @@ function firstPaint({ stored = {}, search = "", prefersLight = false } = {}) {
   return { refresh: classes.has("ui-refresh"), theme: attrs["data-theme"] };
 }
 
-test("first paint: Awareness only with the refresh on; otherwise dark, whatever the OS says", () => {
-  const aw = { "snapcon-theme": "awareness" };
-  assert.deepEqual(firstPaint({ stored: { ...aw, "snapcon-ui": "refresh" } }), { refresh: true, theme: "awareness" });
-  assert.deepEqual(firstPaint({ stored: { ...aw, "snapcon-ui": "classic" }, prefersLight: true }), { refresh: false, theme: "dark" });
-  assert.deepEqual(firstPaint({ stored: aw, prefersLight: true }), { refresh: false, theme: "dark" });
-  assert.deepEqual(firstPaint({ stored: { ...aw, "snapcon-ui": "classic" }, search: "?ui=refresh" }), { refresh: true, theme: "awareness" });
-  assert.deepEqual(firstPaint({ stored: { ...aw, "snapcon-ui": "refresh" }, search: "?ui=classic" }), { refresh: false, theme: "dark" });
+test("first paint: Day or Night, nothing else; a saved name that no longer exists counts as nothing saved", () => {
+  for (const stored of [{ "snapcon-theme": "awareness", "snapcon-ui": "refresh" }, { "snapcon-theme": "awareness", "snapcon-ui": "classic" }, { "snapcon-theme": "awareness" }, { "snapcon-theme": "sepia", "snapcon-ui": "refresh" }]) {
+    assert.equal(firstPaint({ stored, prefersLight: true }).theme, "light", "the OS choice: " + JSON.stringify(stored));
+    assert.equal(firstPaint({ stored, prefersLight: false }).theme, "dark", "the OS choice: " + JSON.stringify(stored));
+  }
   // Light and dark, and the OS choice when nothing is saved, as before.
   assert.equal(firstPaint({ stored: { "snapcon-theme": "light", "snapcon-ui": "refresh" } }).theme, "light");
+  assert.equal(firstPaint({ stored: { "snapcon-theme": "dark", "snapcon-ui": "refresh" }, prefersLight: true }).theme, "dark");
   assert.equal(firstPaint({ stored: { "snapcon-ui": "refresh" }, prefersLight: true }).theme, "light");
-  assert.equal(firstPaint({ stored: { "snapcon-theme": "sepia", "snapcon-ui": "refresh" } }).theme, "dark", "anything unknown: dark");
+  assert.doesNotMatch(headSrc, /awareness/i, "the first-paint script knows two themes");
 });
 
 // The theme functions of app.js, run against a minimal page.
@@ -65,25 +66,25 @@ function page({ refresh, theme, stored = {} }) {
   vm.runInContext([
     grab("function uiRefresh(){", "\n", 0).split("\n")[0],
     grab("function applyUiRefresh(on){", "\nfunction syncUiRefreshSwitch"),
-    grab("function syncThemeButton(){", "// UI-REFRESH: three themes, cycled"),
+    grab("function syncThemeButton(){", "// UI-REFRESH: two themes"),
     grab("const THEME_CYCLE=", "// A signed-in user's saved theme"),
     grab("function applyAccountTheme(user){", "\n}\n") + "\n}",
   ].join("\n"), sandbox);
   return { els, htmlAttrs, store, classes, run: s => vm.runInContext(s, sandbox) };
 }
 
-test("the refresh cycles Day -> Night -> Awareness -> Day", () => {
+test("the refresh's theme button goes Day -> Night -> Day", () => {
   const p = page({ refresh: true, theme: "light" });
-  assert.deepEqual(["light", "dark", "awareness", "bogus"].map(x => p.run(`nextThemeRefresh(${JSON.stringify(x)})`)), ["dark", "awareness", "light", "light"]);
+  assert.equal(p.run("THEME_CYCLE.join()"), "light,dark");
+  assert.deepEqual(["light", "dark", "awareness", "bogus"].map(x => p.run(`nextThemeRefresh(${JSON.stringify(x)})`)), ["dark", "light", "light", "light"]);
   // The click: one branch per design.
   assert.match(appSrc, /const next=uiRefresh\(\) \? nextThemeRefresh\(cur\) : \(cur==="light"\?"dark":"light"\);/);
 });
 
-test("refresh button: names the current and next theme, no aria-pressed, a sun, a moon and a ribbon", () => {
+test("refresh button: names the current and next theme, no aria-pressed, a sun or a moon", () => {
   for (const [theme, label, title, glyph] of [
     ["light", "Theme: Day. Switch to Night", "Switch to Night", "#tb-sun"],
-    ["dark", "Theme: Night. Switch to Awareness", "Switch to Awareness", "#tb-moon"],
-    ["awareness", "Theme: Awareness. Switch to Day", "Switch to Day", "#tb-ribbon"],
+    ["dark", "Theme: Night. Switch to Day", "Switch to Day", "#tb-moon"],
   ]) {
     const p = page({ refresh: true, theme });
     p.run("syncThemeButton()");
@@ -97,11 +98,11 @@ test("refresh button: names the current and next theme, no aria-pressed, a sun, 
   }
 });
 
-test("classic button: exactly today's toggle, and the usual glyph even after the ribbon was shown", () => {
-  const p = page({ refresh: true, theme: "awareness" });
+test("classic button: exactly today's toggle, and the usual glyph after the refresh's was shown", () => {
+  const p = page({ refresh: true, theme: "dark" });
   p.run("syncThemeButton()");
-  assert.equal(p.els.themeBtn.use.a.href, "#tb-ribbon");
-  // Switch the refresh off: Awareness falls back to dark, the classic button returns.
+  assert.equal(p.els.themeBtn.use.a.href, "#tb-moon");
+  // Switch the refresh off: the theme stays, the classic button returns.
   p.run("applyUiRefresh(false)");
   assert.equal(p.htmlAttrs["data-theme"], "dark");
   assert.equal(p.els.themeBtn.use.a.href, "#tb-theme");
@@ -114,41 +115,49 @@ test("classic button: exactly today's toggle, and the usual glyph even after the
   assert.equal(light.els.themeBtn.title, en.global.topbar.theme_title_to_dark);
 });
 
-test("a saved Awareness is kept while the refresh is off, and comes back when it is on", () => {
-  const p = page({ refresh: false, theme: "dark", stored: { "snapcon-theme": "awareness", "snapcon-ui": "classic" } });
-  p.run("applyUiRefresh(true)");
-  assert.equal(p.htmlAttrs["data-theme"], "awareness");
-  p.run("applyUiRefresh(false)");
-  assert.equal(p.htmlAttrs["data-theme"], "dark");
-  assert.equal(p.store["snapcon-theme"], "awareness", "never overwritten by switching");
-  // Light and dark are not touched by the switch.
-  const l = page({ refresh: true, theme: "light", stored: { "snapcon-theme": "light" } });
-  l.run("applyUiRefresh(false)"); assert.equal(l.htmlAttrs["data-theme"], "light");
+test("switching the design on or off never changes the theme, or what is saved", () => {
+  for (const theme of ["light", "dark"]) {
+    const p = page({ refresh: false, theme, stored: { "snapcon-theme": theme, "snapcon-ui": "classic" } });
+    p.run("applyUiRefresh(true)"); assert.equal(p.htmlAttrs["data-theme"], theme);
+    p.run("applyUiRefresh(false)"); assert.equal(p.htmlAttrs["data-theme"], theme);
+    assert.equal(p.store["snapcon-theme"], theme);
+  }
 });
 
-test("an account's Awareness is accepted; shown as dark while the refresh is off", () => {
-  const off = page({ refresh: false, theme: "light" });
-  off.run('applyAccountTheme({ theme: "awareness" })');
-  assert.deepEqual([off.htmlAttrs["data-theme"], off.store["snapcon-theme"]], ["dark", "awareness"]);
-  const on = page({ refresh: true, theme: "light" });
-  on.run('applyAccountTheme({ theme: "awareness" })');
-  assert.equal(on.htmlAttrs["data-theme"], "awareness");
-  const bad = page({ refresh: true, theme: "light" });
-  bad.run('applyAccountTheme({ theme: "sepia" })');
-  assert.equal(bad.htmlAttrs["data-theme"], "light", "an unknown account theme is ignored, as before");
+test("an account's theme is Day or Night; any other saved value is ignored, as an unknown one always was", () => {
+  const p = page({ refresh: true, theme: "light" });
+  p.run('applyAccountTheme({ theme: "dark" })');
+  assert.deepEqual([p.htmlAttrs["data-theme"], p.store["snapcon-theme"]], ["dark", "dark"]);
+  for (const old of ["awareness", "sepia"]) {
+    const q = page({ refresh: true, theme: "light", stored: { "snapcon-theme": "light" } });
+    q.run(`applyAccountTheme({ theme: ${JSON.stringify(old)} })`);
+    assert.deepEqual([q.htmlAttrs["data-theme"], q.store["snapcon-theme"]], ["light", "light"], old);
+  }
 });
 
-test("the server accepts awareness; the OS listener still only picks light or dark", () => {
-  assert.match(serverSrc, /if \(theme !== "light" && theme !== "dark" && theme !== "awareness"\) return res\.status\(400\)/);
+test("the server saves Day or Night only; the OS listener still only picks light or dark", () => {
+  assert.match(serverSrc, /if \(theme !== "light" && theme !== "dark"\) return res\.status\(400\)\.json\(\{ error: "theme must be \\"light\\" or \\"dark\\"" \}\);/);
   assert.match(appSrc, /document\.documentElement\.setAttribute\("data-theme",e\.matches\?"light":"dark"\);/);
 });
 
-test("the ribbon glyph, its credit, and the theme names in both languages", () => {
-  for (const id of ["tb-sun", "tb-moon", "tb-ribbon"]) assert.match(html, new RegExp(`<symbol id="${id}" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1\\.75"`), id);
+test("the two glyphs, their credit, and the theme names in both languages", () => {
+  for (const id of ["tb-sun", "tb-moon"]) assert.match(html, new RegExp(`<symbol id="${id}" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1\\.75"`), id);
   const notices = fs.readFileSync(path.join(ROOT, "THIRD_PARTY_NOTICES.md"), "utf8");
   assert.match(notices, /## Lucide/); assert.match(notices, /ISC License/); assert.match(notices, /Copyright \(c\) 2026 Lucide Icons and Contributors/);
-  for (const k of ["theme_name_light", "theme_name_dark", "theme_name_awareness", "theme_switch_to", "theme_current_next"]) {
+  assert.match(notices, /the "sun" and "moon" icons/);
+  for (const k of ["theme_name_light", "theme_name_dark", "theme_switch_to", "theme_current_next"]) {
     assert.ok(en.global.topbar[k] && es.global.topbar[k], k);
   }
-  assert.deepEqual([en.global.topbar.theme_name_light, en.global.topbar.theme_name_dark, en.global.topbar.theme_name_awareness], ["Day", "Night", "Awareness"]);
+  assert.deepEqual([en.global.topbar.theme_name_light, en.global.topbar.theme_name_dark], ["Day", "Night"]);
+});
+
+test("nothing of the removed third theme is left: no rule, glyph, name, credit or accepted value", () => {
+  const read = f => fs.readFileSync(path.join(ROOT, f), "utf8");
+  assert.doesNotMatch(read("public/refresh.css"), /awareness/i, "refresh.css");
+  assert.doesNotMatch(html, /awareness|tb-ribbon/i, "index.html");
+  assert.doesNotMatch(appSrc, /"awareness"|tb-ribbon|Awareness/, "app.js");
+  assert.doesNotMatch(serverSrc, /"awareness"|\\"awareness\\"/, "server.js");
+  assert.doesNotMatch(read("THIRD_PARTY_NOTICES.md"), /ribbon|Awareness/, "the notices credit only what is shipped");
+  assert.equal("theme_name_awareness" in en.global.topbar, false);
+  assert.equal("theme_name_awareness" in es.global.topbar, false);
 });

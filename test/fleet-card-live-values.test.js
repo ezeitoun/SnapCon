@@ -183,10 +183,19 @@ test("the remaining structural fields all still invalidate the signature", () =>
   for (const [field, value] of [
     ["name", "U1 Blue"], ["brand", "Creality"], ["url", "http://192.168.40.9"],
     ["filename", "other.gcode"], ["completedAt", 1700000000000],
-    ["activeExt", 2], ["forceDefaults", false], ["tags", ["office"]]
+    ["forceDefaults", false], ["tags", ["office"]]
   ]) {
     assert.notEqual(sigOf(withField(field, value)), base, field + " must still force a rebuild");
   }
+});
+
+test("the toolhead in use, which changes at every tool change of a multi-colour print, doesn't rebuild the card", () => {
+  // 2026-11-27: its hook is syncCardActiveLane(), which draws the card's lanes
+  // again (test/cardActiveLane.test.js). Which heads there are still rebuilds.
+  const base = sigOf(BASE());
+  assert.equal(sigOf(withField("activeExt", 2)), base);
+  assert.equal(sigOf(withField("activeExt", null)), base);
+  assert.notEqual(sigOf(withField("heads", [{ loaded: true, hex: "#000000", material: "PLA" }])), base);
 });
 
 test("filament used and the layer, which move every few seconds while printing, don't rebuild the card", () => {
@@ -205,7 +214,7 @@ test("the object being printed (plate.current) doesn't rebuild the card; excludi
   assert.notEqual(sigOf(withField("plate", null)), sigOf(withField("plate", { total: 2, excluded: 0 })), "and the button's presence");
 });
 
-test("exactly six fields are absent from the signature — nothing else silently joined them", () => {
+test("exactly seven fields are absent from the signature — nothing else silently joined them", () => {
   // Guards the real hazard: someone removing one more field "because it was
   // easy" without giving it a data-live hook.
   const sig = JSON.parse(cardSignature(BASE()));
@@ -213,13 +222,13 @@ test("exactly six fields are absent from the signature — nothing else silently
   assert.deepEqual(keys, [
     // cardStatus, statusOverride, uploadCancel and sendFill are the client-only stores:
     // all are rendered into the card, so all must force the rebuild that shows them.
-    "activeExt", "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
+    "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
     "filename", "forceDefaults", "heads", "lastSeenAt", "message", "name",
     // pendingSends (§37 P3): the sends waiting for the printer, a structural field.
     "online", "pendingSends", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
     "transport", "uploadCancel", "uploadStrip", "url"
   ]);
-  for (const gone of ["progress", "elapsed", "bed", "hotend", "filamentUsed", "layer"]) {
+  for (const gone of ["progress", "elapsed", "bed", "hotend", "filamentUsed", "layer", "activeExt"]) {
     assert.equal(gone in sig, false, gone + " must stay out of the signature");
   }
 });

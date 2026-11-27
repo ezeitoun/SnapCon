@@ -12,7 +12,7 @@ const crypto = require("crypto");
 const { inflate } = require("./zipReader");
 
 // Bump when extraction changes what it reads (files are re-read on start).
-const RULE_VERSION = 1;
+const RULE_VERSION = 2;   // 2: a plate's picture is the full one when the file holds it (was: the small one first)
 
 // The entries worth reading, given the directory. Sizes are the raw
 // (uncompressed) sizes; the mesh is never among them.
@@ -37,13 +37,14 @@ function wantedEntries(directory) {
     if (names.has(n) && size(n) <= LIMITS.configBytes) add(n);
   }
   for (const e of directory) if (PLATE_MD5.test(e.name) && e.rawSize <= 1024) add(e.name);
-  // One picture per plate: the small one first (cheapest), else the full one.
+  // One picture per plate: the full one (512 px in Bambu-family slicers),
+  // else the small one (128 px). The largest the file holds, within the limit.
   const plates = new Set();
   for (const e of directory) { const m = PLATE_PNG.exec(e.name) || PLATE_GCODE.exec(e.name); if (m) plates.add(+m[1]); }
   for (const p of plates) {
     const small = `Metadata/plate_${p}_small.png`, full = `Metadata/plate_${p}.png`;
-    if (names.has(small) && size(small) <= LIMITS.thumbBytes) add(small);
-    else if (names.has(full) && size(full) <= LIMITS.thumbBytes) add(full);
+    if (names.has(full) && size(full) <= LIMITS.thumbBytes) add(full);
+    else if (names.has(small) && size(small) <= LIMITS.thumbBytes) add(small);
   }
   if (!plates.size && names.has("Auxiliaries/.thumbnails/thumbnail_3mf.png") && size("Auxiliaries/.thumbnails/thumbnail_3mf.png") <= LIMITS.thumbBytes) add("Auxiliaries/.thumbnails/thumbnail_3mf.png");
   for (const e of directory) if (isAuxiliary(e.name) && /\.(png|jpe?g|webp|gif)$/i.test(e.name) && e.rawSize <= LIMITS.auxPictureBytes) add(e.name);
@@ -202,7 +203,7 @@ function extract3mf({ directory, raw, zip64 = false }) {
     const gcodeEntry = `Metadata/plate_${no}.gcode`;
     const md5Text = text(`Metadata/plate_${no}.gcode.md5`);
     const md5 = md5Text && /^[0-9a-f]{32}$/i.test(md5Text.trim()) ? md5Text.trim().toLowerCase() : null;
-    const thumbName = [`Metadata/plate_${no}_small.png`, `Metadata/plate_${no}.png`].find(n => raw[n]);
+    const thumbName = [`Metadata/plate_${no}.png`, `Metadata/plate_${no}_small.png`].find(n => raw[n]);
     const picture = thumbName ? bytes(thumbName) : null;
     return {
       plate_no: no, name: ms.name, sliced: names.has(gcodeEntry),

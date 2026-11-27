@@ -133,6 +133,77 @@ Measured with 20 printers in Error (1920×1080, headless Chrome without a hardwa
 
 Camera view's missing-thumbnail placeholder (owner, 2026-11-06): `refresh.css` `html.ui-refresh body.camview .stats-thumb-empty{ opacity:1; color:var(--ink-faint); }` over classic's 30% opacity (`style.css` `.stats-thumb-empty`). Measured 4.94 / 4.92 / 5.45:1 (Night / Day / Awareness); switch off unchanged (2.46 / 1.94).
 
+## The printer's action buttons (owner's mockup, 2026-11-27)
+
+Supersedes Part 3 for a printer's action buttons in every view: the row at the foot of a card (Full and Camera), the Compact card's two buttons and its "more" button, and the List row's icon buttons. Every other button keeps Part 3. The colours, corners and states are written once, for all three places (`:is(.pcard .foot, .cc-actions, .list-actions-cell) > .btn-chip`); only the sizes differ by view. Built from the owner's three written descriptions of the mockup that day (the picture itself was not available), in Night colours; Day and Awareness take the same roles from their own tokens.
+
+| What | Where | Refresh |
+|---|---|---|
+| Order (both designs) | `public/app.js` `buildCardHtml()`, `renderFleetListRows()` | By state, never by brand: Print · Reprint · Upload · Preheat; Pause or Resume · Plate · Cancel · E-Stop. Compact already had this order; a List row has it for the actions it has (no Reprint, no Plate). |
+| One row (both designs) | `public/style.css` `.pcard .foot` | Packed from the left. The row is a container (`cardfoot`); a row too narrow tightens in steps whose widths are in `ch`, so they follow the system font. Icons are never left out (owner: a row without them looked wrong); `flex-wrap` remains the last resort. Classic keeps its pills and its own steps. |
+| One set of sizes (a card's row) | `refresh.css`, "The printer's action buttons" | The sizes are custom properties on the row (`--ar-primary`, `--ar-pad`, `--ar-icon`, `--ar-icon-gap`, `--ar-gap`, `--ar-font`) and depend only on the row's width, never on how many actions it has: Print, Upload and Preheat measure the same on a card with Reprint and on one without. No button grows. |
+| Sizes, a card's row | same | 36px high, 8px corners, 18px icon 6px from the label, 8px between buttons, 10px sides. |
+| Sizes, Compact | same | The row's sizes at the Compact card's own scale (28px high, 11.5px label, from `style.css`): 14px icon 5px from the label, 8px sides, 76px for Print, Resume and Pause. Cancel and E-Stop stay in the card's menu; the "more" button takes the 8px corners and quiet border. |
+| Sizes, List | same | The row's own 30px squares (`style.css`), a 16px icon, and the divider before E-Stop (14px high). |
+| Print, Resume | same | Flat `--brand` with `--brand-ink` (Night: lavender, dark text), one shared width of 96px, icon and label centred. A longer label widens its own button instead of being cut. The icon is darkened in Night and white in Awareness, where the fill would hide its light blue. |
+| Pause | same | No fill, a quiet border, and the width of Resume (owner, the same day): it stands where Resume stands, so Plate and Cancel keep their place when a print is paused or resumed. The three shared-width buttons have 1px sides, so "Resume" stays inside the width at the narrowest steps. |
+| Plate, Reprint, Upload, Preheat | same | No fill, a quiet border, as wide as the content. |
+| Cancel | same | No fill, `--bad` label, a soft `--bad` border (22%): E-Stop is the only strong red in the row. |
+| E-Stop | same | Flat `--btn-ds-top` with `--btn-ds-border`, a 1px divider before it; on a card's row it is pushed to the far right. |
+| Cannot be used now | same | Not faded as a whole (Part 3's 45%): a muted label (`--ink-faint`) and a greyed icon, readable. Filled buttons keep a dimmed fill. |
+| Flat | same | No gradient, bevel or glow in the row. A press still moves 1px (`translate`), as in Part 3. |
+| Height | `test/uiRefreshButtons.test.js` | Card chips had no height of their own (Part 3); the action row now has 36px. Still no 44px minimum on chips. |
+
+The steps, by the row's width (a card is its row plus 32px). In a narrow system font (Arial widths, close to Windows):
+
+| Card from about | Print / Resume | Sides | Icon | Between | Label |
+|---|---|---|---|---|---|
+| 417px | 96px | 10px | 18px | 8px | 12px |
+| 397px | 88px | 8px | 18px | 8px | 12px |
+| 377px | 80px | 6px | 18px | 8px | 12px |
+| 352px | 76px | 4px | 18px | 6px | 12px |
+| 336px | 72px | 4px | 16px | 5px | 12px |
+| 300px | 66px | 2px | 13px | 4px | 11.5px |
+
+A wider font moves each step to a wider card and has one more (64px, 2px, 13px, 3px, 11px); with it, four actions on a card under about 312px wrap to a second row.
+
+Measured on the farm, Night, window widths 1280 to 2560 in two fonts: every label is one width on every card, every row at the same 16px from the card's bottom, nothing outside a card, no label cut; one line everywhere except the wide font on 301px cards. `test/cardActionRow.test.js`, `test/cardActionRowRefresh.test.js`.
+
+## Night palette (owner, 2026-11-27)
+
+A palette update for the refresh's Night theme only: layouts, spacing, sizes, order, icon shapes and interactions are unchanged; Day and the classic design are untouched. It replaces Part 1's Night values (the lavender). One colour per role, in the theme's tokens, so every view and page shows the same colour for the same thing.
+
+| Role | Colour | Tokens |
+|---|---|---|
+| Page background | `#111214` | `--chassis` |
+| Cards, top bar, panels | `#191B1E` | `--panel`, `--tb-bg` |
+| Raised surfaces, filament tiles | `#222428` | `--panel-2` |
+| Borders and dividers | `#303338` | `--line`, `--line-soft`, `--line-2` |
+| Text | `#F1F3F5`, `#AEB5BE` | `--ink`, `--ink-dim` (`--ink-faint` is `#8B929C`, still 4.5:1) |
+| Primary actions | `#9AB9D4`, dark text `#111214` | `--brand`, `--brand-ink`, `--accent`, `--tb-accent`, `--btn-p-*` |
+| Printing | `#4FB8B0` | `--busy`, `--uz-printing` |
+| Complete | `#78C79A` | `--complete`, `--ok` |
+| Paused and attention | `#E0B563` | `--paused`, `--signal`, `--uz-paused` |
+| Idle and Offline | `#9BA3AE` | `--idle`, `--offline`, new `--st-idle` and `--st-offline`, `--uz-idle` |
+| Errors, E-Stop | as they were | `--bad`, `--btn-ds-*` |
+
+- **Idle and Offline** had no token of their own: a card took `--ok` (green) and `--ink-faint`. `statusColorText()` and the top bar's counts now read `var(--st-idle, var(--ok))` and `var(--st-offline, var(--ink-faint))` (`public/app.js`), so only Night changes. The same function colours Full, Compact, Camera and List.
+- **Where a token cannot reach** (colours and glows classic writes out for its dark theme), Night has its own rules at the end of `refresh.css`: a 1px neutral divider under the printer's name in every card view, whatever the state; a flat progress fill with no sheen or glow (Error keeps its red glow); no halo on the status badge or the percentage; the active filament slot with a neutral outline and fill (the lane's inline filament colour is overridden, the swatch keeps it); neutral top-bar icons, a slate fill for the selected page and the selected fleet filter; the printer's name and the times in `--ink`; the temperature bars without their glow (their heat colour is data and stays).
+- **Charts and tags**: Utilization's Printing, Paused, Idle and Error take the state's colour (Offline is a darker slate, since no label sits on each bar); Health's storage bar and the Library's file-type tags lose their purple and blue for the primary colour, slate and green.
+- **Not changed**: filament swatches, printer previews, the logo, the icon files (the Print and Resume icon is still darkened on the primary fill), Maintenance and Updating (`--violet*`).
+
+Checked on the farm at 1440 and 1920: Full, Compact, Camera, List, Files, the view menu, the Heat dialog, Health, Utilization, the Library and a Model, every Settings tab. A scan of every visible element's colours, borders, outlines, gradients and shadows found no purple, no saturated blue and no coloured glow other than the red of errors. Each state has one colour in all four fleet views; action rows on one line. `test/uiRefreshNightPalette.test.js`, `test/uiRefreshTokens.test.js`.
+
+## Awareness removed (owner, 2026-11-27)
+
+The refresh's third theme is gone; the refresh has Day and Night, the two the classic design has. **Parts 1, 2 and the remediation notes above still describe Awareness as it was built; they are kept as history, and everything they say about it no longer applies.**
+
+- **Removed:** every `html.ui-refresh[data-theme="awareness"]` rule of `refresh.css` (the generated copy of the light rules, its tokens, its gradient-button tokens, the "Con" colour, the white Print icon); `"awareness"` from the theme cycle, the glyph table and the account-theme check, and `shownTheme()` with them (`public/app.js`); the Awareness branch of the first-paint script and the `#tb-ribbon` symbol (`public/index.html`); the value from the theme route's check (`server.js`); `theme_name_awareness` from both bundled locales (version 119); the ribbon's credit from `THIRD_PARTY_NOTICES.md`.
+- **A value still saved under that name** (a browser's `snapcon-theme`, an account's theme) is an unknown value and is handled as unknown values always were: first paint follows the OS choice, an account's unknown theme is ignored. Nothing saved is rewritten.
+- **The theme button** in the refresh goes Day, Night, Day; it still names the current and the next theme and shows a sun or a moon.
+- **Not rewritten:** the published 2026.11.0 release notes, which list three themes. The next release's notes should say the third was removed.
+- `test/uiRefreshTheme.test.js`, `test/uiRefreshTokens.test.js`.
+
 ## Status
 
 Preview. Off by default; each browser switches it on in Settings > View. Some screens are only recoloured, and details may change.

@@ -91,8 +91,12 @@ test("the CSS: the action bar at the bottom, materials that wrap, no ellipsis an
 });
 
 test("one place chooses each design; the new strings exist in both languages", () => {
-  assert.match(appSrc, /\(\/\* UI-REFRESH Part 5 \*\/uiRefresh\(\)\?afcLanesHtmlRefresh\(heads,p\.activeExt,p\.id,!!p\.capabilities\?\.unloadFilament,p\.state==='complete',p\.printerFamily\):afcLanesHtml\(/);
-  assert.match(appSrc, /\? \(uiRefresh\(\) \? compactSpoolTilesHtmlRefresh\(p\.heads,p\.activeExt,p\.id,!!p\.capabilities\?\.unloadFilament,p\.printerFamily\) : compactSpoolTilesHtml\(/);
+  // One helper per card kind (cardLanesHtml, compactLanesHtml): the card
+  // builders and the tool-change redraw both go through it.
+  assert.match(appSrc, /function cardLanesHtml\(p, heads\)\{\n  return \(\/\* UI-REFRESH Part 5 \*\/uiRefresh\(\)\?afcLanesHtmlRefresh\(heads,p\.activeExt,p\.id,!!p\.capabilities\?\.unloadFilament,p\.state==='complete',p\.printerFamily\):afcLanesHtml\(/);
+  assert.match(appSrc, /function compactLanesHtml\(p\)\{\n  return \(uiRefresh\(\) \? compactSpoolTilesHtmlRefresh\(p\.heads,p\.activeExt,p\.id,!!p\.capabilities\?\.unloadFilament,p\.printerFamily\) : compactSpoolTilesHtml\(/);
+  assert.equal((appSrc.match(/afcLanesHtmlRefresh\(/g) || []).length, 2, "defined once, called once");
+  assert.equal((appSrc.match(/compactSpoolTilesHtmlRefresh\(/g) || []).length, 2, "defined once, called once");
   for (const k of ["lane_active", "lane_loaded", "lane_last_used", "lane_empty"]) assert.ok(en.fleet.card[k] && es.fleet.card[k], k);
 });
 
@@ -101,7 +105,7 @@ test("one place chooses each design; the new strings exist in both languages", (
 // Compact show them. Checked on the card each view really builds, against both
 // stylesheets in the order the page loads them: the `display` that wins for
 // the lanes container, by specificity, then by order. Also measured in a
-// browser (Day, Night and Awareness).
+// browser (Day and Night).
 const { makeHarness } = require("./helpers/cardHarness");
 const goldenPrinters = require("./fixtures/card-golden/printers");
 const SHEETS = ["style.css", "refresh.css"].map(f => fs.readFileSync(path.join(ROOT, "public", f), "utf8").replace(/\/\*[\s\S]*?\*\//g, ""));

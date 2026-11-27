@@ -63,6 +63,7 @@ Decisions may also carry the **attribute** `hidden` (File or Model).
 |---|---|
 | D1 | Regular and Admin users edit tags, collections, covers and grouping. View users are read-only. Permissions are refinable later without changing the data architecture (§11). |
 | D2 | No physical deletion, rename or move of files in Phase 1. The only "destructive" action is **Hide from Library**. Admin-only deletion may come later (quarantine model, §16). |
+| D2a | **Amended by the owner, 2026-11-27.** The grid can pick several Models (a checkbox on each card, or a right-click) and offers **Hide** and **Delete** for them. The Library still deletes nothing itself: Delete hands the Models' print files that are in the G-code folder to the File Browser's delete (`docs/file-delete.md`: Move to Trash by default, permanent only for a signed-in Admin, with its in-use checks and audit) and then hides each Model whose named files all went. Pictures, documents, files in another location, files inside a 3MF and files that are missing or unreachable are left where they are. Offered to whoever may hide Models and act on files; `library.files.delete` stays unused. |
 | D3 | No new dependency unless necessary. Result: none needed (§10). |
 | D4 | Automation follows the canonical confidence policy (§4.4). Decisions are `authoritative` and always win. Merge / split / move / approve / reject must be easy (§7). |
 | D5 | A printable slice on an approved library location prints directly, with every existing compatibility, permission and safety check (§12). |
@@ -736,8 +737,8 @@ Rules that apply throughout:
   - `model_settings.config` (objects, `source_file`, plates), `project_settings.config`
     (profile), `slice_info.config` (sliced plates, printer id, prediction, weight, filaments,
     object names).
-  - `plate_N.gcode.md5` and thumbnails (the small plate PNG first, then plate, then
-    `thumbnail_3mf`).
+  - `plate_N.gcode.md5` and thumbnails (the full plate PNG first, then the small one, then
+    `thumbnail_3mf`: the largest picture the file holds, within the 2 MB limit; owner, 2026-11-27).
   - `Auxiliaries/*` pictures and documents become entry Files (`container_id`, `entry_path`).
   - Anything unrecognised is `flavour='other'`. **Unreadable is a Review Item, never a crash.**
 - **`threemf.js`:** `read()` stays byte-identical for the Bambu connector; new functions sit
@@ -1067,7 +1068,7 @@ and components. The File Browser is unchanged.
   - filters: Printer, Material, Type, Tag (1b), Collection (1b), Printed, Source, Show hidden;
   - cards: cover, name, "N variants" or "N files", "17 prints · 13 confirmed", and a fleet-fit
     strip;
-  - multi-select: "Merge 2 models", "Hide 2 models";
+  - multi-select: "Hide 2 models", "Delete 2 models" (D2a; a checkbox on each card, a bar under the grid, and a right-click menu). "Merge 2 models" is not built;
   - a Needs-attention link, an offline bar with Recheck, and an indexing pill.
 - **Model page:**
   - gallery;
@@ -1845,8 +1846,10 @@ hide, rename, cover editing, undo) and nothing from M7 (root-aware printing, his
   (designer, licence, MakerWorld design, locations, "Fits" with the printers by name); its own
   attention items; suggestions with "Why only a suggestion?"; printable files **grouped by
   printer family** (never flattened), each with plate, printer confidence (Confident / Likely /
-  Unknown / Set by a person), profile, slicer, time (`fmtDuration`), weight, copies, layer and
-  nozzle, filament swatches, location and path, availability, duplicates, "Why is this here?"
+  Unknown / Set by a person), profile, slicer, time (`fmtDuration`), copies, layer and
+  nozzle, a filament line (the file's total weight; each filament's colour, type and grams; the
+  estimated filament cost when a price is set in Settings, by the File Browser's rule), location
+  and path, availability, duplicates, "Why is this here?"
   and "Why this printer?"; Projects with every Plate and what the project is set up for; other
   files. Admins get a link to Diagnostics.
 - **Print / Queue:** through the File Browser's own path — `selectFile()` then the existing Send

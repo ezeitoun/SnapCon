@@ -147,7 +147,8 @@ function thumbWorld({ W, H, box = 98, opaque }) {
       return { data: d }; } }) }; };
   const ctx = vm.createContext({ Math, Number, Set, encodeURIComponent, THUMB_TOKENS: {}, Date,
     esc: s => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;"), document: { createElement: canvas } });
-  vm.runInContext("const THUMB_MISSING = new Set();\n" + ["thumbToken", "thumbImgHtml", "thumbFitToPart", "thumbPartBox"].map(extractFn).join("\n"), ctx);
+  // THUMB_FIT and rememberThumbFit: the zoom a picture was given, kept for a redrawn card (test/thumbnailZoomKept.test.js).
+  vm.runInContext("const THUMB_MISSING = new Set(); const THUMB_FIT = new Map();\n" + ["thumbToken", "thumbImgHtml", "rememberThumbFit", "thumbFitToPart", "thumbPartBox"].map(extractFn).join("\n"), ctx);
   const img = { naturalWidth: W, naturalHeight: H, clientWidth: box, style: {} };
   return { ctx, img, fit: () => { vm.runInContext("thumbFitToPart", ctx)(img); return img.style.transform || null; } };
 }

@@ -1009,3 +1009,54 @@ Docker image and the downloads; every installation also shows it at `/THIRD_PART
 - Docker: the three Queue Management actions above need the new settings folder layout; see
   `docs/docker-config-migration.md`.
 - Starting a Bambu plate other than plate 1 has not yet been tested on physical hardware (see above).
+
+
+2026.11.1
+
+Fixes and new additions to 2026.11.0. Nothing changes in how printers are driven or in the queue, and
+your settings and data are kept.
+
+### New additions
+- **Model Library: select several models to hide or delete them.** Each model card has a checkbox at
+  its bottom right. With at least one ticked, a bar under the grid offers Hide and Delete; a right-click
+  on a card offers the same. Both ask first, naming the model or saying how many.
+  - **Hide** takes the models out of the Library; "Show hidden models" lists them and offers Unhide.
+    Nothing is deleted.
+  - **Delete** uses the file browser's delete for the models' print files in the G-code folder: Move to
+    Trash by default, and Delete permanently only for a signed-in Admin. The models are then hidden.
+    Pictures, documents and files in other locations are left where they are, and the dialog says how
+    many.
+- **Model Library: sharper pictures for 3MF files.** The Library now keeps a plate's full picture
+  (512 px in Bambu-family slicers) instead of the small one (128 px). 3MF files are read again once
+  after the update.
+- **Model Library: a Model's page** shows larger pictures, and writes out each filament a file needs:
+  its colour, its type and its grams, then the total and the estimated filament cost (when a filament
+  price is set in Settings → General).
+- **Model Library: opening it closes the file manager.**
+- **File browser: leave a search with ✕ or Esc.** The search box has a ✕ while it holds text, and Esc
+  clears it too. Before, the only way back to the folder was to delete the text.
+- **File browser: the selected file's details show in every view.** The filaments it needs, the
+  printer it was sliced for and the estimated cost were hidden in Compact and Camera view. Its picture
+  is larger.
+- **Printer cards: the actions stay on one row, the main action first.** An idle printer shows Print,
+  Reprint, Upload, Preheat; a printing one shows Pause or Resume, Plate, Cancel, E-Stop. On a narrow
+  card the buttons tighten in steps and keep their icons. List view uses the same order.
+
+### Fixes
+- The estimated cost is written with the currency set in Settings → General. In the file browser and
+  in the dialog for printing a file that is already on the printer it always showed "$".
+- Settings → General: an empty "Filament, per spool" or electricity rate box showed an example number
+  that read as a saved value. The examples now say "e.g.".
+- A card's print picture no longer jumps for a moment when the card is redrawn.
+- A card is no longer redrawn at every tool change of a multi-colour print. Only its filament lanes
+  are updated, so whatever you were pointing at or had selected on the card stays.
+
+### Design refresh preview
+These apply only when the preview is on (Settings → View).
+- **New: flat action buttons** in every view. Print and Resume are the filled ones, E-Stop sits apart
+  at the right, and a button that cannot be used now stays readable.
+- **New: a Night palette** with neutral dark surfaces, steel blue for the main actions, teal for
+  printing, green for complete, amber for paused, and one grey for idle and offline.
+- **Removed: the Awareness theme.** The preview now has Day and Night, like the classic design. A
+  browser or account that had Awareness chosen follows the computer's light or dark setting until a
+  theme is picked again.

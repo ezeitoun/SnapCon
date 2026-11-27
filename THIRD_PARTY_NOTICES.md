@@ -4,9 +4,9 @@ SnapCon includes the following third-party material.
 
 ## Lucide
 
-- **What:** the "sun", "moon" and "ribbon" icons, drawn as the `#tb-sun`, `#tb-moon` and `#tb-ribbon` symbols in `public/index.html` (the top-bar theme button in the design refresh preview: Day, Night and Awareness). Redrawn at stroke-width 1.75; the path data is unchanged.
-- **Source:** https://lucide.dev — https://github.com/lucide-icons/lucide (`icons/sun.svg`, `icons/moon.svg`, `icons/ribbon.svg`)
-- **License:** ISC, below. Lucide's license file lists "moon" among the icons derived from Feather, so the moon icon is also under Feather's MIT license (the second notice below); "sun" and "ribbon" are not on that list.
+- **What:** the "sun" and "moon" icons, drawn as the `#tb-sun` and `#tb-moon` symbols in `public/index.html` (the top-bar theme button in the design refresh preview: Day and Night). Redrawn at stroke-width 1.75; the path data is unchanged.
+- **Source:** https://lucide.dev — https://github.com/lucide-icons/lucide (`icons/sun.svg`, `icons/moon.svg`)
+- **License:** ISC, below. Lucide's license file lists "moon" among the icons derived from Feather, so the moon icon is also under Feather's MIT license (the second notice below); "sun" is not on that list.
 
 ```
 ISC License

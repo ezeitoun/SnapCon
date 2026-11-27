@@ -205,8 +205,11 @@ test("header: checkbox, brand, icons and badge on the first line; the name alone
 });
 
 test("the badge and the state line take statusColorText()'s colour", () => {
-  for (const [p, colour] of [[PRINTERS.printing, "--busy"], [PRINTERS.complete, "--complete"], [PRINTERS.idle, "--ok"], [PRINTERS.error, "--bad"], [PRINTERS.offline, "--ink-faint"]]) {
-    assert.match(compact(p), new RegExp(`^<div class="pcard[^"]*" data-pid="7" style="--status-color:var\\(${colour}\\)">`), p.state);
+  // Idle and Offline name a token of their own, with this design's colour as
+  // the fallback (a theme may give the two states its own colour).
+  for (const [p, colour] of [[PRINTERS.printing, "var(--busy)"], [PRINTERS.complete, "var(--complete)"], [PRINTERS.idle, "var(--st-idle, var(--ok))"], [PRINTERS.error, "var(--bad)"], [PRINTERS.offline, "var(--st-offline, var(--ink-faint))"]]) {
+    assert.ok(compact(p).startsWith(`<div class="pcard`), p.state);
+    assert.match(compact(p).slice(0, 200), new RegExp(`^<div class="pcard[^"]*" data-pid="7" style="--status-color:${colour.replace(/[()]/g, "\\$&")}">`), p.state);
   }
 });
 
