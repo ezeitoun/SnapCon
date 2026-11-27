@@ -10,7 +10,7 @@
 // (firmware 5.1.7): cameraStreamUrl is "" when the camera is off and the full
 // URL when it is on. Verified live on 2026-09-09 — camera off, cameraStreamUrl
 // "", getCameraSnapshot failing with exactly `connect ECONNREFUSED
-// 192.168.4.51:8080`.
+// 192.168.40.51:8080`.
 //
 // It is consulted ONLY on the failure path, so a healthy snapshot still costs
 // exactly one request. And it must never MASK a real fault: if /detail says the

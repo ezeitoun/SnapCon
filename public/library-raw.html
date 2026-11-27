@@ -96,7 +96,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const stem = n => String(n || "").replace(/\.[^./\\]+$/, "");
 const fmtBytes = b => b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
 let DATA = null;
 
@@ -121,7 +120,7 @@ function card(title, obj) {
   return `<div class="card"><h3>${esc(title)}</h3>${rows.length ? rows.map(([k, v]) => `<div class="kv"><span title="${esc(k)}">${esc(k)}</span><span>${esc(v)}</span></div>`).join("") : '<div class="sub">None</div>'}</div>`;
 }
 function listCard(title, items, fmt) {
-  return `<div class="card"><h3>${esc(title)} (${items.length})</h3>${items.length ? items.slice(0, 12).map(x => `<div class="kv"><span title="${esc(x.root + ":" + x.path)}">${esc(stem(x.path.split("/").pop()))}</span><span>${esc(fmt(x))}</span></div>`).join("") + (items.length > 12 ? `<div class="sub">…and ${items.length - 12} more</div>` : "") : '<div class="sub">None</div>'}</div>`;
+  return `<div class="card"><h3>${esc(title)} (${items.length})</h3>${items.length ? items.slice(0, 12).map(x => `<div class="kv"><span title="${esc(x.root + ":" + x.path)}">${esc(x.path.split("/").pop())}</span><span>${esc(fmt(x))}</span></div>`).join("") + (items.length > 12 ? `<div class="sub">…and ${items.length - 12} more</div>` : "") : '<div class="sub">None</div>'}</div>`;
 }
 
 function filtered() {
@@ -213,7 +212,7 @@ function render() {
     ].join("");
     return `<tr>
       <td>${f.thumb ? `<img class="thumb" loading="lazy" alt="" src="/api/library/thumbs/${esc(f.thumb)}">` : ""}</td>
-      <td class="file"><span class="name" title="${esc(f.name)}">${esc(stem(f.name))}</span><span class="path" title="${esc(f.root + ":" + f.path)}">${esc(f.root)}:${esc(f.path)}</span>
+      <td class="file"><span class="name" title="${esc(f.name)}">${esc(f.name)}</span><span class="path" title="${esc(f.root + ":" + f.path)}">${esc(f.root)}:${esc(f.path)}</span>
         ${f.slicer ? `<span class="path">${esc(f.slicer)}${f.objects && f.objects.length ? " · " + f.objects.length + " object entries" : ""}${f.copies ? " · " + f.copies + "×" : ""}</span>` : ""}
         ${f.threemf ? threemfBlock(f.threemf) : ""}${lineageBlock(f.lineage)}
         ${f.profile ? `<details><summary>Profile</summary><ul class="ev">${Object.entries(f.profile).filter(([, v]) => v).map(([k, v]) => `<li><span class="k">${esc(k)}</span> = ${esc(v)}</li>`).join("")}${(f.objects || []).map(o => `<li><span class="k">object (${esc(o.origin)})</span> ${esc(o.raw)} ×${o.copies}${o.generic ? " <span class=\"k\">generic</span>" : ""}</li>`).join("")}</ul></details>` : ""}

@@ -76,6 +76,7 @@ function harness() {
     buildCardHtml: p => { counts.builds++; return makeEl(p.id, wrap, counts); },
     updateFleetCardLiveValues: () => { counts.liveUpdates++; },
     closeCamRtc: id => { counts.closes.push(id); },
+    uiRefresh: () => false,   // the design refresh preview is off: classic cards
     // A removed card releases every camera transport it might have been using;
     // the relayed one (Bambu) is closed alongside WebRTC.
     closeCamStream: () => {},

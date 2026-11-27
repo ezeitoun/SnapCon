@@ -41,7 +41,11 @@ const RESOLUTIONS_BY_REASON = Object.freeze({
   "pool-invalid": ["stop"], // reassignment happens outside the queue engine — see onPoolReassigned
   "recovery-mismatch": ["acknowledge", "stop"],
   "recovery-interrupted": ["retry", "skip", "stop"],
-  "recovery-unknown-outcome": ["resume", "retry", "skip", "stop"]
+  // No Resume: this reason is raised for a printer that is NOT paused on the
+  // item (idle at runtime, or paused on a different file at startup), so a
+  // resume would either fail or resume a print the queue never sent. A person
+  // who saw the print finish says so with mark-completed (docs/TODO.md §34).
+  "recovery-unknown-outcome": ["mark-completed", "retry", "skip", "stop"]
 });
 
 // Reasons that mean "this item never actually started printing" — the only
@@ -89,12 +93,20 @@ function onDispatchFailure(state, itemId, error) {
   if (state.queueState !== "dispatching" || !state.currentItem || state.currentItem.id !== itemId) {
     throw new Error("onDispatchFailure: no matching dispatching item");
   }
-  const failedItem = { ...state.currentItem, status: "failed", finishedAt: Date.now() };
+  // The item was never started, whatever became of its file: "failed" is the
+  // dispatch. uploadOutcome says what the transfer itself came to when that was
+  // not a plain failure — "sent" (cancelled after the printer confirmed the
+  // file) or "unknown" (it may have the file) — and travels with the item and
+  // the attention so neither reads as "the printer does not have it" (§37 P1).
+  const outcome = error && (error.uploadOutcome === "sent" || error.uploadOutcome === "unknown") ? error.uploadOutcome : null;
+  const failedItem = { ...state.currentItem, status: "failed", finishedAt: Date.now(), ...(outcome ? { uploadOutcome: outcome } : {}) };
+  const extra = {};
+  if (error) for (const k of ["file", "by", "reason", "seconds", "printerPrompt"]) if (error[k] != null) extra[k] = error[k];
   return {
     ...state,
     queueState: "queue_attention_required",
     attentionReason: "dispatch-failed",
-    attentionDetail: { code: (error && error.code) || "dispatch-error", message: (error && error.message) || "Dispatch failed", resumable: false },
+    attentionDetail: { code: (error && error.code) || "dispatch-error", message: (error && error.message) || "Dispatch failed", resumable: false, ...(outcome ? { uploadOutcome: outcome } : {}), ...extra },
     currentItem: failedItem,
     recentHistory: pushHistory(state.recentHistory, failedItem),
     updatedAt: Date.now()
@@ -144,6 +156,23 @@ function onProbeFailedOrCancelled(state, resumable, detail) {
     recentHistory: pushHistory(state.recentHistory, failedItem),
     updatedAt: Date.now()
   };
+}
+
+// The printer sat idle, without a complete/error/cancel the queue saw, while
+// the queue believed this item was printing (docs/TODO.md §34). Standby is not
+// completion: the outcome is unknown, the same reason reconcileOnStartup gives
+// this case at startup. The item stays current and its history is untouched
+// until a person chooses what to do; nothing advances on its own. itemId
+// guards against the item having changed since the observation was made.
+function onPrinterIdleWhilePrinting(state, itemId, detail) {
+  if (state.queueState !== "printing" || !state.currentItem || state.currentItem.id !== itemId) {
+    throw new Error("onPrinterIdleWhilePrinting: no matching printing item");
+  }
+  return attentionState(state, "recovery-unknown-outcome", {
+    code: (detail && detail.code) || "printer-idle",
+    message: (detail && detail.message) || "The printer went idle without reporting how the print ended",
+    resumable: false
+  });
 }
 
 // ---- Bed-clear lifecycle ----
@@ -203,6 +232,15 @@ function resolveAttention(state, action) {
 
   if (action === "resume") {
     return { ...state, queueState: "printing", attentionReason: null, attentionDetail: null, updatedAt: Date.now() };
+  }
+  if (action === "mark-completed") {
+    // A person confirms the print finished. Recorded exactly as a completion
+    // the printer reported (onProbeComplete): completed, finish time, history,
+    // then bed-clear before anything else dispatches — plus who decided, so it
+    // is never mistaken for printer data.
+    if (!state.currentItem) throw new Error("resolveAttention: nothing to mark completed");
+    const completedItem = { ...state.currentItem, status: "completed", finishedAt: Date.now(), completedBy: "user" };
+    return { ...state, queueState: "awaiting_bed_clear", attentionReason: null, attentionDetail: null, currentItem: completedItem, recentHistory: pushHistory(state.recentHistory, completedItem), updatedAt: Date.now() };
   }
   if (action === "acknowledge") {
     // recovery-mismatch: trust whatever the printer is actually doing; don't
@@ -306,12 +344,41 @@ function stopQueue(state) { return { ...state, queueStopped: true, updatedAt: Da
 // every still-queued item is recorded as removed, and the printer is left
 // idle (queuePaused/queueStopped are untouched, so it's immediately ready to
 // accept and dispatch new work, same as any other idle printer).
-function clearQueue(state) {
-  let history = state.currentItem
-    ? pushHistory(state.recentHistory, { ...state.currentItem, status: "cancelled", finishedAt: Date.now() })
-    : state.recentHistory;
+// The current item is recorded once, from what is actually known about how
+// it ended (docs/TODO.md §36):
+// - printing or dispatching: Clear stops it now, so it is cancelled by the
+//   user, even if it failed once before and was resumed;
+// - its outcome already in history (completed, failed, skipped): that entry
+//   stands. A completion the printer reported is never overwritten;
+// - the printer reported it stopped while Clear's cancel was under way
+//   (cancelledItemId: the item the caller sent a cancel for): the "failed"
+//   the queue just recorded is that cancel, so it becomes cancelled by the
+//   user;
+// - never sent to the printer (file missing or changed): removed;
+// - otherwise nobody knows how it ended (the printer went idle unseen, a
+//   restart interrupted it): unknown, never a guessed outcome.
+function clearQueue(state, { cancelledItemId = null } = {}) {
+  const cur = state.currentItem;
+  const now = Date.now();
+  let history = state.recentHistory;
+  if (cur) {
+    const cancelled = { ...cur, status: "cancelled", cancelledBy: "user", finishedAt: now };
+    let last = -1;
+    history.forEach((h, i) => { if (h.id === cur.id) last = i; });
+    const stoppedByCancel = cancelledItemId === cur.id && state.queueState === "queue_attention_required"
+      && (state.attentionReason === "print-failed" || state.attentionReason === "dispatch-failed");
+    if (state.queueState === "printing" || state.queueState === "dispatching") {
+      history = pushHistory(history, cancelled);
+    } else if (stoppedByCancel && last >= 0 && history[last].status === "failed") {
+      history = history.map((h, i) => i === last ? { ...h, status: "cancelled", cancelledBy: "user" } : h);
+    } else if (last < 0) {
+      const status = cancelledItemId === cur.id ? "cancelled"
+        : NEVER_PRINTED_REASONS.includes(state.attentionReason) ? "removed" : "unknown";
+      history = pushHistory(history, status === "cancelled" ? cancelled : { ...cur, status, finishedAt: now });
+    }
+  }
   for (const item of state.queue) {
-    history = pushHistory(history, { ...item, status: "removed", finishedAt: Date.now() });
+    history = pushHistory(history, { ...item, status: "removed", finishedAt: now });
   }
   return {
     ...state,
@@ -446,7 +513,7 @@ module.exports = {
   newQueueItemId, pushHistory,
   claimTransition,
   onDispatchSuccess, onDispatchFailure, onFileVerificationFailed, onDispatchDeferred,
-  onProbeComplete, onProbeFailedOrCancelled,
+  onProbeComplete, onProbeFailedOrCancelled, onPrinterIdleWhilePrinting,
   onBedClearStarted, onBedClearSuccess, onBedClearFailure,
   resolveAttention, acceptFileChange, onPoolReassigned,
   confirmManualBedClear,

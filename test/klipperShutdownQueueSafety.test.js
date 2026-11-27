@@ -24,7 +24,7 @@ const assert = require("node:assert/strict");
 const E = require("../queue/QueueEngine");
 const creality = require("../connectors/creality-klipper");
 
-const P = { name: "SPARKX i7", url: "http://192.168.4.240:7125" };
+const P = { name: "SPARKX i7", url: "http://192.168.40.240:7125" };
 const FILE = "i1.gcode";
 
 // Exactly what a shutdown-mid-print looks like on the wire: Klipper freezes

@@ -1,0 +1,627 @@
+{
+  "boundary": "firmware-inventory",
+  "comment": "Firmware inventory extraction: the read-only GET /api/firmware and its helpers move from server.js to routes/firmwareInventory.js. Executed only with the owner's OK to Dev, mechanically by tools/refactor/codemods/extract-firmware-inventory.js (one contiguous slice; one declared rewrite, PRINTERS -> getPrinters()). EXCLUDED, by the owner's ruling, and untouched: everything about firmware DEPLOYMENT — /api/firmware-files, /api/firmware-inspect, /api/firmware-deploy, /api/firmware-options, /api/firmware-stop, /api/firmware-status, /api/firmware-deploy-status and their state (FW_STATE, FW_QUEUE, FW_RUNNING, FW_STOP_REQUESTED, FW_JOBS, fwBusyWith, fwDraining, firmwareTargetFor, firmwareDeployBlockedBy, runFirmwareDeploy, drainFirmwareQueue, …). The codemod refuses if the moved text reads any FW_* name other than its own FW_PROBE_TIMEOUT_MS, and checks all seven deployment routes are in server.js exactly once before and after.",
+  "base": "68f2293327768bd09d147bbff434e70a9ff2f25a",
+  "baseNote": "On the batch branch (refactor/batch-snapshot-firmware) the baseline pins commit is 68f2293. The same change exists as 920ef18 on the standalone branch refactor/firmware-inventory; 920ef18 is NOT an ancestor of the batch branch and must never be used as a reset target here. See verifiedBaseline (standalone), integrationBaseline (batch) and extractionParent.",
+  "movedFrom": "server.js",
+  "sourceRange": "One contiguous slice of server.js at the base: lines 4450-4597 (148 lines). 4450-4455: the \"// ---- Firmware inventory (same Moonraker APIs fluidd reads) ----\" header comment and its blank line; 4456-4464: firmwareTabEligible with its comment; 4465-4471: FW_PROBE_TIMEOUT_MS with its comment; 4472-4514: probeFirmware with its comment; 4515-4597: app.get(\"/api/firmware\", requireAuth, …). The block ends directly before the blank line and the \"// ---- Health diagnostics: GET /api/health and its helpers live in\" registration, which stays byte-identical (checked by the codemod). The three names (firmwareTabEligible, FW_PROBE_TIMEOUT_MS, probeFirmware) are used nowhere else in server.js or routes/ (grep-verified at the base).",
+  "newFiles": [
+    "routes/firmwareInventory.js"
+  ],
+  "allowedFiles": [
+    "server.js",
+    "test/firmwareInventory.test.js",
+    "test/firmwareDeploy.test.js",
+    "test/connectorCoreMethods.test.js",
+    "test/helpers/firmwareInventoryCode.js"
+  ],
+  "moved": [
+    "firmwareTabEligible",
+    "FW_PROBE_TIMEOUT_MS",
+    "probeFirmware",
+    "GET /api/firmware"
+  ],
+  "rewrites": [
+    {
+      "from": "PRINTERS",
+      "to": "getPrinters()"
+    }
+  ],
+  "injected": {
+    "requireAuth": "server.js:394 const (from auth)",
+    "getPrinters": "() => PRINTERS — server.js:98 `let CFG, FOLDER, PRINTERS;`, reassigned by loadConfig and the config routes (lines 125, 251, 265, 282); policy rule 4",
+    "printerVisibleTo": "server.js:239 const (groupAccess)",
+    "getConnector": "server.js:18 const (connectors)",
+    "getCapabilities": "server.js:18 const (connectors)",
+    "probeCached": "server.js:2951 function (hoisted; the authoritative probe — test/fleetProbe.test.js pins its callers)",
+    "how": "parameters of registerFirmwareInventoryRoutes(app, { requireAuth, getPrinters, printerVisibleTo, getConnector, getCapabilities, probeCached }). firmwareTabEligible, probeFirmware and the route use injected names, so they are declared inside registerFirmwareInventoryRoutes (indented by 2); FW_PROBE_TIMEOUT_MS, a pure constant, stays at module scope with its comment. No module-level dependency slots. The moved code reads PRINTERS twice (the single read's PRINTERS[idx], the list's PRINTERS.map) and no CFG, FOLDER or USERS.",
+    "requiresInModule": "none — the module requires nothing"
+  },
+  "exports": "module.exports = { registerFirmwareInventoryRoutes } — nothing else. registerFirmwareInventoryRoutes returns nothing. No `_internal`: no existing test needs the helpers by name through the module (test/firmwareInventory.test.js extracts probeFirmware and firmwareTabEligible from the source TEXT and keeps doing so with loader-only edits), and the new pins exercise them through the route only.",
+  "strictMode": "routes/firmwareInventory.js has no \"use strict\" (server.js is sloppy mode; semantics kept identical).",
+  "moduleState": {
+    "constants": "FW_PROBE_TIMEOUT_MS at module scope; a number, no timers, no Maps, no I/O at creation. The boundary owns no mutable state (the 20 s timer is per call, created and cleared inside probeFirmware).",
+    "registration": "server.js requires the module and calls registerFirmwareInventoryRoutes(app, {...}) at the moved block's original position (replacing lines 4450-4597), directly before the Health registration, so the Express route order and the require order are unchanged (bed-temp route, firmware inventory, health, sync…). Function declarations that were hoisted to server.js's top level (firmwareTabEligible, probeFirmware) now exist from registration on; nothing outside the block references them (grep-verified), so this is unobservable — stated for the Guardian."
+  },
+  "pinningTests": [
+    "test/firmwareInventoryBehaviour.test.js",
+    "test/firmwareInventory.test.js",
+    "test/firmwareDeploy.test.js",
+    "test/fleetProbe.test.js",
+    "test/connectorCoreMethods.test.js"
+  ],
+  "declaredTestFiles": [
+    "test/helpers/firmwareInventoryCode.js"
+  ],
+  "declaredHarness": {
+    "test/firmwareInventory.test.js": [
+      {
+        "base": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(ROOT, \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(ROOT, \"routes\", \"firmwareInventory\\.js\"\\), \"utf8\"\\);$"
+      },
+      {
+        "base": "^  return serverSrc\\.slice\\(at, serverSrc\\.indexOf\\(\"\\\\n\\}\", at\\) \\+ 2\\);$",
+        "head": "^  return serverSrc\\.slice\\(at, serverSrc\\.indexOf\\(\"\\\\n  \\}\", at\\) \\+ 4\\);$"
+      },
+      {
+        "base": "^  const route = serverSrc\\.slice\\(start, serverSrc\\.indexOf\\(\"\\\\napp\\.\", start \\+ 10\\)\\);$",
+        "head": "^  const route = serverSrc\\.slice\\(start, serverSrc\\.indexOf\\(\"\\\\n  \\}\\);\", start \\+ 10\\)\\);$"
+      }
+    ],
+    "test/firmwareDeploy.test.js": [
+      {
+        "base": "^  const route = serverSrc\\.slice\\(serverSrc\\.indexOf\\('app\\.get\\(\"/api/firmware\", requireAuth'\\),$",
+        "head": "^  const inventorySrc = fs\\.readFileSync\\(path\\.join\\(__dirname, \"\\.\\.\", \"routes\", \"firmwareInventory\\.js\"\\), \"utf8\"\\), routeAt = inventorySrc\\.indexOf\\('app\\.get\\(\"/api/firmware\", requireAuth'\\);$"
+      },
+      {
+        "base": "^                                serverSrc\\.indexOf\\(\"// ---- Health diagnostics\"\\)\\);$",
+        "head": "^  const route = inventorySrc\\.slice\\(routeAt, inventorySrc\\.indexOf\\(\"\\\\n  \\}\\);\\\\n\", routeAt\\)\\);$"
+      }
+    ],
+    "test/connectorCoreMethods.test.js": [
+      {
+        "base": "^const serverSrc = \\[\"server\\.js\", \"routes/health\\.js\", \"routes/discover\\.js\"\\]\\.map\\(f => require\\(\"fs\"\\)\\.readFileSync\\(require\\(\"path\"\\)\\.join\\(__dirname, \"\\.\\.\", f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$",
+        "head": "^const serverSrc = \\[\"server\\.js\", \"routes/health\\.js\", \"routes/discover\\.js\", \"routes/firmwareInventory\\.js\"\\]\\.map\\(f => require\\(\"fs\"\\)\\.readFileSync\\(require\\(\"path\"\\)\\.join\\(__dirname, \"\\.\\.\", f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$"
+      }
+    ]
+  },
+  "declaredHarnessNotes": {
+    "test/firmwareInventory.test.js": "line 35: the source text read is routes/firmwareInventory.js. line 42 (extractFn): inside registerFirmwareInventoryRoutes a function ends \"\\n  }\" (4 characters), not \"\\n}\"; the extracted text is the same function, its body indented by 2 more, and runs in the test's own vm sandbox as before. lines 167 and 175 (the same line twice): the route slice ended at the next \"\\napp.\" — in server.js that was the NEXT route (POST /api/sync at line 4616, so the slice also held lines 4598-4615: the Health registration, the sync comment and syncRootConfig); no \"\\napp.\" follows the route in the module, so the slice ends at the route's own \"\\n  });\" and is exactly the route. Consequence for the assertions (all unchanged): the positive matches are found in the route as before; assert.doesNotMatch(route, /Promise\\.all\\(\\s*visible\\.map/) now looks at the route only instead of the route plus those 18 following lines of unrelated code — narrower, never weaker for the route itself. The message \"must exist in server.js\" on line 41 is an assertion line and is deliberately left as it is.",
+    "test/firmwareDeploy.test.js": "lines 723-724 only. The file's serverSrc (server.js) is used by every other test in it for deployment code that stays in server.js, so it is not changed; this one slice — the single-printer read's visibility check — reads routes/firmwareInventory.js instead (fs and path are already required by the file). Base: from the route's start to the Health comment = the route. Head: from the route's start to its own \"\\n  });\\n\" = the route. Both assertions on it are unchanged.",
+    "test/connectorCoreMethods.test.js": "line 29: routes/firmwareInventory.js joins the scanned sources. Without it the generated test \"server.js checks a connector has getFirmwareInfo() before calling it\" would still be generated and pass on server.js's OTHER getFirmwareInfo call (rediscovery, `conn.capabilities.firmwareInfo && conn.getFirmwareInfo`), silently no longer covering probeFirmware's call and guard.",
+    "test/helpers/firmwareInventoryCode.js": "declared helper (Guardian reviews every line): only the header comment, the SERVER→MODULE constant, the unused routeEnd import and loadSource() change. Base: slices server.js into the sandbox, where app/requireAuth/printerVisibleTo/getConnector/getCapabilities/probeCached are globals and PRINTERS is a global read through to world.printers. Head: runs routes/firmwareInventory.js in the sandbox with a require() that refuses everything, requires the exports to be exactly registerFirmwareInventoryRoutes, calls it with the same fakes as parameters and getPrinters: () => world.printers, and requires it to return nothing. test/firmwareInventoryBehaviour.test.js is not changed.",
+    "test/fleetProbe.test.js": "NOT changed. Its caller pin (\"every module: only the fleet route uses the display path…\") already scans routes/ and names callers by their enclosing function, so probeFirmware is found in routes/firmwareInventory.js under the same name and the expected list is identical."
+  },
+  "mutations": [
+    {
+      "name": "requireAuth-dropped",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 1. GET /api/firmware is registered with requireAuth as its only middleware, before the handler",
+        "test/firmwareInventoryBehaviour.test.js :: 1. when requireAuth refuses, the handler never runs: nothing is probed, in any of the three modes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "app.get(\"/api/firmware\", requireAuth, async (req, res) => {",
+        "replace": "app.get(\"/api/firmware\", requireAuth && ((q, s, n) => n()), async (req, res) => {"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "  app.get(\"/api/firmware\", requireAuth, async (req, res) => {",
+        "replace": "  app.get(\"/api/firmware\", requireAuth && ((q, s, n) => n()), async (req, res) => {"
+      }
+    },
+    {
+      "name": "single-visibility-dropped",
+      "detectedBy": [
+        "test/firmwareDeploy.test.js :: the row re-reads its version once the deploy lands",
+        "test/firmwareInventoryBehaviour.test.js :: 2. a printer the user may not see is the same 404, and nothing is probed",
+        "test/firmwareInventoryBehaviour.test.js :: 2. an index that names no printer is 404 Unknown printer, and nothing is probed"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "    if (!p) return res.status(404).json({ error: \"Unknown printer\" });"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "      if (!p) return res.status(404).json({ error: \"Unknown printer\" });"
+      }
+    },
+    {
+      "name": "single-eligibility-applied",
+      "detectedBy": [
+        "test/firmwareDeploy.test.js :: the row re-reads its version once the deploy lands",
+        "test/firmwareInventoryBehaviour.test.js :: 2. a printer the user may not see is the same 404, and nothing is probed",
+        "test/firmwareInventoryBehaviour.test.js :: 2. eligibility is not applied to a single read: a printer SnapCon cannot flash is still read",
+        "test/firmwareInventoryBehaviour.test.js :: 2. uniformMcuVersions is true only for a capability that is exactly true; a row's own field of a decorating name wins",
+        "test/firmwareInventoryBehaviour.test.js :: 6. firmwareInfo not declared, or no getFirmwareInfo: a not-supported row — no probe, no connector call, no timer"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "    if (!p || !firmwareTabEligible(p) || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "      if (!p || !firmwareTabEligible(p) || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });"
+      }
+    },
+    {
+      "name": "unknown-printer-400",
+      "detectedBy": [
+        "test/firmwareDeploy.test.js :: the row re-reads its version once the deploy lands",
+        "test/firmwareInventoryBehaviour.test.js :: 2. a printer the user may not see is the same 404, and nothing is probed",
+        "test/firmwareInventoryBehaviour.test.js :: 2. an index that names no printer is 404 Unknown printer, and nothing is probed",
+        "test/firmwareInventoryBehaviour.test.js :: 7. a printer list REPLACED by a reload is what the next request reads — single read, list and stream"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "    if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: \"Unknown printer\" });"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "      if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: \"Unknown printer\" });"
+      }
+    },
+    {
+      "name": "list-visibility-dropped",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 3. the list holds only printers that are visible to the user AND flashable (firmwareDeploy exactly true), in fleet order; id is the index in the whole printer list",
+        "test/firmwareInventoryBehaviour.test.js :: 4. total counts the listed printers only; with none there are exactly the initial and the done record"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));",
+        "replace": "    .filter(({ p }) => firmwareTabEligible(p));"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));",
+        "replace": "      .filter(({ p }) => firmwareTabEligible(p));"
+      }
+    },
+    {
+      "name": "eligibility-dropped",
+      "detectedBy": [
+        "test/firmwareInventory.test.js :: the route streams NDJSON and never awaits the whole fleet at once",
+        "test/firmwareInventoryBehaviour.test.js :: 2. eligibility is not applied to a single read: a printer SnapCon cannot flash is still read",
+        "test/firmwareInventoryBehaviour.test.js :: 3. no printer to list: an empty array, nothing probed",
+        "test/firmwareInventoryBehaviour.test.js :: 3. the list holds only printers that are visible to the user AND flashable (firmwareDeploy exactly true), in fleet order; id is the index in the whole printer list",
+        "test/firmwareInventoryBehaviour.test.js :: 4. total counts the listed printers only; with none there are exactly the initial and the done record"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));",
+        "replace": "    .filter(({ p }) => printerVisibleTo(req.user, p));"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));",
+        "replace": "      .filter(({ p }) => printerVisibleTo(req.user, p));"
+      }
+    },
+    {
+      "name": "eligibility-truthy",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 3. the list holds only printers that are visible to the user AND flashable (firmwareDeploy exactly true), in fleet order; id is the index in the whole printer list"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  return getCapabilities(p.connector, p).firmwareDeploy === true;",
+        "replace": "  return !!getCapabilities(p.connector, p).firmwareDeploy;"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    return getCapabilities(p.connector, p).firmwareDeploy === true;",
+        "replace": "    return !!getCapabilities(p.connector, p).firmwareDeploy;"
+      }
+    },
+    {
+      "name": "batch-size-7",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 3. printers are read in batches of 6: a batch starts only when the whole previous batch has answered, and rows keep fleet order",
+        "test/firmwareInventoryBehaviour.test.js :: 4. records: initial { total, read: 0 }, one { total, read, rows } per batch of 6, final { done, total, rows } with every row",
+        "test/firmwareInventoryBehaviour.test.js :: 5. JSON array (no stream): a request closed during the first batch stops the read too, and the answer is the rows read so far",
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request closed between batches stops before the next one",
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request closed during the first batch stops the read — that batch still reports, no further batch is probed, no done record, and the response is ended",
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request that stays open runs every batch and ends with the done record"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    const B = 6;",
+        "replace": "    const B = 7;"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      const B = 6;",
+        "replace": "      const B = 7;"
+      }
+    },
+    {
+      "name": "stream-default",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 2. eligibility is not applied to a single read: a printer SnapCon cannot flash is still read",
+        "test/firmwareInventoryBehaviour.test.js :: 3. no printer to list: an empty array, nothing probed",
+        "test/firmwareInventoryBehaviour.test.js :: 3. printers are read in batches of 6: a batch starts only when the whole previous batch has answered, and rows keep fleet order",
+        "test/firmwareInventoryBehaviour.test.js :: 3. rows that could not be read are still listed and decorated",
+        "test/firmwareInventoryBehaviour.test.js :: 3. the list holds only printers that are visible to the user AND flashable (firmwareDeploy exactly true), in fleet order; id is the index in the whole printer list",
+        "test/firmwareInventoryBehaviour.test.js :: 4. the stream is opt-in by any non-empty value — \"0\" and \"false\" included; an empty value or none is the JSON array",
+        "test/firmwareInventoryBehaviour.test.js :: 5. JSON array (no stream): a request closed during the first batch stops the read too, and the answer is the rows read so far",
+        "test/firmwareInventoryBehaviour.test.js :: 6. in the list one printer that never answers costs one timeout row; the others in its batch are read",
+        "test/firmwareInventoryBehaviour.test.js :: 7. a printer list REPLACED by a reload is what the next request reads — single read, list and stream"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (!req.query.stream) {",
+        "replace": "  if (req.query.stream === \"0\") {"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    if (!req.query.stream) {",
+        "replace": "    if (req.query.stream === \"0\") {"
+      }
+    },
+    {
+      "name": "ndjson-content-type-dropped",
+      "detectedBy": [
+        "test/firmwareInventory.test.js :: the route streams NDJSON and never awaits the whole fleet at once",
+        "test/firmwareInventoryBehaviour.test.js :: 4. ?stream=1 headers: NDJSON, never cached, never sniffed",
+        "test/firmwareInventoryBehaviour.test.js :: 4. the stream is opt-in by any non-empty value — \"0\" and \"false\" included; an empty value or none is the JSON array"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  res.set(\"Content-Type\", \"application/x-ndjson\");\n  res.set(\"Cache-Control\", \"no-store\");",
+        "replace": "  res.set(\"Cache-Control\", \"no-store\");"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    res.set(\"Content-Type\", \"application/x-ndjson\");\n    res.set(\"Cache-Control\", \"no-store\");",
+        "replace": "    res.set(\"Cache-Control\", \"no-store\");"
+      }
+    },
+    {
+      "name": "no-store-dropped",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 4. ?stream=1 headers: NDJSON, never cached, never sniffed"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  res.set(\"Content-Type\", \"application/x-ndjson\");\n  res.set(\"Cache-Control\", \"no-store\");",
+        "replace": "  res.set(\"Content-Type\", \"application/x-ndjson\");"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    res.set(\"Content-Type\", \"application/x-ndjson\");\n    res.set(\"Cache-Control\", \"no-store\");",
+        "replace": "    res.set(\"Content-Type\", \"application/x-ndjson\");"
+      }
+    },
+    {
+      "name": "nosniff-dropped",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 4. ?stream=1 headers: NDJSON, never cached, never sniffed"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  res.set(\"X-Content-Type-Options\", \"nosniff\");\n  const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n\n  line({ total: visible.length, read: 0 });",
+        "replace": "  const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n\n  line({ total: visible.length, read: 0 });"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    res.set(\"X-Content-Type-Options\", \"nosniff\");\n    const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n\n    line({ total: visible.length, read: 0 });",
+        "replace": "    const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n\n    line({ total: visible.length, read: 0 });"
+      }
+    },
+    {
+      "name": "done-after-abort",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request closed between batches stops before the next one",
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request closed during the first batch stops the read — that batch still reports, no further batch is probed, no done record, and the response is ended"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (!aborted) line({ done: true, total: visible.length, rows });",
+        "replace": "  line({ done: true, total: visible.length, rows });"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    if (!aborted) line({ done: true, total: visible.length, rows });",
+        "replace": "    line({ done: true, total: visible.length, rows });"
+      }
+    },
+    {
+      "name": "abort-ignored",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 5. JSON array (no stream): a request closed during the first batch stops the read too, and the answer is the rows read so far",
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request closed between batches stops before the next one",
+        "test/firmwareInventoryBehaviour.test.js :: 5. stream: a request closed during the first batch stops the read — that batch still reports, no further batch is probed, no done record, and the response is ended"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  let aborted = false;\n  req.on(\"close\", () => { aborted = true; });\n\n  // `connector` is the printer's real connector id, not something inferred",
+        "replace": "  let aborted = false;\n  req.on(\"close\", () => {});\n\n  // `connector` is the printer's real connector id, not something inferred"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    let aborted = false;\n    req.on(\"close\", () => { aborted = true; });\n\n    // `connector` is the printer's real connector id, not something inferred",
+        "replace": "    let aborted = false;\n    req.on(\"close\", () => {});\n\n    // `connector` is the printer's real connector id, not something inferred"
+      }
+    },
+    {
+      "name": "capability-gate-removed",
+      "detectedBy": [
+        "test/firmwareInventory.test.js :: a connector declaring firmwareInfo:false is never called, even if it exports the method",
+        "test/firmwareInventoryBehaviour.test.js :: 3. rows that could not be read are still listed and decorated",
+        "test/firmwareInventoryBehaviour.test.js :: 6. firmwareInfo not declared, or no getFirmwareInfo: a not-supported row — no probe, no connector call, no timer"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (!getCapabilities(p.connector, p).firmwareInfo || !c.getFirmwareInfo) {",
+        "replace": "  if (!c.getFirmwareInfo) {"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    if (!getCapabilities(p.connector, p).firmwareInfo || !c.getFirmwareInfo) {",
+        "replace": "    if (!c.getFirmwareInfo) {"
+      }
+    },
+    {
+      "name": "probe-failure-row-changed",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. probeCached throwing: an offline row with the message as reason and detail; the connector is not called"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  catch (e) { return { name: p.name, online: false, skipped: true, reason: e.message || \"offline\", reasonCode: \"offline\", detail: e.message || \"\" }; }",
+        "replace": "  catch (e) { return { name: p.name, online: true, skipped: true, reason: e.message || \"offline\", reasonCode: \"error\", detail: e.message || \"\" }; }"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    catch (e) { return { name: p.name, online: false, skipped: true, reason: e.message || \"offline\", reasonCode: \"offline\", detail: e.message || \"\" }; }",
+        "replace": "    catch (e) { return { name: p.name, online: true, skipped: true, reason: e.message || \"offline\", reasonCode: \"error\", detail: e.message || \"\" }; }"
+      }
+    },
+    {
+      "name": "offline-short-circuit-removed",
+      "detectedBy": [
+        "test/firmwareInventory.test.js :: an offline printer is skipped without calling the connector, keeping its error detail",
+        "test/firmwareInventoryBehaviour.test.js :: 3. rows that could not be read are still listed and decorated",
+        "test/firmwareInventoryBehaviour.test.js :: 6. a probe that says online:false: an offline row with the probe's error as reason and detail; the connector is not called, no timer"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (st && st.online === false) {",
+        "replace": "  if (st && st.online === false && false) {"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    if (st && st.online === false) {",
+        "replace": "    if (st && st.online === false && false) {"
+      }
+    },
+    {
+      "name": "probe-result-not-passed",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. only an explicit online:false is offline: any other probe result goes to the connector, unchanged",
+        "test/firmwareInventoryBehaviour.test.js :: 6. success: the connector's object is the row, as it is; getFirmwareInfo(p, st) gets the printer and the probe result; the 20 s timer is created once and cleared, never fired"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "      Promise.resolve(c.getFirmwareInfo(p, st)),",
+        "replace": "      Promise.resolve(c.getFirmwareInfo(p)),"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "        Promise.resolve(c.getFirmwareInfo(p, st)),",
+        "replace": "        Promise.resolve(c.getFirmwareInfo(p)),"
+      }
+    },
+    {
+      "name": "route-timeout-removed",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that never answers: when the 20 s timer fires the row is a timeout row with the exact reason, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. in the list one printer that never answers costs one timeout row; the others in its batch are read"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "        timer = setTimeout(() => resolve({",
+        "replace": "        timer = setTimeout(() => typeof timeoutMs === \"number\" && resolve({"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "          timer = setTimeout(() => resolve({",
+        "replace": "          timer = setTimeout(() => typeof timeoutMs === \"number\" && resolve({"
+      }
+    },
+    {
+      "name": "timeout-30s",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that fails: an error row with the message as reason and detail, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that never answers: when the 20 s timer fires the row is a timeout row with the exact reason, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. in the list one printer that never answers costs one timeout row; the others in its batch are read",
+        "test/firmwareInventoryBehaviour.test.js :: 6. success: the connector's object is the row, as it is; getFirmwareInfo(p, st) gets the printer and the probe result; the 20 s timer is created once and cleared, never fired"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "const FW_PROBE_TIMEOUT_MS = 20000;",
+        "replace": "const FW_PROBE_TIMEOUT_MS = 30000;"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "const FW_PROBE_TIMEOUT_MS = 20000;",
+        "replace": "const FW_PROBE_TIMEOUT_MS = 30000;"
+      }
+    },
+    {
+      "name": "timeout-reason-changed",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that never answers: when the 20 s timer fires the row is a timeout row with the exact reason, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. in the list one printer that never answers costs one timeout row; the others in its batch are read"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "          reason: \"did not answer within \" + Math.round(ms / 1000) + \"s\",",
+        "replace": "          reason: \"did not answer within \" + ms + \" ms\","
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "            reason: \"did not answer within \" + Math.round(ms / 1000) + \"s\",",
+        "replace": "            reason: \"did not answer within \" + ms + \" ms\","
+      }
+    },
+    {
+      "name": "timer-not-cleared",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that fails: an error row with the message as reason and detail, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that never answers: when the 20 s timer fires the row is a timeout row with the exact reason, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that throws before returning a promise: the same error row; no timer was created",
+        "test/firmwareInventoryBehaviour.test.js :: 6. in the list one printer that never answers costs one timeout row; the others in its batch are read",
+        "test/firmwareInventoryBehaviour.test.js :: 6. success: the connector's object is the row, as it is; getFirmwareInfo(p, st) gets the printer and the probe result; the 20 s timer is created once and cleared, never fired"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  } finally {\n    clearTimeout(timer);\n  }\n}\n\napp.get(\"/api/firmware\", requireAuth",
+        "replace": "  } finally {\n  }\n}\n\napp.get(\"/api/firmware\", requireAuth"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    } finally {\n      clearTimeout(timer);\n    }\n  }\n\n  app.get(\"/api/firmware\", requireAuth",
+        "replace": "    } finally {\n    }\n  }\n\n  app.get(\"/api/firmware\", requireAuth"
+      }
+    },
+    {
+      "name": "error-row-changed",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that fails: an error row with the message as reason and detail, and the timer is cleared",
+        "test/firmwareInventoryBehaviour.test.js :: 6. a connector that throws before returning a promise: the same error row; no timer was created"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    return { name: p.name, online: true, skipped: true, reason: e.message || \"read failed\", reasonCode: \"error\", detail: e.message || \"\" };",
+        "replace": "    return { name: p.name, online: true, skipped: true, reason: e.message || \"read failed\", reasonCode: \"failed\", detail: e.message || \"\" };"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      return { name: p.name, online: true, skipped: true, reason: e.message || \"read failed\", reasonCode: \"error\", detail: e.message || \"\" };",
+        "replace": "      return { name: p.name, online: true, skipped: true, reason: e.message || \"read failed\", reasonCode: \"failed\", detail: e.message || \"\" };"
+      }
+    },
+    {
+      "name": "id-from-filtered-position",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 3. the list holds only printers that are visible to the user AND flashable (firmwareDeploy exactly true), in fleet order; id is the index in the whole printer list",
+        "test/firmwareInventoryBehaviour.test.js :: 4. total counts the listed printers only; with none there are exactly the initial and the done record"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "        .map(({ p, i: idx }) => probeFirmware(p).then(r => decorate(p, idx, r))));",
+        "replace": "        .map(({ p }, k) => probeFirmware(p).then(r => decorate(p, i + k, r))));"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "          .map(({ p, i: idx }) => probeFirmware(p).then(r => decorate(p, idx, r))));",
+        "replace": "          .map(({ p }, k) => probeFirmware(p).then(r => decorate(p, i + k, r))));"
+      }
+    },
+    {
+      "name": "printers-captured-once-single",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 7. a printer list REPLACED by a reload is what the next request reads — single read, list and stream"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    const p = PRINTERS[idx];\n    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "    const p = (probeFirmware.printersOnce = probeFirmware.printersOnce || PRINTERS)[idx];\n    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "      const p = getPrinters()[idx];\n      if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });",
+        "replace": "      const p = (probeFirmware.printersOnce = probeFirmware.printersOnce || getPrinters())[idx];\n      if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: \"Unknown printer\" });"
+      }
+    },
+    {
+      "name": "printers-captured-once-list",
+      "detectedBy": [
+        "test/firmwareInventoryBehaviour.test.js :: 7. a printer list REPLACED by a reload is what the next request reads — single read, list and stream"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  const visible = PRINTERS.map((p, i) => ({ p, i }))\n    .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));",
+        "replace": "  const visible = (probeFirmware.printersOnce = probeFirmware.printersOnce || PRINTERS).map((p, i) => ({ p, i }))\n    .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));"
+      },
+      "head": {
+        "file": "routes/firmwareInventory.js",
+        "find": "    const visible = getPrinters().map((p, i) => ({ p, i }))\n      .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));",
+        "replace": "    const visible = (probeFirmware.printersOnce = probeFirmware.printersOnce || getPrinters()).map((p, i) => ({ p, i }))\n      .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));"
+      }
+    }
+  ],
+  "contractSets": [
+    "firmware-inventory",
+    "health",
+    "smoke"
+  ],
+  "contractNotes": "firmware-inventory.json: 22 requests, each with a declared expectation (status; record count for the streams), 2 fake-printer control steps, a reload and a restart. The fixture has no flashable printer (all three are klipper-moonraker: firmwareInfo yes, firmwareDeploy no), so the list is [] and the stream is exactly 2 records for every user; the single-printer read reaches the fake printer (queryFirmwareInfo). trackDelays adds 20000 (FW_PROBE_TIMEOUT_MS) to the 25 s Health deadline: created/cleared/fired counts per process start are compared. health.json and smoke.json unchanged. Nothing new is declared volatile.",
+  "packaging": "Dockerfile already has `COPY routes ./routes` (added for Health); pkg follows the require graph (no pkg.scripts entry: not a worker); test/docker.test.js walks server.js's require graph and sees routes/firmwareInventory.js under the existing COPY. No package.json or Dockerfile change. Policy rule 8: real Docker + pkg builds (V12) remain mandatory before deployment, each download/build owner-approved.",
+  "reconciliation": {
+    "lines": {
+      "firstLine": 4450,
+      "lastLine": 4597,
+      "sourceLines": 148,
+      "parts": {
+        "header": 4450,
+        "firmwareTabEligible": 4456,
+        "FW_PROBE_TIMEOUT_MS": 4465,
+        "probeFirmware": 4472,
+        "route": 4515
+      },
+      "rewriteOccurrences": {
+        "PRINTERS": 2,
+        "rewritten": 2
+      },
+      "serverLines": {
+        "before": 7467,
+        "after": 7325
+      }
+    },
+    "note": "Reconciled with the batch integration baseline (Snapshot extraction 85d833d applied first: every server.js line after the Snapshot registration is 45 lower than at the standalone base, where the block was 4495-4642 and server.js had 7,511 lines; the moved text itself is unchanged). line numbers at the base; `parts` is the first line of each part's own comment. rewriteOccurrences: PRINTERS appears twice in the moved text (code only, no comment) and both are rewritten. serverLines counts a trailing empty element (7,466 lines of text before; 148 lines leave, 6 arrive)."
+  },
+  "verifiedBaseline": {
+    "scope": "STANDALONE verification only (branch refactor/firmware-inventory: e5cbe42 -> 920ef18 -> 73e4ccb -> extraction 73710a6). 920ef18 is off-chain on the batch branch, where the same change is 68f2293. The line numbers in `reconciliation` are those of the integration baseline, not of this commit.",
+    "commit": "920ef181c4ad5021647f22878fc2d036c19cf536",
+    "what": "Baseline commit: application code identical to e5cbe42; pins, loader and contract set in place. Evidence gathered by the Executor on 2026-11-19, host Node 24.21.0 unless stated (to be repeated by scripts/verify-refactor.js, which the Executor did not run): 30/30 new pins pass on the base; the five pinning files pass unmutated on the base and on the codemod's output (142 tests each, same names); all 26 declared mutations are detected by exactly the listed tests on both; with the codemod applied transiently to the worktree (then reverted) the full suite was identical test by test (3473 tests: 3469 pass, 3 skipped, 1 failing todo — before and after), dependency-cruiser and ast-grep reported nothing new, and test/docker.test.js passed; in the isolated container (Node 22, --network none) the contract set ran twice alone and twice as firmware-inventory+health+smoke on the base with no errors and identical results, and once on the moved tree, equal to both base runs under lib/contracts.js compareRuns."
+  },
+  "integrationBaseline": {
+    "scope": "BATCH integration verification (branch refactor/batch-snapshot-firmware), 2026-11-19. This is the baseline the extraction commit 725388d was actually verified against.",
+    "commit": "80b90a9ebd92e386c6b87b0c393f3e520bd6f244",
+    "chain": "e5cbe42 (production) -> a05e80d -> 0f59e7f -> 85d833d (Snapshot extraction) -> 68f2293 (Firmware inventory pins and contract set) -> 6fcc99a (this manifest and the codemod) -> 80b90a9 (line reconciliation, tooling only) -> 725388d (Firmware inventory extraction)",
+    "what": "Application and test files at 80b90a9 are those of e5cbe42 plus the Snapshot extraction and both sets of baseline pins. scripts/verify-refactor.js compared this tree with the extraction in a scratch repository (tools/ excluded there): V1-V5 and V7-V11 PASS, V6 REVIEW (the declared test helper only); 26/26 declared mutations detected by the same tests on base and head; Node 22 harness 3,507 tests per run (3,495 pass, 5 skipped, 6 known failures, 1 failing todo) on 1 base and 3 head runs; host Node 24.21.0 3,507 tests before and after with 0 failures. Record: ~/snapcon-release-evidence/batch-snapshot-firmware/ (outside the repository)."
+  },
+  "extractionParent": {
+    "standalone": "73e4ccbc09413458118cbac27270377d55b557c7 (parent of the standalone extraction 73710a6 on refactor/firmware-inventory)",
+    "batch": "80b90a9ebd92e386c6b87b0c393f3e520bd6f244 (the actual immediate parent of the extraction 725388d on refactor/batch-snapshot-firmware)",
+    "note": "Each parent is a tooling-only commit (nothing outside tools/refactor/), so its application and test files equal those of the baseline pins commit on the same branch."
+  },
+  "rollback": {
+    "beforeCommit": "the extraction is uncommitted: `git checkout -- server.js test/firmwareInventory.test.js test/firmwareDeploy.test.js test/connectorCoreMethods.test.js test/helpers/firmwareInventoryCode.js && rm routes/firmwareInventory.js` restores the application and tests exactly and leaves the tooling preparation in place",
+    "afterCommit": "Firmware inventory extraction only, on the batch branch: `git revert 725388d` (keeps history). The resulting application and test files equal those of 80b90a9, the verified integration baseline. On the standalone branch: `git revert 73710a6`.",
+    "wholeBatch": "Whole batch (Snapshot and Firmware inventory extractions with all their preparation): return to e5cbe420ecf66b23efb69d6d430583d87ac01ceb, the production commit the batch was built on.",
+    "snapshotOnly": "UNVERIFIED: reverting only the Snapshot extraction (85d833d) while keeping the Firmware inventory extraction produces a tree that was never built, tested or reviewed. Do not use it as a rollback without verifying it first.",
+    "notThis": "Never move the batch branch to the standalone commits (920ef18, 73e4ccb, 73710a6): they are not ancestors of it, and doing so would discard the Snapshot extraction and the integration history.",
+    "never": "production main is not touched by any of this; it changes only through a separate release decision"
+  },
+  "knownToolingLimitations": [
+    "the LIST is empty in the container harness: no fixture printer declares firmwareDeploy (the fixture is fixed), so list rows, their decoration, the batches of 6 and the per-batch stream records are pinned in-process only (test/firmwareInventoryBehaviour.test.js)",
+    "the single-printer read against the fake printer has klipper: null and mcus[].version: null: the fake answers 404 to /printer/info and its mcu object has no mcu_version (setting one through /__control/set cannot be undone, so it is not set); machine/firmware/software/os are exercised once through the existing systemInfo control",
+    "contract expectations can declare only a status and an NDJSON record count; the answers' content is compared between runs (base ×2 vs head), not against a declared value",
+    "disconnect handling is pinned in-process only (the harness client cannot abort a request)",
+    "the 20 s timeout firing is pinned in-process only, with a manual timer (the harness has no printer that accepts a request and never answers); in the harness the timer is only ever created and cleared",
+    "a plain 'timeout removed' mutation is not declared: with it the pre-existing regression test in test/firmwareInventory.test.js never finishes (its own documented failure mode) and a verification run would wait for its time limit; route-timeout-removed removes the timeout on the only path the route uses and is detected by the new pins",
+    "concurrency inside a batch is pinned as 'six start before any answers; the seventh starts only after all six have' — not the wall-clock behaviour",
+    "the connectors' own getFirmwareInfo implementations and their 5 s request timeouts are not pinned here (connectors do not move)",
+    "compareRuns compares logs, files written and audit rows between base1 and head only, and consults base2 for printer requests only when base1 and head differ (recorded 2026-11-16 for Discover; unchanged)"
+  ]
+}

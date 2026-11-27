@@ -57,7 +57,7 @@ function withMockFetch(handler, fn) {
   global.fetch = handler;
   return Promise.resolve(fn()).finally(() => { global.fetch = real; });
 }
-const P = { url: "http://192.168.4.212:7125" };
+const P = { url: "http://192.168.40.212:7125" };
 
 test("AD5X: finds the preview even though no 300x300 exists", async () => {
   // THE regression. This file never had a -300x300.png to guess at.
@@ -80,7 +80,7 @@ test("picks the LARGEST thumbnail offered, not the first listed", async () => {
 test("U1: still works, and still gets its 300x300", async () => {
   // The printers that worked before must keep working — this is shared code.
   const s = printer({ thumbs: U1_THUMBS, servePaths: ["/server/files/gcodes/.thumbs/Rose Dragon-300x300.png"] });
-  const out = await withMockFetch(s.handler, () => http.getThumbnail({ url: "http://192.168.4.192" }, "Rose Dragon.gcode"));
+  const out = await withMockFetch(s.handler, () => http.getThumbnail({ url: "http://192.168.40.192" }, "Rose Dragon.gcode"));
   assert.equal(out.contentType, "image/png");
   const fetched = s.calls.filter(c => !c.includes("metadata"));
   assert.match(decodeURIComponent(fetched[0]), /300x300/);

@@ -236,7 +236,7 @@ test("the migration runs at startup, persists only when something changed, and r
   const i = serverSrc.indexOf("function migratePrinterAddressOnStartup()");
   assert.ok(i > 0, "startup migration is wired in");
   const block = serverSrc.slice(i, i + 1200);
-  assert.ok(block.includes("PRINTERS = Array.isArray(CFG.printers)"), "PRINTERS is re-pointed at the migrated array");
+  assert.ok(block.includes("PRINTERS = activePrinters(CFG);"), "PRINTERS is re-pointed at the migrated array");
   assert.ok(block.includes("if (changed && !CONFIG_LOAD_FAILED)"), "never writes over a config that failed to load");
   assert.ok(block.includes("for (const i of issues)"), "unsplittable addresses are reported");
   // Ordering matters: the address contract comes from the connector a
@@ -313,7 +313,7 @@ test("the row composes its URL the same way the server does", () => {
 
 test("which address fields show is the connector's call, not a hardcoded brand check", () => {
   const i = appSrc.indexOf("const syncAddressFields=(connectorChanged)=>{");
-  const fn = appSrc.slice(i, i + 1200);
+  const fn = appSrc.slice(i, appSrc.indexOf("\n  };", i));
   assert.ok(fn.includes("connectorAddress(connectorEl.value)"));
   assert.ok(fn.includes('addrRow.style.display=spec.required?"":"none";'));
   assert.ok(fn.includes('portField.style.display=spec.portEditable?"":"none";'));

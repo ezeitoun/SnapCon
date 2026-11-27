@@ -32,14 +32,14 @@ const path = require("path");
 const vm = require("node:vm");
 
 const ROOT = path.join(__dirname, "..");
-const serverSrc = fs.readFileSync(path.join(ROOT, "server.js"), "utf8");
+const serverSrc = fs.readFileSync(path.join(ROOT, "routes", "firmwareInventory.js"), "utf8");
 
 function extractFn(name) {
   const start = serverSrc.indexOf("async function " + name + "(");
   const plain = serverSrc.indexOf("function " + name + "(");
   const at = start >= 0 ? start : plain;
   assert.ok(at > 0, name + " must exist in server.js");
-  return serverSrc.slice(at, serverSrc.indexOf("\n}", at) + 2);
+  return serverSrc.slice(at, serverSrc.indexOf("\n  }", at) + 4);
 }
 
 // Builds a world for probeFirmware(): one printer, one connector, one probe
@@ -124,7 +124,7 @@ test("a connector with no getFirmwareInfo at all is still handled", async () => 
 // ---- Offline ----
 
 test("an offline printer is skipped without calling the connector, keeping its error detail", async () => {
-  const h = harness({ probe: { online: false, error: "connect ETIMEDOUT 192.168.4.31:8898" } });
+  const h = harness({ probe: { online: false, error: "connect ETIMEDOUT 192.168.40.31:8898" } });
   const row = await h.probeFirmware(P, 500);
   assert.equal(row.skipped, true);
   assert.equal(row.reasonCode, "offline");
@@ -164,7 +164,7 @@ test("streaming is opt-in — the plain call still answers with a JSON array", (
   // column 1" until a hard reload — reported live. The stream is therefore
   // requested explicitly and the old contract is left intact.
   const start = serverSrc.indexOf('app.get("/api/firmware"');
-  const route = serverSrc.slice(start, serverSrc.indexOf("\napp.", start + 10));
+  const route = serverSrc.slice(start, serverSrc.indexOf("\n  });", start + 10));
   assert.match(route, /req\.query\.stream/, "the stream must be asked for");
   assert.match(route, /res\.json\(rows\)/, "the default response is still a JSON array of rows");
 });
@@ -172,7 +172,7 @@ test("streaming is opt-in — the plain call still answers with a JSON array", (
 test("the route streams NDJSON and never awaits the whole fleet at once", () => {
   const start = serverSrc.indexOf('app.get("/api/firmware"');
   assert.ok(start > 0);
-  const route = serverSrc.slice(start, serverSrc.indexOf("\napp.", start + 10));
+  const route = serverSrc.slice(start, serverSrc.indexOf("\n  });", start + 10));
   assert.match(route, /application\/x-ndjson/, "rows stream as they arrive");
   // Batching a handful at a time is fine and is what /api/discover does; what
   // must not come back is one await spanning the ENTIRE fleet, where a single

@@ -24,6 +24,7 @@
 // exactly once, and a FAILED job must not leave an audit trail claiming a print
 // started.
 const test = require("node:test");
+const { routeEnd } = require("./helpers/routeEnd");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
@@ -39,7 +40,7 @@ function extractFn(name) {
   return serverSrc.slice(start, serverSrc.indexOf("\n}", start) + 2);
 }
 
-const P = { id: "p20", name: "Creality SPARKX i7", url: "http://192.168.4.240:7125" };
+const P = { id: "p20", name: "Creality SPARKX i7", url: "http://192.168.40.240:7125" };
 const FILE = "Beardie (7h35m).gcode";
 
 // A harness whose connector calls can be held open on demand, so a phase can be
@@ -55,7 +56,7 @@ function harness({ mapFails = false, startFails = false, hold = false } = {}) {
   const calls = [];
   const env = {
     console: { log() {} },
-    queuedFile: new Map([["20", { name: FILE, status: "ready", ts: 1 }]]),
+    queuedFile: new Map([["p20", { name: FILE, status: "ready", ts: 1 }]]),
     saveQueuedFiles: () => calls.push("saveQueuedFiles"),
     ROUTE_STARTED_PRINT: new Set(),
     auditLog: { log: e => { calls.push("audit:" + e.event); return 42; } },
@@ -82,7 +83,7 @@ function harness({ mapFails = false, startFails = false, hold = false } = {}) {
 const run = (h, opts = {}) => h.env.runPrintFileJob({
   p: P, c: h.c, filename: FILE, tools: opts.tools || [], map: opts.map || {}, prefs: {},
   actor: { userId: "u1", userLabel: "alice" }, needsMapping: opts.needsMapping !== false,
-  job: h.job, printerKey: "20"
+  job: h.job
 });
 
 test("the slow work runs detached — the job is still pending while mapping is in flight", async () => {
@@ -122,7 +123,7 @@ test("success bookkeeping happens exactly once", async () => {
   await run(h);
   assert.equal(h.calls.filter(c => c === "audit:print-started").length, 1);
   assert.equal(h.calls.filter(c => c === "saveQueuedFiles").length, 1);
-  assert.equal(h.env.queuedFile.has("20"), false, "printing the staged file clears the Loaded badge");
+  assert.equal(h.env.queuedFile.has("p20"), false, "printing the staged file clears the Loaded badge");
   assert.ok(h.env.ROUTE_STARTED_PRINT.has(P.url), "suppresses notifyTick's duplicate print-started");
   assert.deepEqual(h.calls.filter(c => c.startsWith("library:")), ["library:printer_storage:42"], "one Print, from the printer's storage, with its audit row");
 });
@@ -150,7 +151,7 @@ test("a failed job leaves no bookkeeping — no audit row, no badge clear", asyn
     "an audit trail claiming a print started would be a lie");
   assert.equal(h.calls.some(c => c.startsWith("library:")), false, "and so would a Print in the history");
   assert.equal(h.env.ROUTE_STARTED_PRINT.size, 0);
-  assert.equal(h.env.queuedFile.has("20"), true, "the staged file is still staged — nothing printed it");
+  assert.equal(h.env.queuedFile.has("p20"), true, "the staged file is still staged — nothing printed it");
 });
 
 test("no mapping requested skips straight to starting", async () => {
@@ -178,7 +179,7 @@ test("a connector call outliving a client HTTP timeout does not fail the job", a
 test("the route responds with a jobId BEFORE the detached work is awaited", () => {
   const i = serverSrc.indexOf('app.post("/api/printfile"');
   assert.ok(i > 0, "route must exist");
-  const route = serverSrc.slice(i, serverSrc.indexOf("\n});", i));
+  const route = serverSrc.slice(i, routeEnd(serverSrc, i));
   assert.match(route, /res\.json\(\{[^}]*jobId/, "the response must carry a jobId");
   const resAt = route.indexOf("jobId");
   const runAt = route.indexOf("runPrintFileJob(");
@@ -191,7 +192,7 @@ test("the route responds with a jobId BEFORE the detached work is awaited", () =
 
 test("the route keeps its cheap synchronous guards before accepting a job", () => {
   const i = serverSrc.indexOf('app.post("/api/printfile"');
-  const route = serverSrc.slice(i, serverSrc.indexOf("\n});", i));
+  const route = serverSrc.slice(i, routeEnd(serverSrc, i));
   for (const guard of ["printerVisibleTo", "maintenanceMode", "Bad filename", "Unknown printer"]) {
     assert.ok(route.includes(guard), guard + " must still be checked before a job is accepted");
   }
@@ -231,7 +232,7 @@ test("pollJob understands the phases this route emits, including a future prepar
 // ---- guard rails: the paths 9a must NOT touch ----
 test("/api/print keeps its own existing async shape", () => {
   const i = serverSrc.indexOf('app.post("/api/print"');
-  const route = serverSrc.slice(i, serverSrc.indexOf("\n});", i));
+  const route = serverSrc.slice(i, routeEnd(serverSrc, i));
   assert.match(route, /res\.json\(\{ jobId \}\)/, "/api/print must be left exactly as it was");
 });
 
@@ -240,4 +241,31 @@ test("queue dispatch still awaits its connector calls directly", () => {
   const fn = serverSrc.slice(i, serverSrc.indexOf("\n}\n", i));
   assert.match(fn, /await c\.startPrintFile/,
     "the queue is already detached at its own call sites and owns its lifecycle — untouched by 9a");
+});
+
+// §37 P5: a Print picked from the printer's file list does not consult the
+// Loaded record (no check, no plate, no Library send: send is null), but once
+// it has started a file of the same name, that name has printed, so the
+// Loaded record is cleared — after the start, never before, never on failure.
+test("P5: a file-list Print of the Loaded file's name clears the Loaded record only once it has started", async () => {
+  const ok = harness({ hold: true });
+  const running = ok.env.runPrintFileJob({ p: P, c: ok.c, filename: FILE, tools: [], map: {}, prefs: {}, actor: { userId: "u1", userLabel: "alice" },
+    needsMapping: false, job: ok.job, plate: null, send: null });
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(ok.env.queuedFile.has("p20"), true, "still Loaded while the start is pending");
+  ok.deferred.release();
+  await running;
+  assert.equal(ok.job.error, null);
+  assert.equal(ok.env.queuedFile.has("p20"), false, "cleared once it started");
+  assert.deepEqual(ok.calls.filter(c => c.startsWith("library:")), ["library:printer_storage:42"], "recorded as a printer file, not a Library send");
+
+  const failed = harness({ startFails: true });
+  await failed.env.runPrintFileJob({ p: P, c: failed.c, filename: FILE, tools: [], map: {}, prefs: {}, actor: { userId: "u1", userLabel: "alice" },
+    needsMapping: false, job: failed.job, plate: null, send: null });
+  assert.equal(failed.env.queuedFile.has("p20"), true, "a start that failed leaves it Loaded");
+
+  const other = harness();
+  await other.env.runPrintFileJob({ p: P, c: other.c, filename: "Other.gcode", tools: [], map: {}, prefs: {}, actor: { userId: "u1", userLabel: "alice" },
+    needsMapping: false, job: other.job, plate: null, send: null });
+  assert.equal(other.env.queuedFile.has("p20"), true, "a different name never clears it");
 });

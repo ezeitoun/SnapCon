@@ -13,7 +13,7 @@ const win = p => normalizeLocation(p, { baseDir: "C:\\SnapCon", platform: "win32
 test("Windows paths: either slash, UNC shares kept, trailing separators dropped, relative resolved", () => {
   assert.equal(win("//nas/Models/"), B + B + "nas" + B + "Models");
   assert.equal(win(B + B + "nas" + B + "Models" + B), B + B + "nas" + B + "Models");
-  assert.equal(win(B + B + "192.168.2.18" + B + "SnapCon" + B + "Files" + B + B), B + B + "192.168.2.18" + B + "SnapCon" + B + "Files");
+  assert.equal(win(B + B + "198.51.100.7" + B + "Storage" + B + "Files" + B + B), B + B + "198.51.100.7" + B + "Storage" + B + "Files");
   assert.equal(win("D:/Models/"), "D:\\Models");
   assert.equal(win("D:\\"), "D:\\", "a drive root keeps its separator");
   assert.equal(win("models"), "C:\\SnapCon\\models");

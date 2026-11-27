@@ -321,11 +321,9 @@ function connect(p, c) {
   if (typeof WebSocket === "undefined") { debugLog(p, "no global WebSocket available (Node <21) — staying on HTTP"); return; }
   c.connectionState = "connecting";
   c.haveBaseline = false;
-  let ip;
-  try { ip = new URL(http.baseUrl(p)).hostname; }
+  let wsUrl;
+  try { wsUrl = http.websocketUrl(p); }
   catch { c.connectionState = "disconnected"; scheduleReconnect(p, c); return; }
-  const token = p.token || "";
-  const wsUrl = `ws://${ip}/websocket${token ? "?token=" + encodeURIComponent(token) : ""}`;
   let ws;
   try { ws = new WebSocket(wsUrl); }
   catch { c.connectionState = "disconnected"; scheduleReconnect(p, c); return; }
@@ -452,6 +450,8 @@ exports.getPlate = base.getPlate;
 exports.excludeObject = base.excludeObject;
 exports.listFiles = base.listFiles;
 exports.compareRemoteFile = base.compareRemoteFile;
+exports.verifyUpload = base.verifyUpload;
+exports.fetchJobHistory = base.fetchJobHistory;
 exports.getThumbnail = base.getThumbnail;
 exports.getFileMetadata = base.getFileMetadata;
 exports.getFirmwareInfo = base.getFirmwareInfo;

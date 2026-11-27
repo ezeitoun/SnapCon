@@ -33,7 +33,7 @@ const base = { settingsOpen: false, deepLink: false, admin: true, canAct: true, 
 
 test("an admin on the fleet sees every cell", () => {
   assert.deepEqual(shown(call("topbarVisibility", base)),
-    ["clock", "files", "gear", "health", "heat", "library", "queue", "search", "sort", "theme", "user", "view"]);
+    ["clock", "files", "gear", "health", "heat", "library", "queue", "search", "sort", "theme", "user", "utilization", "view"]);
 });
 
 test("Settings (and first run, which is Settings opened for you) hides the fleet controls but keeps the way back", () => {
@@ -41,11 +41,18 @@ test("Settings (and first run, which is Settings opened for you) hides the fleet
     ["clock", "gear", "theme", "user"]);
 });
 
-test("the /orca/<name> deep link hides search, files, sort, view, theme, Settings and the clock — for an admin too", () => {
+test("the /orca/<name> deep link hides search, files, sort, view, theme, Settings, Fleet utilization and the clock — for an admin too", () => {
   // The bug this replaces: init() hid gear and filesBtn, then applyRoleUI()
   // showed them again for admins / canAct() users.
   assert.deepEqual(shown(call("topbarVisibility", { ...base, deepLink: true })),
     ["health", "heat", "library", "queue", "user"]);
+});
+
+test("Fleet utilization is for every signed-in role, on the fleet side only", () => {
+  // Read only and filtered per user by the API, so a viewer sees it too.
+  assert.equal(call("topbarVisibility", { ...base, admin: false, canAct: false }).utilization, true);
+  assert.equal(call("topbarVisibility", { ...base, settingsOpen: true }).utilization, false);
+  assert.equal(call("topbarVisibility", { ...base, deepLink: true }).utilization, false, "fleet-wide figures are not on a single printer's link");
 });
 
 test("first run on a deep link still shows Settings' cell, so setup can be left", () => {
@@ -62,7 +69,7 @@ test("role and feature gating", () => {
 
 // ---- active cell ----
 
-const page = { settingsOpen: false, healthOpen: false, queueOpen: false, libraryOpen: false, filesOpen: false, popup: null, heatOpen: false };
+const page = { settingsOpen: false, healthOpen: false, queueOpen: false, libraryOpen: false, utilizationOpen: false, filesOpen: false, popup: null, heatOpen: false };
 const active = s => call("topbarActiveCells", { ...page, ...s }).sort();
 
 test("exactly one page cell is active, and View stands for the fleet", () => {
@@ -70,6 +77,7 @@ test("exactly one page cell is active, and View stands for the fleet", () => {
   assert.deepEqual(active({ healthOpen: true }), ["health"]);
   assert.deepEqual(active({ queueOpen: true }), ["queue"]);
   assert.deepEqual(active({ libraryOpen: true }), ["library"]);
+  assert.deepEqual(active({ utilizationOpen: true }), ["utilization"]);
   assert.deepEqual(active({ settingsOpen: true }), ["gear"]);
 });
 
@@ -80,6 +88,7 @@ test("a cell loses the active state when another page takes over", () => {
     [{}, ["view"]],
     [{ healthOpen: true }, ["health"]],
     [{ libraryOpen: true }, ["library"]],
+    [{ utilizationOpen: true }, ["utilization"]],
     [{ queueOpen: true }, ["queue"]],
     [{ settingsOpen: true }, ["gear"]],
     [{}, ["view"]],
@@ -143,6 +152,7 @@ const brand = s => call("brandTarget", { ...where, ...s });
 test("from a page, the brand goes back to the fleet in the current view", () => {
   assert.deepEqual(brand({ healthOpen: true, viewMode: "camera" }), { action: "fleet", view: "camera", closeSettings: false });
   assert.deepEqual(brand({ libraryOpen: true, viewMode: "list" }), { action: "fleet", view: "list", closeSettings: false });
+  assert.deepEqual(brand({ utilizationOpen: true, viewMode: "compact" }), { action: "fleet", view: "compact", closeSettings: false });
   assert.deepEqual(brand({ settingsOpen: true, viewMode: "compact" }), { action: "fleet", view: "compact", closeSettings: true },
     "Settings closes the way its own Back does");
 });

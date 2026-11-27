@@ -58,14 +58,13 @@ const ctx = vm.createContext({
   Map, Set, String, Math, Number, JSON,
   t: (k, p) => k + (p ? "(" + Object.entries(p).map(([a, b]) => a + "=" + b).join(",") + ")" : ""),
   esc: s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"),
-  stripExt: n => String(n || "").replace(/\.[^./\\]+$/, ""),
   UPLOAD_CANCEL: new Map(), SEND_FILL: new Map(),
   ROLE_ACTS: true,
 });
 const uploadsAt = appSrc.indexOf("const JOB_ENDED_KEEP_MS");
 vm.runInContext("const UPLOADS = new Map(); this.UPLOADS = UPLOADS;\nfunction canAct(){ return this.ROLE_ACTS; }\n" +
   appSrc.slice(uploadsAt, appSrc.indexOf("\n", uploadsAt)) + "\n" +
-  ["reconcileFleetUploads", "uploadMB", "uploadDetailText", "uploadStripHtml", "sendInFlight", "fillBackground", "sendBtnAttrs"].map(n => extract(appSrc, n)).join("\n"), ctx);
+  ["reconcileFleetUploads", "uploadPct", "uploadMB", "uploadDetailText", "uploadStripHtml", "sendInFlight", "fillBackground", "sendBtnAttrs"].map(n => extract(appSrc, n)).join("\n"), ctx);
 const reconcile = (rows, uploads, ended, now = 1000) => { const r = vm.runInContext("reconcileFleetUploads", ctx)(rows, uploads, ended, now); return { rebuild: [...r.rebuild], paint: [...r.paint] }; };
 const row = (id, upload) => ({ id, ...(upload ? { upload } : {}) });
 const UP = (o = {}) => ({ jobId: "j1", file: "Benchy.gcode", sent: 10 * 1048576, total: 40 * 1048576, cancellable: true, ...o });
@@ -119,7 +118,7 @@ test("a page reloaded mid-upload picks it up from the fleet data, with Cancel up
   ctx.UPLOADS.clear(); ctx.ROLE_ACTS = true;
   reconcile([row(2, UP())], ctx.UPLOADS, new Map());
   const html = vm.runInContext("uploadStripHtml", ctx)({ id: 2, state: "standby" });
-  assert.match(html, /fleet\.upload\.uploading\(file=Benchy\)/);
+  assert.match(html, /fleet\.upload\.uploading\(file=Benchy\.gcode\)/);
   assert.match(html, /data-live="upload-detail">fleet\.upload\.detail\(pct=25,sent=10,total=40\)</);
   assert.match(html, /<button type="button" class="upload-strip-btn danger" data-cancel-upload="j1" data-printer="2">/, "the job id the server's cancel needs, enabled");
   // The click goes through the same handler and route as the starting tab's.
@@ -153,4 +152,20 @@ test("wiring: folded in before the fleet render, painted after it, no new poll; 
   const poll = extract(appSrc, "pollJob");
   assert.match(poll.slice(poll.lastIndexOf("} finally {")), /UPLOAD_ENDED\.set\(jobId, Date\.now\(\)\);/);
   assert.match(appSrc, /setUploadState\(printer, \{ state:"uploading", origin:"local", jobId:d\.jobId,/);
+});
+
+// §37 P1: another tab's upload that is confirming, and one whose start was
+// cancelled while confirming, from the fleet row (activeUploadFor).
+test("another tab sees a transfer confirming, and its start cancelled meanwhile; each change rebuilds the strip", t => {
+  // The strips the card renders from.
+  const ups = vm.runInContext("UPLOADS", ctx), ended = new Map();
+  ups.clear(); t.after(() => ups.clear());
+  reconcile([row(2, UP({ sent: 40 * 1048576 }))], ups, ended);
+  assert.equal(ups.get("2").pct, 99, "every byte handed over is still not 100%");
+  assert.deepEqual(reconcile([row(2, UP({ sent: 40 * 1048576, confirming: true, startCancelled: false, startsPrint: true }))], ups, ended).rebuild, ["2"]);
+  assert.equal(ups.get("2").confirming, true);
+  assert.match(vm.runInContext("uploadStripHtml", ctx)({ id: 2, state: "standby" }), /Waiting for the printer to confirm|confirming_title/);
+  assert.deepEqual(reconcile([row(2, UP({ sent: 40 * 1048576, confirming: true, startCancelled: true, startsPrint: true, cancellable: false }))], ups, ended).rebuild, ["2"]);
+  assert.equal(ups.get("2").startCancelled, true);
+  assert.match(vm.runInContext("uploadStripHtml", ctx)({ id: 2, state: "standby" }), /start_cancelled_title/);
 });

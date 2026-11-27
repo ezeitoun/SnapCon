@@ -36,6 +36,8 @@
     return body;
   }
   const thumbUrl=k=>"/api/library/thumbs/"+encodeURIComponent(k);
+  // A model name made from a file name (Split's suggested name) leaves the
+  // extension out: it is a title. File names themselves are shown whole.
   const stem=n=>String(n||"").replace(/(\.gcode)?\.(gcode|gco|g|bgcode|3mf|stl|obj|step|stp|png|jpe?g|webp|pdf)$/i,"");
   const fmtG=g=>g==null?null:(g>=1000?(g/1000).toFixed(2)+" kg":(g>=10?Math.round(g):g.toFixed(1))+" g");
 
@@ -55,6 +57,7 @@
     if(!L.open){
       if(typeof closeQueueDashboard==="function") closeQueueDashboard();
       if(typeof closeHealthPage==="function") closeHealthPage();
+      if(window.UtilizationPage) UtilizationPage.close();
       L.open=true;
       $("libraryPage").classList.add("show");
       hideFleet(true);
@@ -704,8 +707,8 @@
         ${m.hiddenFiles&&m.hiddenFiles.length?`<section class="lib-sec"><h2>${esc(t("library.sec_hidden_files"))} <span class="lib-sec-n">${m.hiddenFiles.length}</span></h2>
           <p class="settings-help">${esc(t("library.hidden_files_help"))}</p>
           <div class="lib-others">${m.hiddenFiles.map(f=>`<div class="lib-other"><span class="lib-var-thumb">${f.thumb?`<img loading="lazy" alt="" src="${thumbUrl(f.thumb)}">`:`<span class="lib-noimg is-sm"></span>`}</span>
-            <div><div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(stem(f.name))}</span></div><div class="lib-var-where">${esc(f.rootName)} · ${esc(f.path)}</div>
-            ${can("hide")?`<button type="button" class="btn ghost btn-sm lib-unhide-file" data-ck="${esc(f.contentKey)}" data-name="${esc(stem(f.name))}">${esc(t("library.unhide_file"))}</button>`:""}</div></div>`).join("")}</div></section>`:""}
+            <div><div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(f.name)}</span></div><div class="lib-var-where">${esc(f.rootName)} · ${esc(f.path)}</div>
+            ${can("hide")?`<button type="button" class="btn ghost btn-sm lib-unhide-file" data-ck="${esc(f.contentKey)}" data-name="${esc(f.name)}">${esc(t("library.unhide_file"))}</button>`:""}</div></div>`).join("")}</div></section>`:""}
         ${printHistoryHtml(m)}
         ${historyHtml(m)}
         <div class="lib-selbar" id="libSelBar" hidden></div>
@@ -786,7 +789,7 @@
     return `<div class="lib-var${f.availability!=="ok"?" is-unavailable":""}">
       <span class="lib-var-thumb">${v.thumb?`<img loading="lazy" alt="" src="${thumbUrl(v.thumb)}">`:`<span class="lib-noimg is-sm"></span>`}</span>
       <div class="lib-var-main">
-        <div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(stem(f.name))}</span>${plate}${availHtml(f.availability)}</div>
+        <div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(f.name)}</span>${plate}${availHtml(f.availability)}</div>
         <div class="lib-var-where" title="${esc(f.rootName+" · "+f.path)}">${esc(f.rootName)} · ${esc(f.path)}</div>
         <div class="lib-var-facts">${printerHtml(v.printer)}${v.profile.printer?`<span class="lib-prof" title="${esc([v.profile.printer,v.profile.print].filter(Boolean).join(" · "))}">${esc(v.profile.printer)}</span>`:""}${v.slicer?`<span class="lib-dim">${esc(v.slicer)}</span>`:""}${facts.join("")}</div>
         ${swatches(v.filaments)}
@@ -864,7 +867,7 @@
   function projectHtml(p){
     const f=p.file;
     return `<div class="lib-proj">
-      <div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(p.title||stem(f.name))}</span>${availHtml(f.availability)}</div>
+      <div class="lib-var-title"><span class="lib-fname" title="${esc(f.name)}">${esc(p.title||f.name)}</span>${availHtml(f.availability)}</div>
       <div class="lib-var-where" title="${esc(f.rootName+" · "+f.path)}">${esc(f.rootName)} · ${esc(f.path)}</div>
       <div class="lib-var-facts">${p.designer?`<span>${esc(p.designer)}</span>`:""}${p.license?`<span>${esc(p.license)}</span>`:""}<span class="lib-dim">${esc(t("library.flavour_"+p.flavour))}</span>
         ${p.setUpFor&&p.setUpFor.label?`<span title="${esc(p.setUpFor.profile||"")}">${esc(t("library.set_up_for",{printer:p.setUpFor.label}))}</span>`:""}
@@ -968,7 +971,7 @@
       case "source_may_match": text=t("library.it_source"); break;
       case "unlinked_print": {
         const when=d.at?(typeof fmtTime==="function"?fmtTime(d.at):new Date(d.at).toLocaleString()):"";
-        text=t(d.generic?"library.it_unlinked_generic":"library.it_unlinked",{file:stem(d.file||""),printer:d.printer||"",when,n:(d.candidates||[]).length});
+        text=t(d.generic?"library.it_unlinked_generic":"library.it_unlinked",{file:(d.file||""),printer:d.printer||"",when,n:(d.candidates||[]).length});
         break;
       }
       default: text=i.kind;
@@ -1081,13 +1084,13 @@
   }
   function fileMenuHtml(f, { plate, printer }){
     const items=[];
-    const key=`data-ck="${esc(f.contentKey)}" data-name="${esc(stem(f.name))}"`;
+    const key=`data-ck="${esc(f.contentKey)}" data-name="${esc(f.name)}"`;
     if(can("grouping")) items.push(`<button type="button" class="lib-move" ${key}>${esc(t("library.move_btn"))}</button>`, `<button type="button" class="lib-split" ${key}>${esc(t("library.split_btn"))}</button>`);
     if(can("metadata")&&printer) items.push(`<button type="button" class="lib-setprinter" ${key} data-plate="${plate==null?"":esc(plate)}">${esc(t("library.set_printer_btn"))}</button>`);
     if(can("hide")) items.push(`<button type="button" class="lib-hidefile" ${key}>${esc(t("library.hide_file_btn"))}</button>`);
     if(!items.length) return "";
-    const pick=can("grouping")?`<label class="lib-sel" title="${esc(t("library.select_title"))}"><input type="checkbox" class="checkbox-input lib-selbox" data-ck="${esc(f.contentKey)}" aria-label="${esc(t("library.select_file",{name:stem(f.name)}))}"></label>`:"";
-    return `<div class="lib-act-row">${pick}<details class="lib-menu lib-file-menu"><summary class="btn ghost btn-sm" aria-label="${esc(t("library.file_actions",{name:stem(f.name)}))}">⋯</summary><div class="lib-menu-list">${items.join("")}</div></details></div>`;
+    const pick=can("grouping")?`<label class="lib-sel" title="${esc(t("library.select_title"))}"><input type="checkbox" class="checkbox-input lib-selbox" data-ck="${esc(f.contentKey)}" aria-label="${esc(t("library.select_file",{name:f.name}))}"></label>`:"";
+    return `<div class="lib-act-row">${pick}<details class="lib-menu lib-file-menu"><summary class="btn ghost btn-sm" aria-label="${esc(t("library.file_actions",{name:f.name}))}">⋯</summary><div class="lib-menu-list">${items.join("")}</div></details></div>`;
   }
   const KIND_TEXT=k=>t("library.change_"+k);
   function historyHtml(m){
@@ -1101,7 +1104,7 @@
   function historyDetail(a){
     const s=a.summary||{};
     const n=x=>x&&x.name?"“"+x.name+"”":"";
-    if(a.kind==="approve"&&s.print) return esc(": "+t("library.hist_link_print",{file:stem(s.print.file||""),into:n({name:s.name})}));
+    if(a.kind==="approve"&&s.print) return esc(": "+t("library.hist_link_print",{file:(s.print.file||""),into:n({name:s.name})}));
     if(a.kind==="merge"||a.kind==="approve") return esc(": "+t("library.hist_merge",{from:n(s.from),into:n(s.into)}));
     if(a.kind==="move") return esc(": "+t("library.hist_move",{files:(s.files||[]).join(", "),to:n(s.to)}));
     if(a.kind==="split") return esc(": "+t("library.hist_split",{files:(s.files||[]).join(", "),to:n(s.to)}));
@@ -1141,7 +1144,7 @@
     const linkTitle=p.link.byDecision?t("library.print_link_decision"):t("library.print_link_"+(p.link.method||"none"));
     const link=confirmed?`<span class="lib-conf is-ok" title="${esc(linkTitle)}">${esc(t("library.print_confirmed"))}</span>`
       :`<span class="lib-conf is-warn" title="${esc(linkTitle)}">${esc(t("library.print_by_filename"))}</span>`;
-    const file=p.file?stem(p.file.name)+(p.file.plate!=null?" · "+t("library.plate_n",{n:p.file.plate}):""):t("library.print_file_unknown");
+    const file=p.file?p.file.name+(p.file.plate!=null?" · "+t("library.plate_n",{n:p.file.plate}):""):t("library.print_file_unknown");
     const out=`<span class="lib-conf ${OUTCOME_CLASS[p.outcome]||"is-dim"}">${esc(t("library.outcome_"+p.outcome))}</span>`;
     const facts=[p.elapsedSec?fmtDuration(p.elapsedSec):null, p.user?t("library.print_by",{who:p.user}):null].filter(Boolean);
     return `<li class="lib-item lib-print-row"${hidden?" hidden":""}><span class="lib-item-dot" aria-hidden="true"></span><div>
@@ -1240,7 +1243,7 @@
     const n=files.length;
     dialog({ title:tn("library.split_title",n), confirm:tn("library.split_ok",n),
       body:`<p>${esc(tn("library.split_help",n,{from:m.name}))}</p><ul class="lib-dlg-list">${files.map(f=>`<li>${esc(f.name)}</li>`).join("")}</ul>
-        <label class="fl" for="libSplitName">${esc(t("library.new_model_name"))}</label><input class="field" id="libSplitName" maxlength="120" value="${esc(files[0].name)}">`,
+        <label class="fl" for="libSplitName">${esc(t("library.new_model_name"))}</label><input class="field" id="libSplitName" maxlength="120" value="${esc(stem(files[0].name))}">`,
       onConfirm:()=>act({ kind:"split", model:m.uuid, files:files.map(f=>f.ck), name:$("libSplitName").value }, r=>tn("library.done_split",n,{to:r.to.name})) });
   }
   function printerDialog(m, ck, name, plate){
@@ -1309,7 +1312,7 @@
       const it=items.find(x=>x.id===Number(el.dataset.review)); if(!it) return;
       const d=it.detail, cands=(d.candidates||[]).filter(c=>c.live);
       let pick=null;
-      dialog({ title:t("library.link_print_title",{file:stem(d.file||"")}), confirm:t("library.link_print_ok_pick"), okEnabled:false,
+      dialog({ title:t("library.link_print_title",{file:(d.file||"")}), confirm:t("library.link_print_ok_pick"), okEnabled:false,
         body:`<p>${esc(t("library.link_print_help",{printer:d.printer||""}))}</p><div class="lib-pick">${cands.map(c=>`<label class="lib-pick-row"><input type="radio" name="libLinkPrint" class="lib-pick-radio" value="${esc(c.uuid)}" data-name="${esc(c.name)}"><span class="lib-pick-txt"><span class="lib-fname">${esc(c.name)}</span></span></label>`).join("")}</div>`,
         wire:(dl,ok)=>dl.querySelectorAll("input[name=libLinkPrint]").forEach(r=>r.addEventListener("change",()=>{ pick={ uuid:r.value, name:r.dataset.name }; ok.disabled=false; ok.textContent=t("library.link_print_ok",{model:pick.name}); })),
         onConfirm:()=>act({ kind:"approve", review:it.id, model:pick.uuid }, r=>t("library.done_link_print",{model:r.name})) });

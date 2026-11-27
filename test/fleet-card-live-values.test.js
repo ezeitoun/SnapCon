@@ -57,7 +57,7 @@ const cardSignature = sandbox.cardSignature;
 // test that changes one field changes only that field.
 const BASE = () => ({
   id: 3, online: true, state: "printing", name: "U1 Pink", brand: "SnapMaker",
-  url: "http://192.168.4.193", filename: "bracket.gcode",
+  url: "http://192.168.40.193", filename: "bracket.gcode",
   progress: 0.4213, elapsed: 1234.56, filamentUsed: 8123, completedAt: null,
   errorCode: null, message: null, plate: { total: 4, excluded: 1 },
   activeExt: 0, forceDefaults: true,
@@ -181,7 +181,7 @@ test("an online printer's lastSeenAt, which moves on every probe, never rebuilds
 test("the remaining structural fields all still invalidate the signature", () => {
   const base = sigOf(BASE());
   for (const [field, value] of [
-    ["name", "U1 Blue"], ["brand", "Creality"], ["url", "http://192.168.4.9"],
+    ["name", "U1 Blue"], ["brand", "Creality"], ["url", "http://192.168.40.9"],
     ["filename", "other.gcode"], ["completedAt", 1700000000000],
     ["activeExt", 2], ["forceDefaults", false], ["tags", ["office"]]
   ]) {
@@ -215,7 +215,8 @@ test("exactly six fields are absent from the signature — nothing else silently
     // all are rendered into the card, so all must force the rebuild that shows them.
     "activeExt", "brand", "capabilities", "cardStatus", "completedAt", "errorCode",
     "filename", "forceDefaults", "heads", "lastSeenAt", "message", "name",
-    "online", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
+    // pendingSends (§37 P3): the sends waiting for the printer, a structural field.
+    "online", "pendingSends", "plate", "queuedFile", "sendFill", "state", "statusOverride", "stem", "tags",
     "transport", "uploadCancel", "uploadStrip", "url"
   ]);
   for (const gone of ["progress", "elapsed", "bed", "hotend", "filamentUsed", "layer"]) {

@@ -36,10 +36,10 @@
     { key: "flashforge-5m-pro", brand: "FlashForge", label: "Flashforge Adventurer 5M Pro", re: /\b(?:adventurer\s*5m|ad5m)\s*pro\b/ },
     { key: "flashforge-5m", brand: "FlashForge", label: "Flashforge Adventurer 5M", re: /\b(?:adventurer\s*5m|ad5m)\b(?!\s*pro)/ },
     { key: "creality-ender3-v3-plus", brand: "Creality", label: "Creality Ender-3 V3 Plus", re: /\bender-?3\s*v3\s*plus\b/ },
-    // Seen in the owner's library: printer_model "Creality Ender-3 V3 KE",
+    // Seen in a real library: printer_model "Creality Ender-3 V3 KE",
     // settings "PixelPrints - V3 KE (0.4)".
     { key: "creality-ender3-v3-ke", brand: "Creality", label: "Creality Ender-3 V3 KE", re: /\bender-?3\s*v3\s*ke\b/ },
-    // Named by the owner (a "K1C" printer folder). Kept apart from the K1,
+    // From a real library (a "K1C" printer folder). Kept apart from the K1,
     // whose pattern already refuses "K1C".
     { key: "creality-k1c", brand: "Creality", label: "Creality K1C", re: /\bk1\s*c\b/ },
     { key: "creality-sparkx-i7", brand: "Creality", label: "Creality SPARKX i7", re: /\bsparkx\s*i7\b/ },

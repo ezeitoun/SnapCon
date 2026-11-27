@@ -26,13 +26,13 @@ const sandbox = {
   // The key and its parameters, quote-free so the strip's HTML escaping leaves it readable.
   t: (k, p) => k + (p ? "(" + Object.entries(p).map(([a, b]) => a + "=" + b).join(",") + ")" : ""),
   esc: s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"),
-  stripExt: n => String(n || "").replace(/\.[^./\\]+$/, ""),
   UPLOAD_CANCEL: new Map(), SEND_FILL: new Map(),
   canAct: () => true,   // a Regular or Admin user (View-only: test/uploadCrossTab.test.js)
 };
 vm.createContext(sandbox);
-vm.runInContext("const UPLOADS = new Map();\nthis.UPLOADS = UPLOADS;\n" + line("const UPLOAD_FAILURE_REASONS = {") + "\n" +
-  ["uploadMB", "uploadDetailText", "uploadFailureReason", "uploadStripHtml", "sendInFlight", "fillBackground", "sendBtnAttrs"].map(extractFn).join("\n"), sandbox);
+const oneLine = start => { const at = appSrc.indexOf(start); assert.ok(at >= 0, start); return appSrc.slice(at, appSrc.indexOf("\n", at)); };
+vm.runInContext("const UPLOADS = new Map();\nthis.UPLOADS = UPLOADS;\n" + line("const UPLOAD_FAILURE_REASONS = {") + "\n" + oneLine("const UPLOAD_UNCONFIRMED_REASONS = ") + "\n" +
+  ["uploadPct", "uploadMB", "uploadDetailText", "uploadFailureReason", "uploadStripHtml", "sendInFlight", "fillBackground", "sendBtnAttrs"].map(extractFn).join("\n"), sandbox);
 const call = (n, ...a) => vm.runInContext(n, sandbox)(...a);
 const reset = () => { sandbox.UPLOADS.clear(); sandbox.UPLOAD_CANCEL.clear(); sandbox.SEND_FILL.clear(); };
 test.beforeEach(reset);
@@ -72,7 +72,7 @@ test("uploading on a printing printer: 'Uploading next', the detail, a framed Ca
   uploading(); sandbox.UPLOAD_CANCEL.set("4", "j1");
   const html = call("uploadStripHtml", PRINTING);
   assert.match(html, /^<div class="upload-strip">/);
-  assert.match(html, /<div class="upload-strip-title" title="Benchy\.gcode"><span class="upload-strip-name">fleet\.upload\.uploading_next\(file=Benchy\)<\/span>/, "extension stripped, full name in the title");
+  assert.match(html, /<div class="upload-strip-title" title="Benchy\.gcode"><span class="upload-strip-name">fleet\.upload\.uploading_next\(file=Benchy\.gcode\)<\/span>/, "the name with its extension, also in the title");
   assert.match(html, /data-live="upload-detail">fleet\.upload\.detail\(pct=34,sent=15\.6,total=46\)</);
   assert.match(html, /<button type="button" class="upload-strip-btn danger" data-cancel-upload="j1" data-printer="4">fleet\.print\.cancel_upload<\/button>/);
   assert.match(html, /<div class="upload-strip-fill" data-live="upload-bar" style="width:34%"><\/div>/);
@@ -82,7 +82,7 @@ test("uploading on a printing printer: 'Uploading next', the detail, a framed Ca
 test("uploading on an idle printer: 'Uploading'; Cancel upload disabled, with a reason, until the server says it can be cancelled", () => {
   uploading();
   const html = call("uploadStripHtml", IDLE);
-  assert.match(html, /fleet\.upload\.uploading\(file=Benchy\)/);
+  assert.match(html, /fleet\.upload\.uploading\(file=Benchy\.gcode\)/);
   assert.match(html, /data-cancel-upload="" data-printer="4" disabled title="fleet\.upload\.cancel_not_yet_title"/);
 });
 
@@ -90,7 +90,7 @@ test("failed: the percentage it reached, the reason, Retry and Dismiss, no Cance
   uploading({ state: "failed", pct: 62, reason: "Lost connection to the printer" });
   const html = call("uploadStripHtml", IDLE);
   assert.match(html, /^<div class="upload-strip failed">/);
-  assert.match(html, /fleet\.upload\.failed_title\(pct=62,file=Benchy\)/);
+  assert.match(html, /fleet\.upload\.failed_title\(pct=62,file=Benchy\.gcode\)/);
   assert.match(html, /<div class="upload-strip-detail">Lost connection to the printer<\/div>/);
   assert.match(html, /data-upload-retry="4">settings\.firmware\.st_retry<\/button>/);
   assert.match(html, /data-upload-dismiss="4">library\.dismiss_btn<\/button>/);
@@ -121,7 +121,9 @@ test("printing and uploading: the button row is unchanged (it never has Upload/P
   const busyBranch = build.slice(build.indexOf("${busy"), build.indexOf(": `<button class=\"btn-chip\" ${sendBtnAttrs("));
   assert.doesNotMatch(busyBranch, /sendInFlight|upload/i, "Pause / Cancel / Plate / E-Stop as before");
   const poll = extractFn("pollJob");
-  assert.match(poll, /if\(d\.phase==="upload" && !printingNow\) setOverride\("upload"/);
+  // Confirming (every byte out, no answer yet) keeps the Uploading badge (§37 P1).
+  assert.match(poll, /const sending=d\.phase==="upload" \|\| d\.phase==="confirming";/);
+  assert.match(poll, /if\(sending && !printingNow\) setOverride\("upload"/);
 });
 
 test("the strip sits in the banner position, in both card layouts", () => {
@@ -134,8 +136,9 @@ test("progress is patched in place; state changes rebuild; cancel is quiet; an u
   const poll = extractFn("pollJob");
   assert.match(poll, /if\(d\.phase==="upload"\) patchUploadProgress\(printerId, d\);/);
   assert.match(poll, /if\(d\.cancelled\)\{\n\s+\/\/ Cancelled by the user: the strip just goes away, no message\.\n\s+setUploadState\(printerId, null\);/);
-  assert.match(poll, /else if\(strip && d\.failedPhase==="upload"\)\{[\s\S]*?state:"failed", reason:uploadFailureReason\(d\.errorCode, d\.error\)/);
-  assert.match(poll, /if\(strip && strip\.state==="uploading" && d\.phase!=="upload"\) setUploadState\(printerId, null\);/, "finished: gone, the card shows Loaded / printing");
+  // A failed transfer, or a failed read-back of it (§37 P2), goes to the strip.
+  assert.match(poll, /const transferPhase=d\.failedPhase==="upload" \|\| d\.failedPhase==="verifying";\s+const reason=!d\.cancelled && transferPhase \? uploadFailureReason\(d\.errorCode, d\.error, d\) : null;[\s\S]*?else if\(strip && transferPhase\)\{[\s\S]*?state:"failed", reason[ ,]/);
+  assert.match(poll, /if\(strip && strip\.state==="uploading" && d\.phase!=="upload" && d\.phase!=="confirming" && d\.phase!=="verifying"\) setUploadState\(printerId, null\);/, "finished: gone, the card shows Loaded / printing (kept through the read-back)");
   assert.doesNotMatch(extractFn("patchUploadProgress"), /renderFleet/, "a progress tick never rebuilds");
   assert.match(appSrc, /uploadStrip:UPLOADS\.has\(String\(p\.id\)\) \? uploadStripKey\(UPLOADS\.get\(String\(p\.id\)\)\) : null/);
 });
@@ -179,4 +182,71 @@ test("however the job ends (done, error, a thrown poll), a strip still showing '
   const poll = extractFn("pollJob");
   const fin = poll.slice(poll.lastIndexOf("} finally {"));
   assert.match(fin, /const left=printerId!=null \? UPLOADS\.get\(String\(printerId\)\) : null;\n    if\(left && left\.state==="uploading"\) setUploadState\(printerId, null\);/);
+});
+
+// ---- §37 P1: confirming, cancelled while confirming, not confirmed ----
+
+test("progress stops at 99% until the printer answers", () => {
+  assert.equal(call("uploadPct", 100, 100), 99);
+  assert.equal(call("uploadPct", 50, 100), 50);
+  assert.equal(call("uploadPct", 0, 0), 0);
+});
+
+test("reasons for the new endings: connect and stall deadlines, the three ways a file goes unconfirmed, the 5M / 5M Pro hint", () => {
+  assert.equal(call("uploadFailureReason", "UPLOAD_CONNECT_TIMEOUT", "x", { errorSeconds: 10 }), "fleet.upload.reason_connect_timeout(s=10)");
+  assert.equal(call("uploadFailureReason", "UPLOAD_STALLED", "x", { errorSeconds: 60 }), "fleet.upload.reason_stalled(s=60)");
+  assert.equal(call("uploadFailureReason", "UPLOAD_UNCONFIRMED", "x", { errorReason: "timeout", errorSeconds: 120 }), "fleet.upload.reason_unconfirmed_timeout(s=120)");
+  assert.equal(call("uploadFailureReason", "UPLOAD_UNCONFIRMED", "x", { errorReason: "connection-lost" }), "fleet.upload.reason_unconfirmed_lost(s=)");
+  assert.equal(call("uploadFailureReason", "UPLOAD_UNCONFIRMED", "x", { errorReason: "unreadable-reply" }), "fleet.upload.reason_unconfirmed_reply(s=)");
+  assert.equal(call("uploadFailureReason", "UPLOAD_STALLED", "x", { errorSeconds: 60, printerPrompt: true }), "fleet.upload.reason_stalled(s=60). fleet.upload.ff_prompt");
+});
+
+test("confirming: the strip says it waits for the printer, held at 99%, with Cancel while the server allows it", () => {
+  sandbox.UPLOADS.set("3", { state: "uploading", origin: "local", jobId: "j1", name: "part.gcode", pct: 99, sent: 5242880, total: 5242880, confirming: true });
+  sandbox.UPLOAD_CANCEL.set("3", "j1");
+  const html = call("uploadStripHtml", { id: 3, state: "standby" });
+  assert.match(html, /fleet\.upload\.confirming_title\(file=part\.gcode\)/);
+  assert.match(html, /fleet\.upload\.confirming_detail\(total=5\)/);
+  assert.match(html, /99%/);
+  assert.match(html, /data-cancel-upload="j1"/);
+  assert.doesNotMatch(html, /disabled/);
+});
+
+test("cancelled while confirming: the strip says the start was cancelled and that the answer is awaited; Cancel is off", () => {
+  sandbox.UPLOADS.set("3", { state: "uploading", origin: "fleet", jobId: "j1", name: "part.gcode", pct: 99, sent: 1, total: 1, confirming: true, startCancelled: true, startsPrint: true, cancellable: false });
+  const html = call("uploadStripHtml", { id: 3, state: "standby" });
+  assert.match(html, /fleet\.upload\.start_cancelled_title\(file=part\.gcode\)/);
+  assert.match(html, /fleet\.upload\.cancelled_waiting_detail/);
+  assert.match(html, /disabled title="fleet\.upload\.cancelled_waiting_detail"/);
+  sandbox.UPLOADS.set("3", { ...sandbox.UPLOADS.get("3"), startsPrint: false });
+  assert.match(call("uploadStripHtml", { id: 3, state: "standby" }), /fleet\.upload\.upload_cancelled_title/);
+});
+
+test("not confirmed: amber, the whole message, Dismiss only — no Retry, no Cancel", () => {
+  sandbox.UPLOADS.set("3", { state: "unconfirmed", origin: "local", jobId: "j1", name: "part.gcode", pct: 99, reason: "Everything was sent. Check U1 before sending it again." });
+  const html = call("uploadStripHtml", { id: 3, state: "standby" });
+  assert.match(html, /class="upload-strip failed unconfirmed"/);
+  assert.match(html, /fleet\.upload\.unconfirmed_title\(file=part\.gcode\)/);
+  assert.match(html, /<div class="upload-strip-detail">Everything was sent\. Check U1 before sending it again\.<\/div>/);
+  assert.match(html, /data-upload-dismiss="3"/);
+  assert.doesNotMatch(html, /data-upload-retry/);
+  assert.doesNotMatch(html, /data-cancel-upload/);
+});
+
+test("Upload and Print stay disabled while a transfer is confirming, and come back once it is not confirmed", () => {
+  sandbox.UPLOADS.set("3", { state: "uploading", origin: "local", jobId: "j1", name: "p", pct: 99, confirming: true });
+  assert.equal(call("sendInFlight", { id: 3 }), true);
+  sandbox.UPLOADS.set("3", { state: "unconfirmed", origin: "local", jobId: "j1", name: "p", pct: 99, reason: "r" });
+  assert.equal(call("sendInFlight", { id: 3 }), false);
+});
+
+test("P2: while the printer's copy is read back the strip stays, says so, and Cancel is off with the reason", () => {
+  sandbox.UPLOADS.set("3", { state: "uploading", origin: "local", jobId: "j1", name: "part.gcode", pct: 99, sent: 1, total: 1, verifying: true });
+  sandbox.UPLOAD_CANCEL.delete("3");
+  const html = call("uploadStripHtml", { id: 3, state: "standby" });
+  assert.match(html, /fleet\.upload\.verifying_title\(file=part\.gcode\)/);
+  assert.match(html, /fleet\.upload\.verifying_detail/);
+  assert.match(html, /disabled title="fleet\.upload\.verifying_cancel_title"/);
+  vm.runInContext(oneLine("const uploadStripKey=").replace("const uploadStripKey=", "this.uploadStripKey="), sandbox);
+  assert.notEqual(call("uploadStripKey", { state: "uploading", name: "a", verifying: true }), call("uploadStripKey", { state: "uploading", name: "a" }), "entering the check rebuilds the card");
 });

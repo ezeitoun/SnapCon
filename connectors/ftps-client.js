@@ -16,6 +16,9 @@
 const { EventEmitter } = require("events");
 // The local file is read through netfs: it may sit on a NAS (see http-utils).
 const netfs = require("../netfs").getNetFs();
+// The upload confirmation deadline, the same default as http-utils' UPLOAD_TIMEOUTS
+// (docs/TODO.md §37 P1); job.timeouts.confirmMs overrides it per upload.
+const UPLOAD_CONFIRM_MS = 120000;
 
 class FtpsClient extends EventEmitter {
   constructor({ connectControl, connectData, timeoutMs = 15000 }) {
@@ -58,10 +61,21 @@ class FtpsClient extends EventEmitter {
     return this._reply();
   }
 
+  // The file's size, null only when the printer says it is not there (550,
+  // "no such file"). An answer that says neither clearly — a 213 without a
+  // plain byte count, a 550 that reads as a refusal, any other code — is an
+  // error, never "not there": the guard against replacing a printer's file
+  // relies on null meaning absent (owner, 2026-10-29).
   async size(path) {
     const r = await this.cmd("SIZE " + path);
-    if (r.code === 213) { const n = Number(r.text.trim().split(/\s+/).pop()); return Number.isFinite(n) ? n : null; }
-    if (r.code === 550) return null;
+    const text = String(r.text || "").trim();
+    if (r.code === 213) {
+      const last = text.split(/\s+/).pop();
+      if (/^\d+$/.test(last) && Number.isSafeInteger(Number(last))) return Number(last);
+      throw Object.assign(new Error("unclear SIZE answer (213 " + text.slice(0, 60) + ")"), { code: "ESIZEUNCLEAR" });
+    }
+    if (r.code === 550 && !/denied|permission|not allowed|busy/i.test(text)) return null;
+    if (r.code === 550) throw Object.assign(new Error("SIZE refused (550 " + text.slice(0, 60) + ")"), { code: "ESIZEUNCLEAR" });
     throw Object.assign(new Error("SIZE not supported (" + r.code + ")"), { code: "ENOSIZE" });
   }
 
@@ -109,6 +123,7 @@ class FtpsClient extends EventEmitter {
     job.sent = 0;
     const port = await this._pasv();
     const data = this.connectData(port, this.sock.getSession());
+    let fileRead = false;   // the whole local file was read and handed to the data connection
     const sent = new Promise((resolve, reject) => {
       let timer;
       // An idle timeout re-armed on every chunk: a 40 MB project on a busy
@@ -122,6 +137,7 @@ class FtpsClient extends EventEmitter {
       const file = netfs.createReadStream(localPath);
       let finished = false;
       file.on("data", (chunk) => { job.sent += chunk.length; arm(); });
+      file.on("end", () => { fileRead = true; });
       file.on("error", (e) => { clearTimeout(timer); data.destroy(); reject(e); });
       data.on("error", (e) => { clearTimeout(timer); if (!finished) reject(e); });
       // The printer closing the data connection early is a failed transfer, not
@@ -136,7 +152,26 @@ class FtpsClient extends EventEmitter {
       throw Object.assign(new Error("The printer refused the upload (" + start.code + " " + start.text.trim() + ")"), { code: "ESTOR", reply: start.code, started: false });
     }
     await sent;
-    const end = await this._reply();
+    // Every byte is with the printer once the data connection has closed: from
+    // here a missing answer is not a failed transfer. The file may be complete
+    // on the printer, so it is Unknown, and nothing is deleted (cleanup only
+    // runs for e.started). The wait is the upload confirmation deadline
+    // (docs/TODO.md §37 P1), not the 15 s each command gets.
+    const confirmMs = (job.timeouts && job.timeouts.confirmMs) || UPLOAD_CONFIRM_MS;
+    let end;
+    try { end = await this._reply(confirmMs); }
+    catch (e) {
+      // The data connection can also close cleanly before the file is all
+      // read: the printer hung up while a slow read (a NAS) was between chunks.
+      // That is a transfer cut short, a failure, never "all bytes sent". No
+      // `started`, so no cleanup: the same as before P1 (docs/TODO.md §37).
+      if (!fileRead || job.sent !== total) {
+        throw Object.assign(new Error(`The printer closed the upload after ${job.sent} of ${total} bytes and did not confirm it`), { code: "ESHORT", outcome: "failed" });
+      }
+      const timedOut = e && e.code === "ETIMEDOUT";
+      throw Object.assign(new Error(`All ${total} bytes were sent, but the printer did not confirm the upload` + (timedOut ? ` within ${Math.round(confirmMs / 1000)} s` : ` (${e && e.message})`)),
+        { code: "UPLOAD_UNCONFIRMED", outcome: "unknown", reason: timedOut ? "timeout" : "connection-lost", ...(timedOut ? { seconds: Math.round(confirmMs / 1000) } : {}) });
+    }
     if (end.code !== 226 && end.code !== 250) {
       throw Object.assign(new Error("The upload did not complete (" + end.code + " " + end.text.trim() + ")"), { code: "ESTOR", reply: end.code, started: true });
     }
@@ -226,11 +261,11 @@ class FtpsClient extends EventEmitter {
     setTimeout(() => { try { this.sock && this.sock.destroy(); } catch {} }, 1000).unref?.();
   }
 
-  _reply() {
+  _reply(ms = this.timeoutMs) {
     if (this.replies.length) return Promise.resolve(this.replies.shift());
     if (this.closed) return Promise.reject(new Error("FTP connection closed"));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.queue = this.queue.filter(w => w !== waiter); reject(Object.assign(new Error("FTP server did not answer"), { code: "ETIMEDOUT" })); }, this.timeoutMs);
+      const timer = setTimeout(() => { this.queue = this.queue.filter(w => w !== waiter); reject(Object.assign(new Error("FTP server did not answer"), { code: "ETIMEDOUT" })); }, ms);
       if (timer.unref) timer.unref();
       const waiter = { resolve: (r) => { clearTimeout(timer); resolve(r); }, reject: (e) => { clearTimeout(timer); reject(e); } };
       this.queue.push(waiter);

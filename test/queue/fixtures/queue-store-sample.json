@@ -1,0 +1,141 @@
+{
+  "p_sample0001": {
+    "queueState": "idle",
+    "queuePaused": false,
+    "queueStopped": false,
+    "reconciliationPending": false,
+    "attentionReason": null,
+    "attentionDetail": null,
+    "queue": [
+      {
+        "id": "qi_0001",
+        "status": "queued",
+        "alreadyUploaded": false,
+        "file": {
+          "name": "qi_0001.gcode",
+          "sub": "",
+          "sizeBytes": 1234,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000001"
+        },
+        "map": {},
+        "prefs": {},
+        "createdAt": 1760000000000,
+        "dispatchedAt": null,
+        "finishedAt": null,
+        "queuedBy": {
+          "userId": "u_sample",
+          "userLabel": "sample-user"
+        },
+        "retryOfItemId": null,
+        "dispatchSnapshot": null
+      },
+      {
+        "id": "qi_0002",
+        "status": "queued",
+        "alreadyUploaded": false,
+        "file": {
+          "name": "qi_0002.gcode",
+          "sub": "",
+          "sizeBytes": 1234,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000002"
+        },
+        "map": {},
+        "prefs": {},
+        "createdAt": 1760000000000,
+        "dispatchedAt": null,
+        "finishedAt": null,
+        "queuedBy": {
+          "userId": "u_sample",
+          "userLabel": "sample-user"
+        },
+        "retryOfItemId": null,
+        "dispatchSnapshot": null
+      }
+    ],
+    "currentItem": null,
+    "recentHistory": [
+      {
+        "id": "qi_0000",
+        "status": "completed",
+        "alreadyUploaded": false,
+        "file": {
+          "name": "qi_0000.gcode",
+          "sub": "",
+          "sizeBytes": 1234,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "map": {},
+        "prefs": {},
+        "createdAt": 1760000000000,
+        "dispatchedAt": 1759991000000,
+        "finishedAt": 1759999000000,
+        "queuedBy": {
+          "userId": "u_sample",
+          "userLabel": "sample-user"
+        },
+        "retryOfItemId": null,
+        "dispatchSnapshot": null
+      }
+    ],
+    "updatedAt": 1760000000000
+  },
+  "p_sample0002": {
+    "queueState": "idle",
+    "queuePaused": true,
+    "queueStopped": false,
+    "reconciliationPending": false,
+    "attentionReason": null,
+    "attentionDetail": null,
+    "queue": [],
+    "currentItem": null,
+    "recentHistory": [],
+    "updatedAt": 1760000000000
+  },
+  "p_sample0003": {
+    "queueState": "unmanaged",
+    "queuePaused": false,
+    "queueStopped": false,
+    "reconciliationPending": false,
+    "attentionReason": null,
+    "attentionDetail": null,
+    "queue": [],
+    "currentItem": null,
+    "recentHistory": [],
+    "updatedAt": 1760000000000
+  },
+  "p_sample0004": {
+    "queueState": "idle",
+    "queuePaused": false,
+    "queueStopped": false,
+    "reconciliationPending": false,
+    "attentionReason": null,
+    "attentionDetail": null,
+    "queue": [],
+    "currentItem": null,
+    "recentHistory": [
+      {
+        "id": "qi_0003",
+        "status": "failed",
+        "alreadyUploaded": false,
+        "file": {
+          "name": "qi_0003.gcode",
+          "sub": "",
+          "sizeBytes": 1234,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000003"
+        },
+        "map": {},
+        "prefs": {},
+        "createdAt": 1760000000000,
+        "dispatchedAt": 1759992000000,
+        "finishedAt": 1759993000000,
+        "queuedBy": {
+          "userId": "u_sample",
+          "userLabel": "sample-user"
+        },
+        "retryOfItemId": null,
+        "dispatchSnapshot": null
+      }
+    ],
+    "updatedAt": 1760000000000
+  }
+}

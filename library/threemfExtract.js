@@ -78,7 +78,7 @@ function modelMetadata(xml) {
 // Decided from the producer the file names, with the Evidence kept:
 //   "BambuStudio-02.06.00.51"  Bambu Studio's own (four zero-padded parts)
 //   "BambuStudio-2.3.5" + a Snapmaker printer  Snapmaker Orca (it writes the
-//       Bambu name with its own three-part version; seen on the owner's U1
+//       Bambu name with its own three-part version; seen on real U1
 //       projects, whose G-code says "Snapmaker Orca 2.3.5")
 //   "OrcaSlicer-…", "CrealityPrint-…", "PrusaSlicer-…"  as named
 function detectFlavour({ application, settings, names }) {

@@ -1,0 +1,22 @@
+{
+  "name": "snapcon-refactor-tools",
+  "private": true,
+  "description": "Pinned analysis and verification tools for SnapCon refactoring (docs/refactoring-policy.md). Installed only in refactor worktrees; never part of the app.",
+  "license": "MIT",
+  "devDependencies": {
+    "@ast-grep/cli": "0.51.0",
+    "dependency-cruiser": "18.7.0",
+    "jscodeshift": "17.4.0"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "guard": "node lib/guard.js",
+    "depcruise": "node bin/depcruise.js",
+    "sg-scan": "node bin/sg-scan.js",
+    "sg-test": "node -e \"process.exit(require('child_process').spawnSync(require('./lib/tools').astGrepBin(),['test','-c','sgconfig.yml','--skip-snapshot-tests'],{stdio:'inherit'}).status)\"",
+    "map": "node mapper/map-server.js && node mapper/map-frontend.js && node mapper/assess.js",
+    "verify": "node ../../scripts/verify-refactor.js",
+    "harness": "node harness/run.js",
+    "selftest-scratch": "node selftest/make-scratch.js"
+  }
+}

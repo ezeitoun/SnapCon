@@ -4,9 +4,10 @@
 // Both upload implementations (Moonraker's in http-utils, FlashForge's native
 // one) stream the file through a raw request with a fixed Content-Length.
 // Cancel destroys that request mid-body, so the printer sees a broken upload,
-// never a complete-looking file. Cancel exists only while bytes are still
-// going out: once the last one is written it is cleared, so a cancel cannot
-// land between the upload finishing and the print starting.
+// never a complete-looking file. After the last byte it cuts nothing (the file
+// may be complete on the printer) and only stops what would follow, until the
+// printer answers (docs/TODO.md §37 P1, test/uploadTransfer.test.js). Once the
+// upload has settled there is nothing left to cancel.
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");

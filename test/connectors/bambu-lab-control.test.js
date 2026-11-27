@@ -14,8 +14,8 @@ const bambu = require("../../connectors/bambu-lab");
 const { createFakeBambuBroker } = require("../helpers/fakeBambuBroker");
 const { IDLE_REPORT } = require("../fixtures/bambu-p2s-report");
 
-const SERIAL = "22E8AJ5C2001188";
-const CODE = "603db0db";
+const SERIAL = "00T0ES0T0000001";
+const CODE = "123ab4cd";
 
 let nextId = 0;
 async function withPrinter(t, { commandReply = "success", report = IDLE_REPORT } = {}) {

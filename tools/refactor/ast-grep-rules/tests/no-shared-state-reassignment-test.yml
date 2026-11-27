@@ -1,0 +1,12 @@
+id: no-shared-state-reassignment
+valid:
+  - 'const p = getPrinters()[0];'
+  - 'const v = CFG.logsFolder;'
+  - 'CFG.x = 1;'
+  - 'let MYCFG = 1; MYCFG = 2;'
+  - 'if (CFG === null) {}'
+invalid:
+  - 'CFG = loadConfig();'
+  - 'PRINTERS = activePrinters(CFG);'
+  - 'FOLDER = "/x";'
+  - 'function f() { PRINTERS = []; }'

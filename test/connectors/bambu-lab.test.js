@@ -11,7 +11,7 @@ const assert = require("node:assert/strict");
 const bambu = require("../../connectors/bambu-lab");
 const { IDLE_REPORT } = require("../fixtures/bambu-p2s-report");
 
-const P = { name: "P2S", id: "p1", url: "http://192.168.16.223", serial: "22E8AJ5C2001188", verificationCode: "abcd1234" };
+const P = { name: "P2S", id: "p1", url: "http://192.168.60.223", serial: "00T0ES0T0000001", verificationCode: "abcd1234" };
 const norm = (print, opts) => bambu._internal.normalizeBambuState(P, print, opts);
 
 // ---- registration and capabilities ----
@@ -92,8 +92,8 @@ for (const [missing, field, expect] of [
 test("the serial is upper-cased before it is used as a topic", () => {
   // MQTT topics are case-sensitive: a lower-case serial connects, subscribes
   // successfully and then receives nothing at all. Cost us a whole probe run.
-  const cfg = bambu._internal.printerConfig({ ...P, serial: "22e8aj5c2001188" });
-  assert.equal(cfg.serial, "22E8AJ5C2001188");
+  const cfg = bambu._internal.printerConfig({ ...P, serial: "00t0es0t0000001" });
+  assert.equal(cfg.serial, "00T0ES0T0000001");
 });
 
 // ---- decoding the captured idle report ----
@@ -421,17 +421,16 @@ test("a file's row says whether it is a 3MF and whether it can be printed", () =
     "and says when a 3MF cannot be printed — absent means another vendor's file, left alone");
 });
 
-test("the badge sits beside the name, which keeps its extension stripped", () => {
-  // CLAUDE.md section 5 keeps the extension out of the visible name and the
-  // whole name in a title. The badge is the called-out exception that tells
-  // 3MF from gcode without putting the extension back.
+test("the badge sits beside the name, which keeps its extension", () => {
+  // CLAUDE.md section 5: a file name is shown with its extension, the whole
+  // name also in a title. The badge says what kind of file it is at a glance.
   const at = appSrc.indexOf("function fileKindBadge(");
   assert.ok(at > 0, "a single helper, so both file lists agree");
   const fn = appSrc.slice(at, appSrc.indexOf("\n}", at));
   assert.match(fn, /3MF/);
   assert.match(fn, /GCODE/);
   const list = appSrc.slice(appSrc.indexOf("function renderList()"), appSrc.indexOf("\n}", appSrc.indexOf("function renderList()")));
-  assert.match(list, /stripExt\(f\.name\)/, "the visible name still loses its extension");
+  assert.match(list, /\$\{esc\(f\.name\)\}\$\{fsBadge\}/, "the visible name keeps its extension");
 });
 
 test("the lane header uses the label the connector supplies", () => {

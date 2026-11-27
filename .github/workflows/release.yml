@@ -1,16 +1,22 @@
 name: release
 
-# Build single-file executables and attach them to a GitHub Release on a v* tag.
+# Build single-file executables on a v* tag and attach them to a DRAFT GitHub
+# Release. Nothing is published by this workflow: a person looks at the draft
+# (the builds, the text) on the Releases page and publishes it there.
+#
+# The release text is the section of RELEASE_NOTES.md for the tagged version,
+# under a short download paragraph; GitHub's generated notes are not used.
 #
 # Each OS builds on its own NATIVE runner (no cross-compiling), which avoids the
 # "base binary not in remote cache" failure and lets macOS ad-hoc signing happen
 # on real macOS.
 #
-# The three reliable targets (Linux, Windows, Apple-Silicon mac) build and publish
-# the release promptly. Intel-Mac is a SEPARATE best-effort job: GitHub's free
+# The three reliable targets (Linux, Windows, Apple-Silicon mac) build and the
+# draft is made promptly. Intel-Mac is a SEPARATE best-effort job: GitHub's free
 # macos-13 runners are often unavailable for a long time, so it must NOT block the
-# release. It attaches its binary to the already-published release if/when it runs;
-# if it never gets a runner, the release still ships with the other three.
+# release. It adds its binary to the release that already exists, draft or
+# published, if/when it runs, and can neither create nor publish one; if it never
+# gets a runner, the release has the other three.
 #
 #   git tag v0.1.0 && git push origin v0.1.0
 
@@ -42,8 +48,9 @@ jobs:
       - name: Install NASM (Windows source-build fallback)
         if: runner.os == 'Windows'
         run: choco install nasm -y
+      # npm ci: exactly the versions package-lock.json pins, or the build fails.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Build executable
         run: npx @yao-pkg/pkg . --targets ${{ matrix.target }} --output dist/${{ matrix.out }}
       - name: Upload build artifact
@@ -54,38 +61,84 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: publish release
+    name: draft release
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # For RELEASE_NOTES.md, at the tagged commit.
+      - uses: actions/checkout@v4
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: Show what will be published
+      - name: Show what will be attached
         run: ls -la dist
-      - name: Publish GitHub Release
+      # release-body.md = the download paragraph, then the lines of
+      # RELEASE_NOTES.md between this version's own line ("2026.11.0") and the
+      # next version's line or the end of the file. A tag whose version has no
+      # section there fails here, before any release exists.
+      #
+      # GitHub shows a release's text with every line break kept, so text that
+      # is wrapped in the file would show as short ragged lines. The awk below
+      # joins a wrapped line onto the paragraph or list item it continues and
+      # changes nothing else: headings, list items, table rows, quotes, code
+      # (fenced, or indented after a blank line) and a line ending in two spaces
+      # keep their own lines. test/releaseWorkflow.test.js runs this step.
+      - name: Write the release text
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cat > release-body.md <<'EOF'
+          ## SnapCon
+
+          Download the build for your OS, put it in its own folder, and run it — no Node.js needed. A browser opens to the dashboard; use **Settings** to add your printers.
+
+          **First-launch security warning (the apps are unsigned):**
+          - **Windows:** SmartScreen may say "Windows protected your PC" -> **More info -> Run anyway**.
+          - **macOS:** right-click the file -> **Open** (or run `xattr -dr com.apple.quarantine <file>` once).
+
+          If something on the default port 4545 is already running, close it first.
+
+          _(Intel-Mac build is best-effort and may attach a few minutes after the rest.)_
+
+          EOF
+          awk -v version="$version" '
+            function flush() { if (have) print buf; have = 0 }
+            { raw = $0; sub(/\r$/, "", raw); line = raw; sub(/[ \t]+$/, "", line) }
+            !inside { if (line == version) inside = 1; next }
+            line ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ { exit }
+            fenced { print raw; if (line ~ /^[ \t]*(```|~~~)/) fenced = 0; next }
+            line ~ /^[ \t]*(```|~~~)/ { flush(); print raw; fenced = 1; next }
+            line == "" { flush(); print ""; blank = 1; next }
+            {
+              own = (line ~ /^#+[ \t]/ || line ~ /^[ \t]*\|/ || line ~ /^[ \t]*</ || line ~ /^[ \t]*(---+|\*\*\*+|___+)$/)
+              item = (line ~ /^[ \t]*([-*+]|[0-9]+[.)])[ \t]/ || line ~ /^[ \t]*>/)
+              code = (blank && line ~ /^(    |\t)/ && !item)
+              if (!own && !item && !code && have && joinable && !hard) {
+                rest = line; sub(/^[ \t]+/, "", rest); buf = buf " " rest
+              } else {
+                flush(); buf = line; have = 1; joinable = !(own || code)
+              }
+              hard = (raw ~ /  $/ || line ~ /\\$/); if (raw ~ /  $/) buf = buf "  "
+              blank = 0
+            }
+            END { flush() }
+          ' RELEASE_NOTES.md > release-notes-section.md
+          if ! grep -q '[^[:space:]]' release-notes-section.md; then
+            echo "RELEASE_NOTES.md has no section for $version" >&2
+            exit 1
+          fi
+          cat release-notes-section.md >> release-body.md
+      # draft: true keeps the release a draft after the files are attached.
+      # Without it this action publishes the release it has just made.
+      - name: Create the draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: dist/*
-          generate_release_notes: true
-          body: |
-            ## SnapCon
+          body_path: release-body.md
 
-            Download the build for your OS, put it in its own folder, and run it —
-            no Node.js needed. A browser opens to the dashboard; use **Settings**
-            to add your printers.
-
-            **First-launch security warning (the apps are unsigned):**
-            - **Windows:** SmartScreen may say "Windows protected your PC" -> **More info -> Run anyway**.
-            - **macOS:** right-click the file -> **Open** (or run `xattr -dr com.apple.quarantine <file>` once).
-
-            If something on the default port 4545 is already running, close it first.
-
-            _(Intel-Mac build is best-effort and may attach a few minutes after the rest.)_
-
-  # Best-effort Intel-Mac build. Runs after the release exists and appends its
+  # Best-effort Intel-Mac build. Runs after the release exists and adds its
   # binary to it. continue-on-error so a stuck/unavailable macos-13 runner never
   # fails the overall release.
   build-intel:
@@ -99,11 +152,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # npm ci: exactly the versions package-lock.json pins, or the build fails.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
       - name: Build executable
         run: npx @yao-pkg/pkg . --targets node22-macos-x64 --output dist/SnapCon-macOS-Intel
-      - name: Attach to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/SnapCon-macOS-Intel
+      # Upload only. gh finds the release for this tag whether it is still a
+      # draft or already published, adds the file and changes nothing else. The
+      # release action is not used here: given a draft, it would publish it.
+      - name: Add to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/SnapCon-macOS-Intel --clobber --repo "$GITHUB_REPOSITORY"

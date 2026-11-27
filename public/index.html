@@ -7,14 +7,28 @@
 <title>SnapCon</title>
 <script>
 (function(){
+  // UI-REFRESH: the design refresh preview, per browser ("snapcon-ui":
+  // "refresh" | "classic"); ?ui=refresh / ?ui=classic overrides it for this
+  // page load only. Set here, before the stylesheets, so there is no flash
+  // of the other design. Decided first: the theme below depends on it.
+  var ui=null;
+  try{ var q=new URLSearchParams(location.search).get("ui"); if(q==="refresh"||q==="classic") ui=q; }catch(e){}
+  if(!ui){ try{ ui=localStorage.getItem("snapcon-ui"); }catch(e){} }
+  if(ui==="refresh") document.documentElement.classList.add("ui-refresh");
   var stored=null;
   try{ stored=localStorage.getItem("snapcon-theme"); }catch(e){}
   var theme=(stored==="light"||stored==="dark")?stored
+    // UI-REFRESH: Awareness exists only in the refresh; with it off a saved
+    // "awareness" shows as dark and stays saved, so turning it back on
+    // restores it.
+    :stored==="awareness"?(ui==="refresh"?"awareness":"dark")
     :((window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches)?"light":"dark");
   document.documentElement.setAttribute("data-theme",theme);
 })();
 </script>
 <link rel="stylesheet" href="/style.css">
+<!-- UI-REFRESH: every rule in refresh.css is scoped under html.ui-refresh. -->
+<link rel="stylesheet" href="/refresh.css">
 </head>
 <body>
 <!-- Top bar glyphs, defined once and drawn with <use href="#tb-…">. They take
@@ -28,8 +42,14 @@
   <symbol id="tb-heat" viewBox="28 26 72 72"><path d="M64 27C50 45 42 58 42 72C42 87 52 97 64 97C76 97 86 87 86 72C86 63 82 55 76 48C76 58 70 63 64 63C64 55 66 48 70 40C66 42 60 46 58 52C56 44 58 35 64 27Z"/></symbol>
   <symbol id="tb-queue" viewBox="0 0 24 24"><path opacity=".45" d="M18 3A3 3 0 0 1 21 0H7.286A3 3 0 0 0 4.286 3v15.857c0 1.402-.674 2.647-1.714 3.429H.857a.857.857 0 0 0 0 1.714h12.857A4.286 4.286 0 0 0 18 19.714V3Z"/><path d="M21 0a3 3 0 0 1 3 3v3a.857.857 0 0 1-.857.857H18V3a3 3 0 0 1 3-3Z"/><path fill-rule="evenodd" d="M8.875 6c0-.591.48-1.071 1.071-1.071h3.323a1.071 1.071 0 1 1 0 2.143H9.946A1.071 1.071 0 0 1 8.875 6Zm-2.213 5.143c0-.592.48-1.072 1.071-1.072h5.536a1.071 1.071 0 1 1 0 2.143H7.731a1.071 1.071 0 0 1-1.069-1.071Zm1.071 4.071a1.071 1.071 0 1 0 0 2.143h5.536a1.071 1.071 0 1 0 0-2.143H7.733Z"/></symbol>
   <symbol id="tb-library" viewBox="0 0 24 24"><rect x="2.5" y="2.5" width="13" height="13" rx="2.5" opacity=".35"/><rect x="5.5" y="5.5" width="13" height="13" rx="2.5" opacity=".6"/><rect x="8.5" y="8.5" width="13" height="13" rx="2.5"/></symbol>
+  <symbol id="tb-utilization" viewBox="0 0 24 24"><rect x="3" y="12" width="4.5" height="9" rx="1.5" opacity=".45"/><rect x="9.75" y="7" width="4.5" height="14" rx="1.5" opacity=".7"/><rect x="16.5" y="3" width="4.5" height="18" rx="1.5"/></symbol>
   <symbol id="tb-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></g></symbol>
   <symbol id="tb-search-btn" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></g></symbol>
+  <!-- UI-REFRESH: the refresh's theme glyphs, one per theme, in the same line style: Lucide "sun" (Day),
+       "moon" (Night) and "ribbon" (Awareness), at stroke-width 1.75 (see THIRD_PARTY_NOTICES.md). -->
+  <symbol id="tb-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></g></symbol>
+  <symbol id="tb-moon" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></g></symbol>
+  <symbol id="tb-ribbon" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11.22C11 9.997 10 9 10 8a2 2 0 0 1 4 0c0 1-.998 2.002-2.01 3.22"/><path d="m12 18 2.57-3.5"/><path d="M6.243 9.016a7 7 0 0 1 11.507-.009"/><path d="M9.35 14.53 12 11.22"/><path d="M9.35 14.53C7.728 12.246 6 10.221 6 7a6 5 0 0 1 12 0c-.005 3.22-1.778 5.235-3.43 7.5l3.557 4.527a1 1 0 0 1-.203 1.43l-1.894 1.36a1 1 0 0 1-1.384-.215L12 18l-2.679 3.593a1 1 0 0 1-1.39.213l-1.865-1.353a1 1 0 0 1-.203-1.422z"/></g></symbol>
   <symbol id="tb-theme" viewBox="0 0 24 24"><path opacity=".45" fill-rule="evenodd" d="M13 .75v4.01c1.27.174 2.437.674 3.412 1.414l2.129-2.129.707-.707 1.414 1.414-.707.707-2.129 2.129c.74.975 1.24 2.141 1.414 3.412h4.01v2h-4.01c-.174 1.27-.674 2.437-1.414 3.412l2.129 2.129.707.707-1.414 1.414-.707-.707-2.129-2.129c-.975.74-2.142 1.24-3.412 1.414v4.01h-2v-4.01c-1.27-.174-2.437-.674-3.412-1.414l-2.129 2.129-.707.707-1.414-1.414.707-.707 2.129-2.129C5.435 15.437 4.935 14.27 4.76 13H.75v-2h4.01c.174-1.27.674-2.437 1.414-3.412L4.045 5.46l-.707-.707 1.414-1.414.707.707 2.129 2.129C8.563 5.434 9.73 4.934 11 4.76V.75h2Z"/><path fill-rule="evenodd" d="M18.892 14.435a7.36 7.36 0 0 1-2.353.384c-4.064 0-7.359-3.295-7.359-7.36 0-.822.135-1.613.384-2.351-2.838 1.003-4.871 3.71-4.871 6.892a7.308 7.308 0 0 0 7.307 7.307c3.182 0 5.889-2.034 6.892-4.872Z"/></symbol>
   <symbol id="tb-gear" viewBox="14 20 90 90"><path fill-rule="evenodd" d="M69 25l4 11c3 1 6 2 9 4l11-5 10 17-9 7c0 2 1 4 1 6s0 4-1 6l9 7-10 17-11-5c-3 2-6 3-9 4l-4 11H49l-4-11c-3-1-6-2-9-4l-11 5-10-17 9-7c0-2-1-4-1-6s0-4 1-6l-9-7 10-17 11 5c3-2 6-3 9-4l4-11h20zM71 65a12 12 0 1 0-24 0a12 12 0 1 0 24 0z"/></symbol>
   <symbol id="tb-caret" viewBox="0 0 8 8"><path d="m1.5 3 2.5 2.5L6.5 3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -110,6 +130,7 @@
     <!-- Shown only when Queue Management is enabled. -->
     <button class="tb-cell" id="queueBtn" data-i18n-title="settings.tabs.queue" title="Queue Management" data-i18n-aria-label="settings.tabs.queue" aria-label="Queue Management" hidden><svg class="tb-icon" width="15" height="15" aria-hidden="true"><use href="#tb-queue"/></svg><span class="tb-label" data-i18n="global.topbar.queue_label">Queue</span></button>
     <button class="tb-cell" id="libraryBtn" data-i18n-title="library.title" title="Library" data-i18n-aria-label="library.title" aria-label="Library" aria-pressed="false"><svg class="tb-icon" width="15" height="15" aria-hidden="true"><use href="#tb-library"/></svg><span class="tb-label" data-i18n="library.title">Library</span></button>
+    <button class="tb-cell" id="utilizationBtn" data-i18n-title="utilization.title" title="Fleet utilization" data-i18n-aria-label="utilization.title" aria-label="Fleet utilization" aria-pressed="false"><svg class="tb-icon" width="15" height="15" aria-hidden="true"><use href="#tb-utilization"/></svg><span class="tb-label" data-i18n="utilization.short">Utilization</span></button>
     <!-- Tablet and narrower: search collapses to this magnifier. -->
     <button class="tb-cell tb-icon-only tb-search-btn" id="tbSearchBtn" aria-controls="fleetSearch" aria-expanded="false" data-i18n-aria-label="global.topbar.fleet_search_aria" aria-label="Search printers" data-i18n-title="global.topbar.fleet_search_aria" title="Search printers"><svg class="tb-icon" width="16" height="16" aria-hidden="true"><use href="#tb-search-btn"/></svg></button>
     <label class="tb-cell tb-search" id="tbSearchCell"><svg class="tb-search-glyph" width="15" height="15" aria-hidden="true"><use href="#tb-search"/></svg><input id="fleetSearch" class="fleet-search" data-i18n-placeholder="global.topbar.fleet_search_placeholder" placeholder="Search printers…" data-i18n-aria-label="global.topbar.fleet_search_aria" aria-label="Search printers" autocomplete="off"></label>
@@ -146,6 +167,7 @@
         <button class="tb-sheet-row" id="tbSheetHeat" data-for="bulkHeatBtn"><svg width="17" height="17" aria-hidden="true"><use href="#tb-heat"/></svg><span data-i18n="global.topbar.sheet_heat">Heat printers</span></button>
         <button class="tb-sheet-row" id="tbSheetQueue" data-for="queueBtn" hidden><svg width="17" height="17" aria-hidden="true"><use href="#tb-queue"/></svg><span data-i18n="global.topbar.queue_label">Queue</span></button>
         <button class="tb-sheet-row" id="tbSheetLibrary" data-for="libraryBtn"><svg width="17" height="17" aria-hidden="true"><use href="#tb-library"/></svg><span data-i18n="library.title">Library</span></button>
+        <button class="tb-sheet-row" id="tbSheetUtilization" data-for="utilizationBtn"><svg width="17" height="17" aria-hidden="true"><use href="#tb-utilization"/></svg><span data-i18n="utilization.title">Fleet utilization</span></button>
         <button class="tb-sheet-row" id="tbSheetSettings" data-for="gear"><svg width="17" height="17" aria-hidden="true"><use href="#tb-gear"/></svg><span data-i18n="settings.title">Settings</span></button>
       </div>
       <div class="tb-sheet-seg tb-sheet-phone" id="tbSheetView">
@@ -199,6 +221,7 @@
     <div class="multiselect-bar" id="multiselectBar" style="display:none">
       <span id="multiselectCount"></span>
       <button class="btn ghost" id="sendToQueueBtn" data-i18n="queue.send_modal_title" style="display:none">Send to Queue</button>
+      <button class="btn danger" id="multiselectDelete" style="display:none">Delete files</button>
       <button class="btn ghost" id="multiselectClear" data-i18n="files.multiselect_clear">Clear</button>
     </div>
     <div class="pstatus" aria-live="polite" id="fileOpStatus" style="padding:0 14px"></div>
@@ -364,8 +387,7 @@
             </div>
             <label class="switch-row" for="setAllowUploadWhilePrinting"><input type="checkbox" role="switch" id="setAllowUploadWhilePrinting" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.upload_while_printing_label">Allow uploading while a printer is printing</span><span class="switch-desc" data-i18n="settings.general.upload_while_printing_desc">Off, an upload waits until the printer is free. Sending a file over the one being printed is always refused.</span></span></label>
             <label class="switch-row" for="setUploadIntoQueue"><input type="checkbox" role="switch" id="setUploadIntoQueue" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.upload_into_queue_label">Upload into queue</span><span class="switch-desc" data-i18n="settings.general.upload_into_queue_desc">Also add the file to a queue-managed printer’s queue, so it prints in turn. Off, Upload only puts the file on the printer.</span></span></label>
-            <label class="switch-row" for="setSkipIdenticalUploads"><input type="checkbox" role="switch" id="setSkipIdenticalUploads" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.skip_identical_label">Skip uploading a file the printer already has</span><span class="switch-desc" data-i18n="settings.general.skip_identical_desc">Checks size, then samples the copy on the printer. Anything it cannot confirm is uploaded as usual.</span></span></label>
-            <label class="switch-row" for="setOverwriteDifferent"><input type="checkbox" role="switch" id="setOverwriteDifferent" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.overwrite_different_label">Overwrite a file on the printer when the content differs</span><span class="switch-desc" data-i18n="settings.general.overwrite_different_desc">On, a re-sliced file replaces the printer's copy of the same name. Off, SnapCon refuses and asks you to rename it.</span></span></label>
+            <label class="switch-row" for="setOverwriteDifferent"><input type="checkbox" role="switch" id="setOverwriteDifferent" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.general.replace_same_name_label">Replace a file on the printer that has the same name</span><span class="switch-desc" data-i18n="settings.general.replace_same_name_desc">On, a file you send replaces the printer's file of the same name. Off, SnapCon sends a file only when the printer has no file of that name; if it has one, or SnapCon can't tell, the send is refused.</span></span></label>
           </div>
         </div>
 
@@ -377,6 +399,13 @@
               <span class="settings-help" data-i18n="maintenance.docker_restart_help">Restarts the container — picks up a config.json edited outside SnapCon, or a newly pulled image.</span>
               <span class="pstatus" aria-live="polite" id="dockerRestartStatus"></span>
             </div>
+          </div>
+        </div>
+
+        <div class="settings-section" id="settingsVirtualPrinters">
+          <div class="settings-section-title" data-i18n="settings.virtual_printers.title">Virtual printers</div>
+          <div class="settings-section-body">
+            <label class="switch-row" for="setVirtualPrinters"><input type="checkbox" role="switch" id="setVirtualPrinters" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.virtual_printers.enable_label">Enable virtual printers</span><span class="switch-desc" data-i18n="settings.virtual_printers.enable_desc">Offers the Test printer and Virtual U1 printer types, for testing SnapCon and trying it without real printers. While off, virtual printers you have added are hidden and not run; they come back unchanged when you turn this on.</span></span></label>
           </div>
         </div>
 
@@ -412,6 +441,11 @@
       </div>
 
       <div class="set-panel" id="tab-prefs" style="display:none">
+      <!-- UI-REFRESH: applies at once and is kept in this browser only, so it is
+           outside the tab's Save row (applyUiRefresh in app.js). -->
+      <div class="setcard" id="uiRefreshCard">
+        <label class="switch-row" for="setUiRefresh"><input type="checkbox" role="switch" id="setUiRefresh" class="switch-input"><span class="switch-text"><span class="switch-label" data-i18n="settings.view.ui_refresh_label">Design refresh (preview)</span><span class="switch-desc" data-i18n="settings.view.ui_refresh_desc">Try the new colors, buttons and card layout. Turn off to go back. This browser only.</span></span></label>
+      </div>
       <div class="setcard">
         <label class="fl" for="setUserLocale" data-i18n="settings.view.language_label">My interface language</label>
         <select class="field" id="setUserLocale" style="max-width:260px"></select>
@@ -592,6 +626,9 @@
         <button class="btn ghost" id="addPrinter" data-i18n="settings.printers.add_button" style="white-space:nowrap;flex:none">+ Add</button>
         <button class="btn ghost" id="discover" style="white-space:nowrap;flex:none;display:flex;align-items:center;gap:6px">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12h-8a1 1 0 1 0 -1 1v8a9 9 0 0 0 9 -9" /><path d="M16 9a5 5 0 1 0 -7 7" /><path d="M20.486 9a9 9 0 1 0 -11.482 11.495" /></svg> <span data-i18n="settings.printers.discover_button">Discover</span>
+        </button>
+        <button class="btn ghost" id="rediscover" data-i18n-title="settings.printers.rediscover_button_title" title="Check saved printers for a changed address, serial or name" style="white-space:nowrap;flex:none;display:none;align-items:center;gap:6px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4" /><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4" /></svg> <span data-i18n="settings.printers.rediscover_button">Rediscover</span>
         </button>
       </div>
       <div id="setPrinters"></div>
@@ -929,6 +966,9 @@
          Content rendered by openHealthPage()/renderHealthPage() in app.js. -->
     <!-- The Library (M5): rendered by public/library.js. -->
     <div class="library-page" id="libraryPage"></div>
+    <!-- Fleet utilization (read only): rendered by public/utilization.js. -->
+    <div class="utilization-page" id="utilizationPage"></div>
+    <div class="uz-sr" id="uzLive" role="status" aria-live="polite"></div>
     <div class="health-page" id="healthPage">
       <div class="health-page-hdr">
         <div class="health-picker" id="healthPicker"></div>
@@ -987,6 +1027,7 @@
           <div class="jt-row">
             <div class="jt" id="jt"></div>
             <div class="jcard-actions">
+              <button class="btn danger jcard-del" id="jobDelete" data-i18n="files.delete_button" style="display:none">Delete</button>
               <button class="jcard-btn" id="jobEject" data-i18n-title="fleet.job.deselect_title" title="Deselect job"><img src="/eject-pill.svg" class="jcard-icon" data-i18n-alt="fleet.job.deselect_alt" alt="Deselect"></button>
               <button class="jcard-btn" id="jobSend" data-i18n-title="fleet.modal.send.title" title="Send to printers"><img src="/send-pill.svg" class="jcard-icon" data-i18n-alt="fleet.modal.send.title" alt="Send to printers"></button>
             </div>
@@ -1022,6 +1063,7 @@
         </div>
         <span id="camBulkMsg" class="pstatus" aria-live="polite"></span>
       </div>
+      <div id="deferredNotice" aria-live="polite"></div>
       <div class="fleet" id="fleet"></div>
     </div>
   </main>
@@ -1325,7 +1367,7 @@
       <label class="bulkheat-stagger-label"><input type="checkbox" id="bulkheatStagger" checked> <span data-i18n="fleet.modal.bulkheat.staggered_heating_label">Staggered heating</span></label>
       <div class="hint bulkheat-stagger-hint" data-i18n="fleet.modal.bulkheat.staggered_heating_helper">Start each printer a few seconds after the last, instead of all at once.</div>
       <div class="bulkheat-stagger-row" id="bulkheatStaggerRow">
-        <input class="field" id="bulkheatStaggerSecs" type="number" min="5" max="600" step="5" value="60" style="max-width:90px">
+        <input class="field" id="bulkheatStaggerSecs" type="number" min="5" max="600" step="5" value="60" style="max-width:120px">
         <span class="hint" data-i18n="fleet.modal.bulkheat.staggered_seconds_suffix">seconds between each printer</span>
       </div>
       <div class="bulkheat-summary" id="bulkheatSummary">All start together</div>
@@ -1347,7 +1389,7 @@
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="radio" name="discoverScope" id="discoverScopeSubnet" value="subnet"> <span data-i18n="settings.printers.discover_scope_subnet">Specific subnet</span></label>
       </div>
       <p style="color:var(--ink-dim);font-size:13px;margin:8px 0 14px" id="discoverScopeHint">Scans every subnet this SnapCon host is connected to.</p>
-      <input class="field" id="subnetModalInput" data-i18n-placeholder="settings.printers.discover_subnet_placeholder" placeholder="192.168.2.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto;display:none">
+      <input class="field" id="subnetModalInput" data-i18n-placeholder="settings.printers.discover_subnet_placeholder" placeholder="192.168.1.0 or 192.168.22.0/25" style="text-align:center;font-size:14px;max-width:260px;margin:0 auto;display:none">
       <div style="display:flex;gap:8px;justify-content:center;margin-top:14px">
         <button class="btn purple" id="subnetModalScan" data-i18n="settings.printers.discover_scan_button">Scan</button>
         <button class="btn ghost" id="subnetModalCancel" data-i18n="common.cancel">Cancel</button>
@@ -1356,6 +1398,43 @@
     </div>
   </div>
 
+  <!-- Settings > Printers > Rediscover: what changed about each saved printer
+       (public/rediscover.js does the matching). -->
+  <div class="modal" id="rediscoverModal">
+    <div class="modalbox rd-box">
+      <div class="modalhdr"><span data-i18n="settings.printers.rediscover_title">Rediscover printers</span><button class="modalx" id="rediscoverX">✕</button></div>
+      <div id="rediscoverBody" aria-live="polite"></div>
+      <div class="pstatus" aria-live="polite" id="rediscoverStatus"></div>
+      <div class="rd-footer">
+        <button class="btn ghost" id="rediscoverClose" data-i18n="settings.printers.rediscover_close">Close</button>
+        <button class="btn purple" id="rediscoverAll" style="display:none"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="deleteFilesModal">
+    <div class="modalbox" style="max-width:460px">
+      <div class="modalhdr"><span id="deleteFilesTitle">Delete files?</span><button class="modalx" id="deleteFilesX">✕</button></div>
+      <ul class="delete-files-list" id="deleteFilesList"></ul>
+      <div class="fl" style="margin-top:14px" data-i18n="files.delete_method_label">Deletion method</div>
+      <div class="delete-mode-row">
+        <input type="radio" name="deleteMode" id="deleteModeTrash" value="trash" checked>
+        <label for="deleteModeTrash" data-i18n="files.delete_mode_trash">Move to Trash</label>
+      </div>
+      <div class="settings-help delete-mode-help" id="deleteModeTrashHelp"></div>
+      <div id="deleteModePermanentBlock" hidden>
+        <div class="delete-mode-row">
+          <input type="radio" name="deleteMode" id="deleteModePermanent" value="permanent">
+          <label for="deleteModePermanent" data-i18n="files.delete_mode_permanent">Delete permanently</label>
+        </div>
+        <div class="settings-help err delete-mode-help" data-i18n="files.delete_mode_permanent_help">Removed from the NAS at once. It can't be restored through SnapCon.</div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost" id="deleteFilesCancel" data-i18n="common.cancel">Cancel</button>
+        <button class="btn danger" id="deleteFilesGo">Move to the trash</button>
+      </div>
+    </div>
+  </div>
   <div class="modal" id="newFolderModal">
     <div class="modalbox" style="text-align:center;max-width:340px">
       <div class="modalhdr"><span data-i18n="files.new_folder_modal_title">New folder</span><button class="modalx" id="newFolderModalX">✕</button></div>
@@ -1614,7 +1693,9 @@
 <script src="/error-codes.js"></script>
 <script src="/i18n.js"></script>
 <script src="/printer-identity.js"></script>
+<script src="/rediscover.js"></script>
 <script src="/app.js"></script>
 <script src="/library.js"></script>
+<script src="/utilization.js"></script>
 </body>
 </html>

@@ -33,6 +33,7 @@ const { FtpsClient } = require("./ftps-client");
 const preview = require("./bambu-preview");
 const zip = require("./zip-reader");
 const threemf = require("../threemf");
+const netfs = require("../netfs").getNetFs();
 
 const FTP_PORT = 990;
 
@@ -1123,13 +1124,57 @@ module.exports.uploadFile = async (p, localPath, name, job = {}) => {
     // The printer's own view of the file, not ours: a transfer can report every
     // byte sent and still land short.
     const onPrinter = await ftp.size(name).catch(() => null);
+    if (onPrinter != null) RECENT_SIZE.set(p.id + "\n" + name, { size: onPrinter, at: Date.now() });
     if (onPrinter != null && onPrinter !== job.total) {
-      try { await ftp.remove(name); } catch { /* best effort */ }
+      try { await ftp.remove(name); RECENT_SIZE.delete(p.id + "\n" + name); } catch { /* best effort */ }
       throw new Error(`${name} arrived incomplete on ${p.name} (${onPrinter} of ${job.total} bytes)`);
     }
   } finally {
     ftp.close();
   }
+};
+
+// Read back after an upload (docs/TODO.md §37 P2, decision D2): the printer's
+// own SIZE for the file, in a session of its own. The same size is
+// "acknowledged" (FTP offers no ranged compare worth its cost here), another
+// size is "mismatch"; no such file is "absent", and a SIZE the printer does not
+// answer, or a session that fails, is "unverifiable". The server starts nothing
+// on either of those. Physical validation on a Bambu printer is still
+// outstanding; this is tested against the fake FTPS server only.
+// The SIZE the upload itself read in its own session, kept for a moment, so
+// the read-back right after it does not open a second session at once (a
+// printer may limit them).
+const RECENT_SIZE = new Map();
+const RECENT_SIZE_MS = 60 * 1000;
+// With no localPath (a Loaded file checked later, §37 P5), opts.localSize is
+// what the printer's copy is held to; with neither, the name only.
+module.exports.verifyUpload = async (p, name, localPath, { localSize: knownSize = null } = {}) => {
+  const cfg = printerConfig(p);
+  if (cfg.error) return { result: "unverifiable", evidence: cfg.error };
+  let localSize = Number.isFinite(knownSize) ? knownSize : null;
+  if (localPath) {
+    try { localSize = (await netfs.stat(localPath)).size; }
+    catch (e) { return { result: "unverifiable", evidence: "the local file could not be read: " + e.message }; }
+  }
+  const key = p.id + "\n" + name, recent = RECENT_SIZE.get(key);
+  RECENT_SIZE.delete(key);
+  let size;
+  if (recent && Date.now() - recent.at < RECENT_SIZE_MS) size = recent.size;
+  else {
+    const ftp = ftpsFor(cfg);
+    try {
+      await ftp.connect(MQTT_USER, cfg.code);
+      size = await ftp.size(name);
+    } catch (e) {
+      return { result: "unverifiable", evidence: (e && e.code === "ENOSIZE" ? "the printer did not answer SIZE" : "the printer's files could not be read") + ": " + e.message };
+    } finally {
+      ftp.close();
+    }
+  }
+  if (size == null) return { result: "absent", evidence: `${name} is not on the printer` };
+  if (localSize == null) return { result: "acknowledged", basis: "name", evidence: `${name} is on the printer` };
+  if (size !== localSize) return { result: "mismatch", basis: "size", evidence: `the printer's ${name} is ${size} bytes, the file sent is ${localSize}` };
+  return { result: "acknowledged", basis: "size", evidence: `${name} is on the printer at ${size} bytes` };
 };
 
 // Two ways to start a print, decided by what the file IS.

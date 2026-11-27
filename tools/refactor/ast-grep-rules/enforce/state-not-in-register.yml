@@ -1,0 +1,17 @@
+id: state-not-in-register
+language: javascript
+severity: error
+message: Module state (Map/Set) must be created once at module level, not inside register<Area>Routes (that would create one per registration and change its lifetime).
+files: ["**/routes/**"]
+ignores: ["test/**", "tools/**", "**/test/**", "**/tools/**", "**/node_modules/**"]
+rule:
+  pattern: new $C($$$)
+  inside:
+    kind: function_declaration
+    has:
+      field: name
+      regex: "^register[A-Z][A-Za-z0-9]*Routes$"
+    stopBy: end
+constraints:
+  C:
+    regex: "^(Map|Set|WeakMap|WeakSet)$"

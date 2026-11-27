@@ -13,7 +13,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const src = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+const src = ["server.js", "routes/health.js"].map(f => fs.readFileSync(path.join(__dirname, "..", f), "utf8")).join("\n");
 
 test("checkFanMismatch's 'Fan not spinning' reason keeps its original title/detail AND carries the additive code/name/rpm fields", () => {
   assert.match(src, /title:\s*"Fan not spinning".*code:\s*"fan-not-spinning".*name:\s*f\.name.*rpm:\s*Math\.round\(f\.rpm\)/);

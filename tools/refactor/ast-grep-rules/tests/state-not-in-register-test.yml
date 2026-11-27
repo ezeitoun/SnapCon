@@ -1,0 +1,10 @@
+id: state-not-in-register
+valid:
+  - 'const heaterStableSince = new Map(); function registerHealthRoutes(app, deps) { app.get("/x", h); }'
+  - 'function registerHealthRoutes(app) { const d = new Date(); }'
+  - 'function helper() { const m = new Map(); }'
+  - 'function registerThing() { const m = new Map(); }'
+invalid:
+  - 'function registerHealthRoutes(app, deps) { const seen = new Map(); }'
+  - 'function registerHealthRoutes(app) { app.get("/x", () => { const s = new Set(); }); }'
+  - 'function registerLibraryRoutes(app) { const w = new WeakMap(); }'

@@ -1,0 +1,561 @@
+{
+  "boundary": "snapshot",
+  "comment": "Snapshot extraction: GET /api/snapshot, its throttle (getSnapshotThrottled) and the two Maps behind it move from server.js to routes/snapshot.js. Executed only with the owner's OK to Dev, mechanically by tools/refactor/codemods/extract-snapshot.js (one contiguous slice; the declared rewrites CFG -> getConfig() and PRINTERS -> getPrinters(), one occurrence each).",
+  "base": "a05e80df5425d7bcd025c8f9dd311002ae84c203",
+  "movedFrom": "server.js",
+  "sourceRange": "One contiguous slice of server.js at the base: lines 4293-4344 (52 lines). 4293-4304: the comment block \"// Server-side throttle for the fleet Camera View's automatic polling…\"; 4305 snapshotCache; 4306 snapshotInflight; 4307-4324 getSnapshotThrottled; 4325 blank; 4326-4344 app.get(\"/api/snapshot\"). STAYS in server.js, unchanged: the \"// ---- Camera snapshot\" comment, getSnapshot (4280) and checkSnapshot (4285) above the slice — also used by notifications (server.js 6876 and 7175 at the base) — the blank line 4292, and everything from the blank line 4345 on (the \"// ---- Live camera\" comment, GET /api/camera-stream, GET /api/thumbnail). Nothing outside 4293-4344 mentions snapshotCache, snapshotInflight or getSnapshotThrottled (checked by the codemod).",
+  "newFiles": [
+    "routes/snapshot.js"
+  ],
+  "allowedFiles": [
+    "server.js",
+    "test/snapshotCheck.test.js",
+    "test/connectors/creality-webrtc-camera.test.js",
+    "test/helpers/snapshotCode.js"
+  ],
+  "moved": [
+    "snapshotCache",
+    "snapshotInflight",
+    "getSnapshotThrottled",
+    "GET /api/snapshot"
+  ],
+  "rewrites": [
+    {
+      "from": "CFG",
+      "to": "getConfig()"
+    },
+    {
+      "from": "PRINTERS",
+      "to": "getPrinters()"
+    }
+  ],
+  "injected": {
+    "requireAuth": "server.js:394 const (from auth)",
+    "getConfig": "() => CFG (server.js:98 let; reassigned at 121, 250, 264, 281)",
+    "getPrinters": "() => PRINTERS (server.js:98 let; reassigned at 125, 251, 265, 282)",
+    "printerVisibleTo": "server.js:239 const (groupAccess)",
+    "getSnapshot": "server.js:4280 async function (stays in server.js with checkSnapshot; declared above the registration)",
+    "how": "parameters of registerSnapshotRoutes(app, { requireAuth, getConfig, getPrinters, printerVisibleTo, getSnapshot }). getSnapshotThrottled and the route use injected names, so both are declared inside registerSnapshotRoutes (indented by two, text otherwise unchanged apart from the two rewrites); the comment block and the two Maps stay at module scope with their text unchanged. No module-level dependency slots. The moved code's free names at the base are exactly CFG, PRINTERS, app, requireAuth, printerVisibleTo, getSnapshot and the language globals Map, Date, parseInt (checked by the codemod); the finished module's are Map, Date, parseInt and module.",
+    "requiresInModule": "none"
+  },
+  "exports": "module.exports = { registerSnapshotRoutes } — nothing else, no _internal: every pin goes through the route. registerSnapshotRoutes returns nothing (test/helpers/snapshotCode.js refuses a return value and any other export).",
+  "strictMode": "routes/snapshot.js has no \"use strict\" (server.js is sloppy mode; semantics kept identical).",
+  "moduleState": {
+    "snapshotCache": "module scope of routes/snapshot.js; created once when server.js requires the module at the original position (same point in start-up as before: after getSnapshot/checkSnapshot are defined, before GET /api/camera-stream registers); process lifetime; never reset by a config reload; emptied only by a restart. Keyed by printer INDEX, as before (pinned, not changed).",
+    "snapshotInflight": "same",
+    "registration": "server.js requires the module and calls registerSnapshotRoutes(app, {...}) at the moved code's original position (replacing lines 4293-4344), so the Express handler order is unchanged (… fleet …, snapshot, camera-stream, thumbnail …). getSnapshotThrottled becomes a function declared inside registerSnapshotRoutes instead of a hoisted top-level function of server.js; nothing outside the moved block referenced it (checked by the codemod), so this is unobservable — stated for the Guardian."
+  },
+  "pinningTests": [
+    "test/snapshotBehaviour.test.js",
+    "test/snapshotCheck.test.js",
+    "test/connectors/creality-webrtc-camera.test.js"
+  ],
+  "declaredTestFiles": [
+    "test/helpers/snapshotCode.js"
+  ],
+  "declaredHarness": {
+    "test/snapshotCheck.test.js": [
+      {
+        "base": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(__dirname, \"\\.\\.\", \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(__dirname, \"\\.\\.\", \"server\\.js\"\\), \"utf8\"\\) \\+ \"\\\\n\" \\+ fs\\.readFileSync\\(path\\.join\\(__dirname, \"\\.\\.\", \"routes\", \"snapshot\\.js\"\\), \"utf8\"\\)\\.replace\\(/\\^  /gm, \"\"\\);$"
+      }
+    ],
+    "test/connectors/creality-webrtc-camera.test.js": [
+      {
+        "base": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(ROOT, \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const serverSrc = \\[\"server\\.js\", \"routes/snapshot\\.js\"\\]\\.map\\(f => fs\\.readFileSync\\(path\\.join\\(ROOT, f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$"
+      }
+    ]
+  },
+  "declaredHarnessNotes": {
+    "test/snapshotCheck.test.js": "line 16 only: the source text is server.js followed by routes/snapshot.js with the register function's two-space indentation removed. Why de-indented rather than changing the route's end marker on line 50 to \"\\n  });\": extractFn() (lines 17-22) cuts a function at the first \"\\n}\" — for the indented getSnapshotThrottled that would run on to the end of registerSnapshotRoutes and take the route with it, so the assertion on line 54 (getSnapshotThrottled itself awaits getSnapshot(p)) could be satisfied by the route's text. De-indented, extractFn(\"getSnapshotThrottled\") and the route slice on line 50 are the same texts as at the base (apart from PRINTERS -> getPrinters() inside the route), and lines 17-55 stay byte-identical. extractFn(\"getSnapshot\") / (\"checkSnapshot\") still find server.js's own functions first (server.js comes first; the module declares neither). The message \"must exist in server.js\" on line 20 is an assertion line and is deliberately left as it is.",
+    "test/connectors/creality-webrtc-camera.test.js": "line 19 only: routes/snapshot.js joins the scanned source after server.js, so line 178 (app.get(\"/api/snapshot\" is still in place) keeps passing for the route's new home. Every other use of serverSrc in the file (lines 22-23, 141-143, 158-160, 179, 185, 403, 407, 412, 420) is an indexOf / first match / fixed-length slice that resolves inside server.js's own text exactly as before (the latest of them starts at offset 319335 of 452001 at the base and takes at most 2200 characters), or a count of a pattern the module does not contain (...webrtcCameraFields(p, conn): 2). The file has no doesNotMatch on serverSrc itself.",
+    "test/helpers/snapshotCode.js": "declared helper (Guardian reviews every line): only the header comment, the SERVER->MODULE constant, the unused routeEnd import and loadSource() change. Base: slices server.js into the sandbox, where app/requireAuth/printerVisibleTo/getSnapshot/CFG/PRINTERS are globals; a reload is an assignment to the sandbox's CFG / PRINTERS. Head: runs routes/snapshot.js in the sandbox with a require() that refuses everything, removes those six globals, calls registerSnapshotRoutes(app, deps) with getConfig/getPrinters reading a holder that a reload reassigns, requires it to return nothing and the module to export registerSnapshotRoutes only. test/snapshotBehaviour.test.js is not changed."
+  },
+  "mutations": [
+    {
+      "name": "requireAuth-dropped",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 1. GET /api/snapshot is registered with requireAuth as its only middleware, before the handler",
+        "test/snapshotBehaviour.test.js :: 1. when requireAuth refuses, the handler never runs (no visibility check, nothing is fetched)"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "app.get(\"/api/snapshot\", requireAuth, async (req, res) => {",
+        "replace": "app.get(\"/api/snapshot\", requireAuth && ((q, s, n) => n()), async (req, res) => {"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "  app.get(\"/api/snapshot\", requireAuth, async (req, res) => {",
+        "replace": "  app.get(\"/api/snapshot\", requireAuth && ((q, s, n) => n()), async (req, res) => {"
+      }
+    },
+    {
+      "name": "visibility-removed",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 2. a printer the user may not see: 400 Unknown printer, and nothing is fetched (plain and fresh)",
+        "test/snapshotBehaviour.test.js :: 2. visibility is asked on every request: a frame cached for one user is not given to a user who may not see the printer",
+        "test/snapshotBehaviour.test.js :: 7. the printer list is read on every request: after a reload REPLACES the array, the new list is the one used",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: \"Unknown printer\" });\n  try {\n    let contentType, buffer;",
+        "replace": "  if (!p) return res.status(400).json({ error: \"Unknown printer\" });\n  try {\n    let contentType, buffer;"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "    if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: \"Unknown printer\" });\n    try {\n      let contentType, buffer;",
+        "replace": "    if (!p) return res.status(400).json({ error: \"Unknown printer\" });\n    try {\n      let contentType, buffer;"
+      }
+    },
+    {
+      "name": "ttl-ignored",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. loading the code again starts with an empty cache (a restart)",
+        "test/snapshotBehaviour.test.js :: 3. requests arriving while a fetch is in flight share that ONE fetch and all get its frame",
+        "test/snapshotBehaviour.test.js :: 3. the cache and the shared fetch are per printer index",
+        "test/snapshotBehaviour.test.js :: 3. the cache lives cameraViewRefreshInterval seconds; 0 means the default 6",
+        "test/snapshotBehaviour.test.js :: 3. the cache's age counts from when the frame arrived, not from when it was asked for",
+        "test/snapshotBehaviour.test.js :: 3. with cameraViewRefreshInterval unset the cache lives 6 s: one fetch serves every request inside it, the next one after it fetches again",
+        "test/snapshotBehaviour.test.js :: 4. any non-empty fresh value bypasses the cache (\"0\" and \"false\" included); an empty one does not",
+        "test/snapshotBehaviour.test.js :: 4. fresh primes an empty cache too",
+        "test/snapshotBehaviour.test.js :: 4. fresh re-primes the cache: the next plain request inside the TTL gets the fresh frame without another fetch, and the TTL restarts",
+        "test/snapshotBehaviour.test.js :: 4. today: the cache holds whichever fetch FINISHED last — a slow plain fetch that ends after a fresh one replaces the fresh frame",
+        "test/snapshotBehaviour.test.js :: 5. the answer: Content-Type exactly the frame's, Cache-Control no-store, the body is the frame's Buffer — fetched, cached and fresh alike",
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 6. a failure for one printer leaves another printer's cache and fetches alone",
+        "test/snapshotBehaviour.test.js :: 6. a failure is not cached and leaves nothing in flight: the next request fetches again",
+        "test/snapshotBehaviour.test.js :: 7. a setting changed in place on the same configuration object takes effect at once too",
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once",
+        "test/snapshotBehaviour.test.js :: 7. the cache survives a reload",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (cached && Date.now() - cached.ts < ttlMs) return cached;",
+        "replace": "  if (cached && false) return cached;"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "    if (cached && Date.now() - cached.ts < ttlMs) return cached;",
+        "replace": "    if (cached && false) return cached;"
+      }
+    },
+    {
+      "name": "ttl-default-5",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. the cache lives cameraViewRefreshInterval seconds; 0 means the default 6",
+        "test/snapshotBehaviour.test.js :: 3. the cache's age counts from when the frame arrived, not from when it was asked for",
+        "test/snapshotBehaviour.test.js :: 3. with cameraViewRefreshInterval unset the cache lives 6 s: one fetch serves every request inside it, the next one after it fetches again",
+        "test/snapshotBehaviour.test.js :: 4. fresh re-primes the cache: the next plain request inside the TTL gets the fresh frame without another fetch, and the TTL restarts",
+        "test/snapshotBehaviour.test.js :: 4. today: the cache holds whichever fetch FINISHED last — a slow plain fetch that ends after a fresh one replaces the fresh frame",
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;",
+        "replace": "  const ttlMs = (CFG.cameraViewRefreshInterval || 5) * 1000;"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;",
+        "replace": "    const ttlMs = (getConfig().cameraViewRefreshInterval || 5) * 1000;"
+      }
+    },
+    {
+      "name": "cache-never-written",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. loading the code again starts with an empty cache (a restart)",
+        "test/snapshotBehaviour.test.js :: 3. requests arriving while a fetch is in flight share that ONE fetch and all get its frame",
+        "test/snapshotBehaviour.test.js :: 3. the cache and the shared fetch are per printer index",
+        "test/snapshotBehaviour.test.js :: 3. the cache lives cameraViewRefreshInterval seconds; 0 means the default 6",
+        "test/snapshotBehaviour.test.js :: 3. the cache's age counts from when the frame arrived, not from when it was asked for",
+        "test/snapshotBehaviour.test.js :: 3. with cameraViewRefreshInterval unset the cache lives 6 s: one fetch serves every request inside it, the next one after it fetches again",
+        "test/snapshotBehaviour.test.js :: 4. today: the cache holds whichever fetch FINISHED last — a slow plain fetch that ends after a fresh one replaces the fresh frame",
+        "test/snapshotBehaviour.test.js :: 5. the answer: Content-Type exactly the frame's, Cache-Control no-store, the body is the frame's Buffer — fetched, cached and fresh alike",
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 6. a failure for one printer leaves another printer's cache and fetches alone",
+        "test/snapshotBehaviour.test.js :: 6. a failure is not cached and leaves nothing in flight: the next request fetches again",
+        "test/snapshotBehaviour.test.js :: 7. a setting changed in place on the same configuration object takes effect at once too",
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once",
+        "test/snapshotBehaviour.test.js :: 7. the cache survives a reload",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "      snapshotCache.set(idx, entry);\n",
+        "replace": ""
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "        snapshotCache.set(idx, entry);\n",
+        "replace": ""
+      }
+    },
+    {
+      "name": "cache-not-per-printer",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. the cache and the shared fetch are per printer index",
+        "test/snapshotBehaviour.test.js :: 6. a failure for one printer leaves another printer's cache and fetches alone"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  const cached = snapshotCache.get(idx);",
+        "replace": "  const cached = snapshotCache.get(0);"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "    const cached = snapshotCache.get(idx);",
+        "replace": "    const cached = snapshotCache.get(0);"
+      }
+    },
+    {
+      "name": "cache-age-from-request",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. the cache's age counts from when the frame arrived, not from when it was asked for",
+        "test/snapshotBehaviour.test.js :: 4. today: the cache holds whichever fetch FINISHED last — a slow plain fetch that ends after a fresh one replaces the fresh frame"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "async function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;\n  const cached = snapshotCache.get(idx);\n  if (cached && Date.now() - cached.ts < ttlMs) return cached;\n  if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);\n  const pending = (async () => {\n    try {\n      const { contentType, buffer } = await getSnapshot(p);\n      const entry = { ts: Date.now(), contentType, buffer };",
+        "replace": "async function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;\n  const cached = snapshotCache.get(idx);\n  if (cached && Date.now() - cached.ts < ttlMs) return cached;\n  if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);\n  const asked = Date.now();\n  const pending = (async () => {\n    try {\n      const { contentType, buffer } = await getSnapshot(p);\n      const entry = { ts: asked, contentType, buffer };"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;\n    const cached = snapshotCache.get(idx);\n    if (cached && Date.now() - cached.ts < ttlMs) return cached;\n    if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);\n    const pending = (async () => {\n      try {\n        const { contentType, buffer } = await getSnapshot(p);\n        const entry = { ts: Date.now(), contentType, buffer };",
+        "replace": "  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;\n    const cached = snapshotCache.get(idx);\n    if (cached && Date.now() - cached.ts < ttlMs) return cached;\n    if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);\n    const asked = Date.now();\n    const pending = (async () => {\n      try {\n        const { contentType, buffer } = await getSnapshot(p);\n        const entry = { ts: asked, contentType, buffer };"
+      }
+    },
+    {
+      "name": "inflight-sharing-removed",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. requests arriving while a fetch is in flight share that ONE fetch and all get its frame",
+        "test/snapshotBehaviour.test.js :: 3. the cache and the shared fetch are per printer index",
+        "test/snapshotBehaviour.test.js :: 6. every request waiting on a fetch that fails gets the 502, from ONE fetch; the request after that fetches again",
+        "test/snapshotBehaviour.test.js :: 7. a fetch in flight survives a reload: a request after the reload joins it and gets its frame"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);\n",
+        "replace": ""
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "    if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);\n",
+        "replace": ""
+      }
+    },
+    {
+      "name": "inflight-kept-after-failure",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 6. a failure is not cached and leaves nothing in flight: the next request fetches again",
+        "test/snapshotBehaviour.test.js :: 6. every request waiting on a fetch that fails gets the 502, from ONE fetch; the request after that fetches again"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "      snapshotCache.set(idx, entry);\n      return entry;\n    } finally {\n      snapshotInflight.delete(idx);\n    }",
+        "replace": "      snapshotCache.set(idx, entry);\n      snapshotInflight.delete(idx);\n      return entry;\n    } finally {\n    }"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "        snapshotCache.set(idx, entry);\n        return entry;\n      } finally {\n        snapshotInflight.delete(idx);\n      }",
+        "replace": "        snapshotCache.set(idx, entry);\n        snapshotInflight.delete(idx);\n        return entry;\n      } finally {\n      }"
+      }
+    },
+    {
+      "name": "inflight-never-cleared",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. the cache lives cameraViewRefreshInterval seconds; 0 means the default 6",
+        "test/snapshotBehaviour.test.js :: 3. the cache's age counts from when the frame arrived, not from when it was asked for",
+        "test/snapshotBehaviour.test.js :: 3. with cameraViewRefreshInterval unset the cache lives 6 s: one fetch serves every request inside it, the next one after it fetches again",
+        "test/snapshotBehaviour.test.js :: 4. fresh re-primes the cache: the next plain request inside the TTL gets the fresh frame without another fetch, and the TTL restarts",
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 6. a failed plain fetch after the TTL does not serve the expired frame",
+        "test/snapshotBehaviour.test.js :: 6. a failure is not cached and leaves nothing in flight: the next request fetches again",
+        "test/snapshotBehaviour.test.js :: 6. every request waiting on a fetch that fails gets the 502, from ONE fetch; the request after that fetches again",
+        "test/snapshotBehaviour.test.js :: 7. a setting changed in place on the same configuration object takes effect at once too",
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    } finally {\n      snapshotInflight.delete(idx);\n    }",
+        "replace": "    } finally {\n    }"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "      } finally {\n        snapshotInflight.delete(idx);\n      }",
+        "replace": "      } finally {\n      }"
+      }
+    },
+    {
+      "name": "fresh-bypass-removed",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 2. today: the printer argument is read with parseInt(…, 10) — leading digits count, the rest is ignored",
+        "test/snapshotBehaviour.test.js :: 4. any non-empty fresh value bypasses the cache (\"0\" and \"false\" included); an empty one does not",
+        "test/snapshotBehaviour.test.js :: 4. fresh re-primes the cache: the next plain request inside the TTL gets the fresh frame without another fetch, and the TTL restarts",
+        "test/snapshotBehaviour.test.js :: 4. fresh=1 always fetches, even with a frame cached a moment ago",
+        "test/snapshotBehaviour.test.js :: 4. today: a fresh request never joins a fetch in flight, and a plain request never joins a fresh one — each makes its own",
+        "test/snapshotBehaviour.test.js :: 4. today: the cache holds whichever fetch FINISHED last — a slow plain fetch that ends after a fresh one replaces the fresh frame",
+        "test/snapshotBehaviour.test.js :: 5. the answer: Content-Type exactly the frame's, Cache-Control no-store, the body is the frame's Buffer — fetched, cached and fresh alike",
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    if (req.query.fresh) {",
+        "replace": "    if (false) {"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "      if (req.query.fresh) {",
+        "replace": "      if (false) {"
+      }
+    },
+    {
+      "name": "fresh-not-repriming",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 4. any non-empty fresh value bypasses the cache (\"0\" and \"false\" included); an empty one does not",
+        "test/snapshotBehaviour.test.js :: 4. fresh primes an empty cache too",
+        "test/snapshotBehaviour.test.js :: 4. fresh re-primes the cache: the next plain request inside the TTL gets the fresh frame without another fetch, and the TTL restarts"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "      snapshotCache.set(idx, { ts: Date.now(), contentType, buffer });\n",
+        "replace": ""
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "        snapshotCache.set(idx, { ts: Date.now(), contentType, buffer });\n",
+        "replace": ""
+      }
+    },
+    {
+      "name": "fresh-joins-throttle",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 4. today: a fresh request never joins a fetch in flight, and a plain request never joins a fresh one — each makes its own",
+        "test/snapshotBehaviour.test.js :: 4. today: the cache holds whichever fetch FINISHED last — a slow plain fetch that ends after a fresh one replaces the fresh frame",
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotCheck.test.js :: /api/snapshot sets the type only from a checked frame, so its 502 handler can still answer"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "      ({ contentType, buffer } = await getSnapshot(p));\n      snapshotCache.set(idx, { ts: Date.now(), contentType, buffer });",
+        "replace": "      snapshotCache.delete(idx);\n      ({ contentType, buffer } = await getSnapshotThrottled(p, idx));"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "        ({ contentType, buffer } = await getSnapshot(p));\n        snapshotCache.set(idx, { ts: Date.now(), contentType, buffer });",
+        "replace": "        snapshotCache.delete(idx);\n        ({ contentType, buffer } = await getSnapshotThrottled(p, idx));"
+      }
+    },
+    {
+      "name": "cache-control-dropped",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 3. requests arriving while a fetch is in flight share that ONE fetch and all get its frame",
+        "test/snapshotBehaviour.test.js :: 4. fresh=1 always fetches, even with a frame cached a moment ago",
+        "test/snapshotBehaviour.test.js :: 5. the answer: Content-Type exactly the frame's, Cache-Control no-store, the body is the frame's Buffer — fetched, cached and fresh alike",
+        "test/snapshotBehaviour.test.js :: 5. the type is passed on as getSnapshot gave it — the route does not change or default it"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    res.set(\"Cache-Control\", \"no-store\");\n",
+        "replace": ""
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "      res.set(\"Cache-Control\", \"no-store\");\n",
+        "replace": ""
+      }
+    },
+    {
+      "name": "content-type-fixed",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 5. the answer: Content-Type exactly the frame's, Cache-Control no-store, the body is the frame's Buffer — fetched, cached and fresh alike",
+        "test/snapshotBehaviour.test.js :: 5. the type is passed on as getSnapshot gave it — the route does not change or default it",
+        "test/snapshotCheck.test.js :: /api/snapshot sets the type only from a checked frame, so its 502 handler can still answer"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    res.set(\"Content-Type\", contentType);\n    res.set(\"Cache-Control\", \"no-store\");",
+        "replace": "    res.set(\"Content-Type\", \"image/jpeg\");\n    res.set(\"Cache-Control\", \"no-store\");"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "      res.set(\"Content-Type\", contentType);\n      res.set(\"Cache-Control\", \"no-store\");",
+        "replace": "      res.set(\"Content-Type\", \"image/jpeg\");\n      res.set(\"Cache-Control\", \"no-store\");"
+      }
+    },
+    {
+      "name": "failure-status-500",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 6. a failed plain fetch after the TTL does not serve the expired frame",
+        "test/snapshotBehaviour.test.js :: 6. a failure for one printer leaves another printer's cache and fetches alone",
+        "test/snapshotBehaviour.test.js :: 6. a failure is not cached and leaves nothing in flight: the next request fetches again",
+        "test/snapshotBehaviour.test.js :: 6. every request waiting on a fetch that fails gets the 502, from ONE fetch; the request after that fetches again",
+        "test/snapshotBehaviour.test.js :: 6. getSnapshot failing: 502 No camera frame: <message>, no headers, no body — plain and fresh"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    res.status(502).json({ error: \"No camera frame: \" + e.message });",
+        "replace": "    res.status(500).json({ error: \"No camera frame: \" + e.message });"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "      res.status(502).json({ error: \"No camera frame: \" + e.message });",
+        "replace": "      res.status(500).json({ error: \"No camera frame: \" + e.message });"
+      }
+    },
+    {
+      "name": "failure-message-dropped",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 6. a failed plain fetch after the TTL does not serve the expired frame",
+        "test/snapshotBehaviour.test.js :: 6. a failure is not cached and leaves nothing in flight: the next request fetches again",
+        "test/snapshotBehaviour.test.js :: 6. every request waiting on a fetch that fails gets the 502, from ONE fetch; the request after that fetches again",
+        "test/snapshotBehaviour.test.js :: 6. getSnapshot failing: 502 No camera frame: <message>, no headers, no body — plain and fresh"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    res.status(502).json({ error: \"No camera frame: \" + e.message });",
+        "replace": "    res.status(502).json({ error: \"No camera frame\" });"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "      res.status(502).json({ error: \"No camera frame: \" + e.message });",
+        "replace": "      res.status(502).json({ error: \"No camera frame\" });"
+      }
+    },
+    {
+      "name": "failure-serves-stale",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 6. a failed fresh fetch does not replace or remove the cached frame",
+        "test/snapshotBehaviour.test.js :: 6. a failed plain fetch after the TTL does not serve the expired frame"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  } catch (e) {\n    res.status(502).json({ error: \"No camera frame: \" + e.message });",
+        "replace": "  } catch (e) {\n    const stale = snapshotCache.get(idx);\n    if (stale) return res.send(stale.buffer);\n    res.status(502).json({ error: \"No camera frame: \" + e.message });"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "    } catch (e) {\n      res.status(502).json({ error: \"No camera frame: \" + e.message });",
+        "replace": "    } catch (e) {\n      const stale = snapshotCache.get(idx);\n      if (stale) return res.send(stale.buffer);\n      res.status(502).json({ error: \"No camera frame: \" + e.message });"
+      }
+    },
+    {
+      "name": "config-captured-once",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "async function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;",
+        "replace": "const CFG_AT_LOAD = CFG;\nasync function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG_AT_LOAD.cameraViewRefreshInterval || 6) * 1000;"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;",
+        "replace": "  const CFG_AT_LOAD = getConfig();\n  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (CFG_AT_LOAD.cameraViewRefreshInterval || 6) * 1000;"
+      }
+    },
+    {
+      "name": "ttl-computed-once",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 7. a setting changed in place on the same configuration object takes effect at once too",
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "async function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;",
+        "replace": "const TTL_AT_LOAD = (CFG.cameraViewRefreshInterval || 6) * 1000;\nasync function getSnapshotThrottled(p, idx) {\n  const ttlMs = TTL_AT_LOAD;"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;",
+        "replace": "  const TTL_AT_LOAD = (getConfig().cameraViewRefreshInterval || 6) * 1000;\n  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = TTL_AT_LOAD;"
+      }
+    },
+    {
+      "name": "printers-captured-once",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 7. the printer list is read on every request: after a reload REPLACES the array, the new list is the one used",
+        "test/snapshotBehaviour.test.js :: 7. today: the cache is keyed by INDEX, not by printer — after a reload puts another printer at that index, its requests get the previous printer's frame until the TTL passes"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "app.get(\"/api/snapshot\", requireAuth, async (req, res) => {\n  const idx = parseInt(req.query.printer, 10);\n  const p   = PRINTERS[idx];",
+        "replace": "const PRINTERS_AT_LOAD = PRINTERS;\napp.get(\"/api/snapshot\", requireAuth, async (req, res) => {\n  const idx = parseInt(req.query.printer, 10);\n  const p   = PRINTERS_AT_LOAD[idx];"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "  app.get(\"/api/snapshot\", requireAuth, async (req, res) => {\n    const idx = parseInt(req.query.printer, 10);\n    const p   = getPrinters()[idx];",
+        "replace": "  const PRINTERS_AT_LOAD = getPrinters();\n  app.get(\"/api/snapshot\", requireAuth, async (req, res) => {\n    const idx = parseInt(req.query.printer, 10);\n    const p   = PRINTERS_AT_LOAD[idx];"
+      }
+    },
+    {
+      "name": "state-reset-on-reload",
+      "detectedBy": [
+        "test/snapshotBehaviour.test.js :: 4. fresh primes an empty cache too",
+        "test/snapshotBehaviour.test.js :: 7. a fetch in flight survives a reload: a request after the reload joins it and gets its frame",
+        "test/snapshotBehaviour.test.js :: 7. the TTL is read from the CURRENT configuration on every request: a reload that replaces the configuration object takes effect at once",
+        "test/snapshotBehaviour.test.js :: 7. the cache survives a reload"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "async function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;\n  const cached = snapshotCache.get(idx);",
+        "replace": "async function getSnapshotThrottled(p, idx) {\n  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;\n  if (snapshotCache.__cfg !== CFG) { snapshotCache.clear(); snapshotInflight.clear(); snapshotCache.__cfg = CFG; }\n  const cached = snapshotCache.get(idx);"
+      },
+      "head": {
+        "file": "routes/snapshot.js",
+        "find": "  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;\n    const cached = snapshotCache.get(idx);",
+        "replace": "  async function getSnapshotThrottled(p, idx) {\n    const ttlMs = (getConfig().cameraViewRefreshInterval || 6) * 1000;\n    if (snapshotCache.__cfg !== getConfig()) { snapshotCache.clear(); snapshotInflight.clear(); snapshotCache.__cfg = getConfig(); }\n    const cached = snapshotCache.get(idx);"
+      }
+    }
+  ],
+  "contractSets": [
+    "snapshot",
+    "health",
+    "smoke"
+  ],
+  "contractNotes": "snapshot.json: 26 requests, each with a declared status, plus one reload and one restart. LIMITATION: the harness fixture's three printers are klipper-moonraker, which has no getCameraSnapshot, so only 401 / 400 / 502 are reachable over real HTTP; the 200 answer, its headers, the cache, the shared in-flight fetch and fresh's re-priming are pinned in-process only (test/snapshotBehaviour.test.js). health.json and smoke.json unchanged. Nothing new is declared volatile.",
+  "packaging": "Dockerfile already has `COPY routes ./routes` (added for Health); pkg follows the require graph (no pkg.scripts entry: not a worker); test/docker.test.js walks server.js's require graph and will see routes/snapshot.js under the existing COPY. No package.json or Dockerfile change. Policy rule 8: real Docker + pkg builds (V12) remain mandatory before deployment, each download/build owner-approved.",
+  "reconciliation": {
+    "lines": {
+      "sourceLines": 52,
+      "firstLine": 4293,
+      "lastLine": 4344,
+      "serverLines": {
+        "before": 7512,
+        "after": 7467
+      }
+    },
+    "rewriteOccurrences": {
+      "CFG": 1,
+      "PRINTERS": 1
+    },
+    "note": "line numbers at the base. serverLines counts a trailing empty element (7,511 lines of text before, 7,466 after: 52 lines out, 7 lines of comment + require + registration in). rewriteOccurrences counts code only: CFG once in getSnapshotThrottled (the TTL), PRINTERS once in the route; the moved comment block's \"CFG.cameraViewRefreshInterval\" is a comment and stays as written."
+  },
+  "verifiedBaseline": {
+    "commit": "a05e80df5425d7bcd025c8f9dd311002ae84c203",
+    "what": "Baseline commit: application code identical to e5cbe42 (the Discover extraction); adds the pins (34), their loader and the snapshot contract set. Baseline evidence gathered by the Executor on this commit: pins 34/34; every declared mutation detected on base; every declared mutation detected by the same pins on the transiently applied extraction; snapshot and snapshot+health+smoke contract runs twice each with no errors and identical results, and one run of the transiently applied extraction identical to both (container runs made with a harness image derived offline from an existing local one, because the image for a context that includes requests/snapshot.json had not been built — the verifier builds its own)."
+  },
+  "extractionParent": "Two different commits, not to be confused. (1) Verification baseline: the baseline commit named in `base` — the application and test files every result is measured against. (2) The extraction commit's immediate parent: the tooling-only commit that adds this manifest and the codemod. That commit changes nothing outside tools/refactor/, so its application and test files are identical to the verification baseline; the verifier's --base for re-runs may be either.",
+  "rollback": {
+    "beforeCommit": "the extraction is uncommitted: `git checkout -- server.js test/snapshotCheck.test.js test/connectors/creality-webrtc-camera.test.js test/helpers/snapshotCode.js && rm routes/snapshot.js` restores the application and tests exactly and leaves the tooling preparation in place",
+    "afterCommit": "`git revert <extraction commit>` (keeps history), or `git reset --keep <the extraction commit's immediate parent>` = the tooling-only commit. Both keep the tooling (manifest, codemod, baseline pins and contract set).",
+    "notThis": "`git reset --keep e5cbe42` would also drop the baseline and tooling commits — use it only if the preparation itself is to be withdrawn.",
+    "never": "production main is not touched by any of this; it changes only through a separate release decision"
+  },
+  "knownToolingLimitations": [
+    "the 200 answer cannot be reached in the container harness (no fixture printer has a camera): the frame, Content-Type, Cache-Control: no-store, the cache, the shared in-flight fetch and fresh's re-priming are pinned in-process only, against a fake res — what Express itself adds to a Buffer answer (Content-Length, ETag) is not pinned anywhere",
+    "the pins drive the route with fakes for app, requireAuth, printerVisibleTo, getSnapshot and the clock; getSnapshot and checkSnapshot do not move and keep their own tests (test/snapshotCheck.test.js)",
+    "concurrency is pinned in-process only (the harness client sends one request at a time)",
+    "public/app.js has two comments that say \"see getSnapshotThrottled() in server.js\" (lines 1399 and 14547 at the base); public/ is outside what a refactor may change, so they will name the old file until a separate change",
+    "compareRuns compares logs, files written and audit rows between base1 and head only, and consults base2 for printer requests only when base1 and head differ (recorded 2026-11-16 for Discover; unchanged)"
+  ]
+}

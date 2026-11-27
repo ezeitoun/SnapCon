@@ -1,0 +1,16 @@
+{
+  "boundary": "selftest",
+  "comment": "Validation of scripts/verify-refactor.js against deliberately broken scratch heads (tools/refactor/selftest). Not a real boundary: nothing is moved, so V3 has nothing to compare.",
+  "allowedFiles": ["server.js", "test/healthBehaviour.test.js"],
+  "newFiles": [],
+  "moved": [],
+  "rewrites": [],
+  "pinningTests": ["test/healthBehaviour.test.js", "test/healthRoute.test.js", "test/health-maintenance.test.js"],
+  "declaredHarness": {},
+  "mutations": [
+    { "name": "dwell-20s", "base": { "file": "server.js", "find": "const HEATER_DWELL_MS = 30000;", "replace": "const HEATER_DWELL_MS = 20000;" } },
+    { "name": "fan-first-observation", "base": { "file": "server.js", "find": "if (fanMismatchSeen.get(key)) {", "replace": "if (true) {" } },
+    { "name": "gcode-list-left-in-answer", "base": { "file": "server.js", "find": "  } finally {\n    delete gcodes.fileNames;\n  }", "replace": "  } finally {\n  }" } }
+  ],
+  "contractSets": ["health", "smoke"]
+}

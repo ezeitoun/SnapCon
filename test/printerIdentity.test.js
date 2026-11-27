@@ -1,7 +1,7 @@
 // test/printerIdentity.test.js — which printer a file was sliced for, and
 // whether it suits the printer it is being sent to.
 //
-// Every file case below is copied from a real file in the owner's library
+// Every file case below is copied from a real file in a real library
 // (config-block values as the slicer wrote them), so the table in
 // public/printer-identity.js is held to evidence, not to what a slicer
 // "should" write.
@@ -97,7 +97,7 @@ test("the K1 pattern does not claim a K1C or K1 Max", () => {
 });
 
 test("the Ender-3 V3 KE is its own family, and is not the V3 Plus", () => {
-  // The owner's real file ([CP] TinyTREX).
+  // A real file ([CP] TinyTREX).
   const id = PI.identifyFile({ printerModel: "Creality Ender-3 V3 KE", printerSettingsId: "PixelPrints - V3 KE (0.4)",
     printCompatiblePrinters: '"Creality Ender-3 V3 KE 0.2 nozzle";"Creality Ender-3 V3 KE 0.4 nozzle"' });
   assert.equal(id.family, "creality-ender3-v3-ke");

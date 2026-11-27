@@ -1,0 +1,5773 @@
+{
+ "capturedAt": "2026-10-11",
+ "label": "printing",
+ "firmware": "1.6.0",
+ "klipperVersion": "1.6.0.267_20260815150420",
+ "moonrakerVersion": "1.6.0",
+ "printerInfo": {
+  "state": "ready",
+  "state_message": "Printer is ready",
+  "hostname": "lava",
+  "klipper_path": "/home/lava/klipper",
+  "python_path": "/usr/bin/python3",
+  "process_id": 1245,
+  "user_id": 1000,
+  "group_id": 1000,
+  "log_file": "/oem/klippylogs/klippy.log",
+  "config_file": "/home/lava/printer_data/config/printer.cfg",
+  "software_version": "1.6.0.267_20260815150420",
+  "cpu_info": "4 core ?"
+ },
+ "serverInfo": {
+  "klippy_connected": true,
+  "klippy_state": "ready",
+  "components": [
+   "secrets",
+   "template",
+   "klippy_connection",
+   "jsonrpc",
+   "internal_transport",
+   "application",
+   "websockets",
+   "database",
+   "dbus_manager",
+   "file_manager",
+   "authorization",
+   "klippy_apis",
+   "shell_command",
+   "machine",
+   "data_store",
+   "proc_stats",
+   "job_state",
+   "job_queue",
+   "history",
+   "http_client",
+   "httpx_client",
+   "announcements",
+   "webcam",
+   "extensions",
+   "client_manager",
+   "exception_manager",
+   "mqtt",
+   "snapmakercloud",
+   "repeater",
+   "octoprint_compat",
+   "zeroconf"
+  ],
+  "failed_components": [],
+  "registered_directories": [
+   "config",
+   "logs",
+   "gcodes",
+   "camera"
+  ],
+  "warnings": [],
+  "websocket_count": 3,
+  "moonraker_version": "1.6.0",
+  "missing_klippy_requirements": [],
+  "api_version": [
+   1,
+   4,
+   0
+  ],
+  "api_version_string": "1.4.0"
+ },
+ "systemInfo": {
+  "system_info": {
+   "python": {
+    "version": [
+     3,
+     11,
+     8,
+     "final",
+     0
+    ],
+    "version_string": "3.11.8 (main, Aug 15 2026, 14:41:52) [GCC 12.4.0]"
+   },
+   "product_info": {
+    "machine_type": "Snapmaker U1",
+    "nozzle_diameter": [
+     0.4,
+     0.4,
+     0.4,
+     0.4
+    ],
+    "serial_number": "VIRTUALU1000000000000",
+    "device_name": "Virtual U1",
+    "firmware_version": "1.6.0",
+    "software_version": "1.6.0"
+   },
+   "cpu_info": {
+    "cpu_count": 4,
+    "bits": "64bit",
+    "processor": "aarch64",
+    "cpu_desc": "",
+    "serial_number": "0000000000000000",
+    "hardware_desc": "",
+    "model": "",
+    "total_memory": 984740,
+    "memory_units": "kB"
+   },
+   "sd_info": {
+    "manufacturer_id": "32",
+    "manufacturer": "Unknown",
+    "oem_id": "0101",
+    "product_name": "MMC32",
+    "product_revision": "4.7",
+    "serial_number": "VIRTUALU1000000000000",
+    "manufacturer_date": "12/2217",
+    "capacity": "Unknown",
+    "total_bytes": 0
+   },
+   "distribution": {
+    "name": "Buildroot 2024.02",
+    "id": "buildroot",
+    "version": "2024.02",
+    "version_parts": {
+     "major": "2024",
+     "minor": "02",
+     "build_number": ""
+    },
+    "like": "buildroot",
+    "codename": "",
+    "release_info": {},
+    "kernel_version": "6.1.99"
+   },
+   "virtualization": {
+    "virt_type": "unknown",
+    "virt_identifier": "unknown"
+   },
+   "network": {
+    "wlan0": {
+     "mac_address": "02:00:00:00:00:01",
+     "ip_addresses": [
+      {
+       "family": "ipv4",
+       "address": "127.0.0.1",
+       "is_link_local": false
+      },
+      {
+       "family": "ipv6",
+       "address": "::1",
+       "is_link_local": true
+      }
+     ]
+    }
+   },
+   "canbus": {},
+   "provider": "none",
+   "available_services": [],
+   "service_state": {},
+   "instance_ids": {
+    "moonraker": "moonraker",
+    "klipper": "klipper"
+   }
+  }
+ },
+ "filesRoots": [
+  {
+   "name": "config",
+   "path": "/oem/printer_data/config",
+   "permissions": "rw"
+  },
+  {
+   "name": "logs",
+   "path": "/userdata/logs",
+   "permissions": "r"
+  },
+  {
+   "name": "gcodes",
+   "path": "/userdata/gcodes",
+   "permissions": "rw"
+  },
+  {
+   "name": "camera",
+   "path": "/oem/printer_data/camera",
+   "permissions": "r"
+  }
+ ],
+ "webcams": {
+  "webcams": []
+ },
+ "objectsList": [
+  "gcode",
+  "webhooks",
+  "exception_manager",
+  "configfile",
+  "mcu",
+  "mcu e0",
+  "mcu e1",
+  "mcu e2",
+  "mcu e3",
+  "gcode_move",
+  "print_stats",
+  "gcode_macro _PL_SAVE_VARIABLE",
+  "virtual_sdcard",
+  "pause_resume",
+  "display_status",
+  "gcode_macro M600",
+  "gcode_macro T4",
+  "gcode_macro T5",
+  "gcode_macro T6",
+  "gcode_macro T7",
+  "gcode_macro T8",
+  "gcode_macro T9",
+  "gcode_macro T10",
+  "gcode_macro T11",
+  "gcode_macro T12",
+  "gcode_macro T13",
+  "gcode_macro T14",
+  "gcode_macro T15",
+  "gcode_macro T16",
+  "gcode_macro T17",
+  "gcode_macro T18",
+  "gcode_macro T19",
+  "gcode_macro T20",
+  "gcode_macro T21",
+  "gcode_macro T22",
+  "gcode_macro T23",
+  "gcode_macro T24",
+  "gcode_macro T25",
+  "gcode_macro T26",
+  "gcode_macro T27",
+  "gcode_macro T28",
+  "gcode_macro T29",
+  "gcode_macro T30",
+  "gcode_macro T31",
+  "gcode_macro MOVE_TO_DISCARD_FILAMENT_POSITION",
+  "gcode_macro SHAPER_CALIBRATE",
+  "gcode_macro PRINT_START",
+  "gcode_macro PRINT_PRESTART_CHECK",
+  "gcode_macro PRINT_END",
+  "gcode_macro CANCEL_PRINT",
+  "gcode_macro INNER_PAUSE",
+  "gcode_macro INNER_RESUME",
+  "gcode_macro SET_PAUSE_NEXT_LAYER",
+  "gcode_macro SET_PAUSE_AT_LAYER",
+  "gcode_macro SET_PRINT_STATS_INFO",
+  "gcode_macro _CLIENT_EXTRUDE",
+  "gcode_macro _CLIENT_RETRACT",
+  "gcode_macro INNER_FILAMENT_UNLOAD",
+  "gcode_macro AUTO_FEEDING",
+  "gcode_macro AUTO_FEEDING_PREHEAT",
+  "gcode_macro MANUAL_FEEDING",
+  "gcode_macro FEEDING_RUNOUT_EVENT_HANDLE",
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE",
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE_WITH_DISCARD",
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_1",
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_2",
+  "gcode_macro SM_PRINT_CHECK_SWITCH_EXTRUDER",
+  "gcode_macro SM_PRINT_EXTRUDER_PREHEAT",
+  "gcode_macro SM_PRINT_AUTO_FEED",
+  "gcode_macro SM_PRINT_END_AUTO_UNLOAD_FILAMENT",
+  "gcode_macro SM_PRINT_START_LINE",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_0",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_1",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_2",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_3",
+  "gcode_macro INNER_ROUGHLY_CLEAN_NOZZLE_BASE_DISCARD",
+  "gcode_macro INNER_DISCARD_FILAMENT_BASE_DISCARD",
+  "gcode_macro INNER_CUTOFF_BASE_DISCARD",
+  "gcode_macro INNER_FLUSH_FILAMENT",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_PREPARE",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_EXTRUDE",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FLUSH",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FINISH",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_CANCEL",
+  "gcode_macro INNER_FLOW_MEASURE_END_BASE_DISCARD",
+  "gcode_macro INNER_FLOW_CALIB_END_BASE_DISCARD",
+  "gcode_macro INNER_PREEXTRUDE_FILAMENT",
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_1",
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_2",
+  "gcode_macro CONTROL_EXTRUDE_ACTION",
+  "gcode_macro CONTROL_RETRACT_ACTION",
+  "gcode_macro FEED_HANG_NEUTRAL",
+  "gcode_macro AUTO_FEEDING_BATCH",
+  "exclude_object",
+  "print_task_config",
+  "mqtt",
+  "timelapse",
+  "filament_detect",
+  "resonance_tester",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PRESTART",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHOMING",
+  "gcode_macro _DETECT_PLATE",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHEAT",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T3",
+  "gcode_macro EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_ALL",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_EXIT",
+  "gcode_macro XYZ_OFFSET_CALIBRATE",
+  "gcode_macro XYZ_OFFSET_CALIBRATE_ALL",
+  "heaters",
+  "stepper_enable",
+  "tmc2240 stepper_x",
+  "tmc2240 stepper_y",
+  "tmc2209 stepper_z",
+  "heater_bed",
+  "temperature_sensor cavity",
+  "fan_generic cavity_fan",
+  "led cavity_led",
+  "purifier",
+  "bed_mesh",
+  "homing_precise_corexy",
+  "heater_fan power_fan",
+  "adc_current_sensor I_AD",
+  "power_loss_check",
+  "auto_screws_tilt_adjust",
+  "gcode_macro AUTO_BED_MESH_CALIBRATE",
+  "gcode_macro SHAKE_Z",
+  "gcode_macro SENSORLESS_HOME_X",
+  "gcode_macro SENSORLESS_HOME_Y",
+  "gcode_macro SENSORLESS_HOME_Z",
+  "gcode_macro _HOMING_PRECISE_COREXY_ADVANCED",
+  "gcode_macro _CLIENT_VARIABLE",
+  "tmc2209 extruder",
+  "fan",
+  "heater_fan e0_nozzle_fan",
+  "output_pin e0_heat_sw",
+  "filament_motion_sensor e0_filament",
+  "filament_entangle_detect e0_filament",
+  "extruder_offset_calibration",
+  "probe",
+  "power_loss_check e0",
+  "tmc2209 extruder1",
+  "fan_generic e1_fan",
+  "heater_fan e1_nozzle_fan",
+  "output_pin e1_heat_sw",
+  "filament_motion_sensor e1_filament",
+  "filament_entangle_detect e1_filament",
+  "power_loss_check e1",
+  "tmc2209 extruder2",
+  "fan_generic e2_fan",
+  "heater_fan e2_nozzle_fan",
+  "output_pin e2_heat_sw",
+  "filament_motion_sensor e2_filament",
+  "filament_entangle_detect e2_filament",
+  "power_loss_check e2",
+  "tmc2209 extruder3",
+  "fan_generic e3_fan",
+  "heater_fan e3_nozzle_fan",
+  "output_pin e3_heat_sw",
+  "filament_motion_sensor e3_filament",
+  "filament_entangle_detect e3_filament",
+  "power_loss_check e3",
+  "filament_feed left",
+  "filament_feed right",
+  "gcode_macro _FILAMENT_FEED_VARIABLE",
+  "idle_timeout",
+  "filament_parameters",
+  "defect_detection",
+  "motion_report",
+  "query_endstops",
+  "system_stats",
+  "manual_probe",
+  "machine_state_manager",
+  "toolhead",
+  "extruder",
+  "extruder1",
+  "extruder2",
+  "extruder3"
+ ],
+ "status": {
+  "webhooks": {
+   "state": "ready",
+   "state_message": "Printer is ready"
+  },
+  "exception_manager": {
+   "exceptions": []
+  },
+  "mcu": {
+   "mcu_version": "lava_1.6.0_20260806-12-g92e68b5d",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "BUS_PINS_spi3a": "PC11,PC12,PC10",
+    "BUS_PINS_spi4": "PE13,PE14,PE11",
+    "CANBUS_BRIDGE": 1,
+    "CLOCK_FREQ": 240000000,
+    "INITIAL_PINS": "!PE9,PB2,PC8,PC9,!PA10,!PA15,!PD4,!PD5,!PD6,!PD7,!PE15",
+    "MCU": "stm32f103xe",
+    "PWM_MAX": 255,
+    "RECEIVE_WINDOW": 192,
+    "RESERVE_PINS_CAN": "PB5,PB6",
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "RESERVE_PINS_serial": "PB9,PB8",
+    "SERIAL_BAUD": 921600,
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.02,
+    "mcu_task_avg": 0.00001,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 2,
+    "err_dest": 0,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 3329403198,
+    "bytes_read": 1857675260,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 59848779,
+    "receive_seq": 59848779,
+    "retransmit_seq": 17,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 12,
+    "upcoming_bytes": 3464,
+    "freq": 240000031
+   }
+  },
+  "mcu e0": {
+   "mcu_version": "lava_1.6.0_20260806-12-g92e68b5d",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.01,
+    "mcu_task_avg": 0.000011,
+    "mcu_task_stddev": 0.00001,
+    "err_len": 2,
+    "err_dest": 0,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 382615992,
+    "bytes_read": 334542998,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 7914123,
+    "receive_seq": 7914123,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 144000187,
+    "adj": 144000011
+   }
+  },
+  "mcu e1": {
+   "mcu_version": "lava_1.6.0_20260806-12-g92e68b5d",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.003,
+    "mcu_task_avg": 0.000007,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 3,
+    "err_dest": 1,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 411462613,
+    "bytes_read": 336669016,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 8367475,
+    "receive_seq": 8367475,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 144000010,
+    "adj": 144000243
+   }
+  },
+  "mcu e2": {
+   "mcu_version": "lava_1.6.0_20260806-12-g92e68b5d",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.003,
+    "mcu_task_avg": 0.000007,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 2,
+    "err_dest": 1,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 93958767,
+    "bytes_read": 303940109,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 2504636,
+    "receive_seq": 2504636,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 144001076,
+    "adj": 144001169
+   }
+  },
+  "mcu e3": {
+   "mcu_version": "lava_1.6.0_20260806-12-g92e68b5d",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.003,
+    "mcu_task_avg": 0.000007,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 2,
+    "err_dest": 0,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 43153493,
+    "bytes_read": 299972836,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 1623678,
+    "receive_seq": 1623678,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 144000647,
+    "adj": 144000754
+   }
+  },
+  "gcode_move": {
+   "speed_factor": 1,
+   "speed": 30000,
+   "extrude_factor": 1,
+   "absolute_coordinates": true,
+   "absolute_extrude": false,
+   "homing_origin": [
+    0.2893805492682322,
+    0.05007213103419872,
+    0,
+    0
+   ],
+   "position": [
+    52.29938054926823,
+    71.8000721310342,
+    21.65,
+    290009.7161926468
+   ],
+   "gcode_position": [
+    52.01,
+    71.75,
+    21.65,
+    16.61360000120476
+   ]
+  },
+  "print_stats": {
+   "filename": "Virtual print.gcode",
+   "total_duration": 40931.316380768025,
+   "print_duration": 40306.92069917801,
+   "filament_used": 68886.52769960975,
+   "state": "printing",
+   "exception": {},
+   "message": "",
+   "info": {
+    "total_layer": 227,
+    "current_layer": 105
+   }
+  },
+  "gcode_macro _PL_SAVE_VARIABLE": {
+   "start_save_line": 5,
+   "z_compensation_value": 0,
+   "save_line_interval": 1000,
+   "z_hop_temp": 140,
+   "pre_extrude_len": 20,
+   "speed_pre_extrude": 10,
+   "retract": 1,
+   "unretract": 1.1,
+   "speed_retract": 30,
+   "speed_unretract": 10,
+   "speed_resume_z": 30,
+   "speed_move": 350,
+   "move_extrude_macro": "MOVE_TO_DISCARD_FILAMENT_POSITION",
+   "after_extrude_macro": "ROUGHLY_CLEAN_NOZZLE"
+  },
+  "virtual_sdcard": {
+   "file_path": "/home/lava/printer_data/gcodes/Virtual print.gcode",
+   "progress": 0.8531400911802545,
+   "is_active": true,
+   "file_position": 81548288,
+   "file_size": 95586046,
+   "pl_env_valid": false
+  },
+  "pause_resume": {
+   "is_paused": false
+  },
+  "display_status": {
+   "progress": 0.82,
+   "message": null
+  },
+  "gcode_macro M600": {},
+  "gcode_macro T4": {},
+  "gcode_macro T5": {},
+  "gcode_macro T6": {},
+  "gcode_macro T7": {},
+  "gcode_macro T8": {},
+  "gcode_macro T9": {},
+  "gcode_macro T10": {},
+  "gcode_macro T11": {},
+  "gcode_macro T12": {},
+  "gcode_macro T13": {},
+  "gcode_macro T14": {},
+  "gcode_macro T15": {},
+  "gcode_macro T16": {},
+  "gcode_macro T17": {},
+  "gcode_macro T18": {},
+  "gcode_macro T19": {},
+  "gcode_macro T20": {},
+  "gcode_macro T21": {},
+  "gcode_macro T22": {},
+  "gcode_macro T23": {},
+  "gcode_macro T24": {},
+  "gcode_macro T25": {},
+  "gcode_macro T26": {},
+  "gcode_macro T27": {},
+  "gcode_macro T28": {},
+  "gcode_macro T29": {},
+  "gcode_macro T30": {},
+  "gcode_macro T31": {},
+  "gcode_macro MOVE_TO_DISCARD_FILAMENT_POSITION": {},
+  "gcode_macro SHAPER_CALIBRATE": {},
+  "gcode_macro PRINT_START": {},
+  "gcode_macro PRINT_PRESTART_CHECK": {},
+  "gcode_macro PRINT_END": {},
+  "gcode_macro CANCEL_PRINT": {},
+  "gcode_macro INNER_PAUSE": {
+   "pause_temp": 40
+  },
+  "gcode_macro INNER_RESUME": {
+   "last_extruder_index": 0,
+   "last_extruder_temp": 0,
+   "extruder0_temp": 0,
+   "extruder1_temp": 0,
+   "extruder2_temp": 0,
+   "extruder3_temp": 0,
+   "is_pause_on_err": false,
+   "is_runout": 0,
+   "flow_calibrating": false,
+   "flow_calibrate_temp": 220,
+   "pos_e_compensation": false
+  },
+  "gcode_macro SET_PAUSE_NEXT_LAYER": {},
+  "gcode_macro SET_PAUSE_AT_LAYER": {},
+  "gcode_macro SET_PRINT_STATS_INFO": {
+   "pause_next_layer": {
+    "enable": false,
+    "call": "PAUSE"
+   },
+   "pause_at_layer": {
+    "enable": false,
+    "layer": 0,
+    "call": "PAUSE"
+   }
+  },
+  "gcode_macro _CLIENT_EXTRUDE": {},
+  "gcode_macro _CLIENT_RETRACT": {},
+  "gcode_macro INNER_FILAMENT_UNLOAD": {},
+  "gcode_macro AUTO_FEEDING": {},
+  "gcode_macro AUTO_FEEDING_PREHEAT": {},
+  "gcode_macro MANUAL_FEEDING": {},
+  "gcode_macro FEEDING_RUNOUT_EVENT_HANDLE": {},
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE": {},
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE_WITH_DISCARD": {},
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_1": {},
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_2": {},
+  "gcode_macro SM_PRINT_CHECK_SWITCH_EXTRUDER": {},
+  "gcode_macro SM_PRINT_EXTRUDER_PREHEAT": {},
+  "gcode_macro SM_PRINT_AUTO_FEED": {},
+  "gcode_macro SM_PRINT_END_AUTO_UNLOAD_FILAMENT": {},
+  "gcode_macro SM_PRINT_START_LINE": {},
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_0": {
+   "has_finished": false
+  },
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_1": {
+   "has_finished": false
+  },
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_2": {
+   "has_finished": false
+  },
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_3": {
+   "has_finished": false
+  },
+  "gcode_macro INNER_ROUGHLY_CLEAN_NOZZLE_BASE_DISCARD": {},
+  "gcode_macro INNER_DISCARD_FILAMENT_BASE_DISCARD": {
+   "random_pos": 126
+  },
+  "gcode_macro INNER_CUTOFF_BASE_DISCARD": {},
+  "gcode_macro INNER_FLUSH_FILAMENT": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_PREPARE": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_EXTRUDE": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FLUSH": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FINISH": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_CANCEL": {},
+  "gcode_macro INNER_FLOW_MEASURE_END_BASE_DISCARD": {},
+  "gcode_macro INNER_FLOW_CALIB_END_BASE_DISCARD": {},
+  "gcode_macro INNER_PREEXTRUDE_FILAMENT": {},
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_1": {},
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_2": {},
+  "gcode_macro CONTROL_EXTRUDE_ACTION": {},
+  "gcode_macro CONTROL_RETRACT_ACTION": {},
+  "gcode_macro FEED_HANG_NEUTRAL": {},
+  "gcode_macro AUTO_FEEDING_BATCH": {
+   "extruder0_temp": 0,
+   "extruder1_temp": 0,
+   "extruder2_temp": 0,
+   "extruder3_temp": 0,
+   "doing": false
+  },
+  "exclude_object": {
+   "objects": [
+    {
+     "name": "OBJECT_1_ID_1_COPY_0",
+     "center": [
+      94.5503,
+      164.219
+     ],
+     "polygon": [
+      [
+       76.1,
+       156.6
+      ],
+      [
+       77.2,
+       152
+      ],
+      [
+       79.9,
+       149
+      ],
+      [
+       82.2,
+       147.9
+      ],
+      [
+       102.1,
+       144.3
+      ],
+      [
+       106.5,
+       144.5
+      ],
+      [
+       112.1,
+       146.7
+      ],
+      [
+       113,
+       153.8
+      ],
+      [
+       98.8,
+       180.7
+      ],
+      [
+       92.3,
+       184.1
+      ],
+      [
+       87.6,
+       180.7
+      ],
+      [
+       84.8,
+       177.2
+      ],
+      [
+       76.1,
+       156.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_2_ID_2_COPY_0",
+     "center": [
+      113.89,
+      132.946
+     ],
+     "polygon": [
+      [
+       91,
+       127.4
+      ],
+      [
+       99.2,
+       115.3
+      ],
+      [
+       130.5,
+       118.5
+      ],
+      [
+       132.2,
+       119.3
+      ],
+      [
+       134.4,
+       122.1
+      ],
+      [
+       136.8,
+       132
+      ],
+      [
+       132.9,
+       146.8
+      ],
+      [
+       129.7,
+       150.1
+      ],
+      [
+       124.4,
+       150.6
+      ],
+      [
+       99.7,
+       140
+      ],
+      [
+       91.2,
+       128.7
+      ],
+      [
+       91,
+       127.4
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_3_ID_3_COPY_0",
+     "center": [
+      164.248,
+      128.957
+     ],
+     "polygon": [
+      [
+       148.4,
+       127.1
+      ],
+      [
+       154.5,
+       121.9
+      ],
+      [
+       162,
+       117.3
+      ],
+      [
+       170.9,
+       114.9
+      ],
+      [
+       178.9,
+       114
+      ],
+      [
+       180.1,
+       119.1
+      ],
+      [
+       178.5,
+       136.8
+      ],
+      [
+       177,
+       140.8
+      ],
+      [
+       173.7,
+       143.5
+      ],
+      [
+       169.2,
+       144.2
+      ],
+      [
+       165.2,
+       142.5
+      ],
+      [
+       151.3,
+       131.5
+      ],
+      [
+       148.4,
+       127.1
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_4_ID_4_COPY_0",
+     "center": [
+      164.804,
+      161.042
+     ],
+     "polygon": [
+      [
+       148.4,
+       169.9
+      ],
+      [
+       150.8,
+       152.3
+      ],
+      [
+       151.6,
+       148.8
+      ],
+      [
+       153.9,
+       144.6
+      ],
+      [
+       161.7,
+       147.6
+      ],
+      [
+       170.1,
+       152.3
+      ],
+      [
+       176.4,
+       158.9
+      ],
+      [
+       181.2,
+       165.7
+      ],
+      [
+       177.2,
+       169.4
+      ],
+      [
+       158.2,
+       177.5
+      ],
+      [
+       153.8,
+       176.9
+      ],
+      [
+       151.6,
+       175.6
+      ],
+      [
+       149.1,
+       172.4
+      ],
+      [
+       148.4,
+       169.9
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_5_ID_5_COPY_0",
+     "center": [
+      233.976,
+      153.383
+     ],
+     "polygon": [
+      [
+       221.2,
+       162.3
+      ],
+      [
+       221.7,
+       158.3
+      ],
+      [
+       227.5,
+       145.9
+      ],
+      [
+       229.7,
+       143.4
+      ],
+      [
+       232.8,
+       142.4
+      ],
+      [
+       236.2,
+       143.1
+      ],
+      [
+       238.6,
+       145.3
+      ],
+      [
+       245.8,
+       156.9
+      ],
+      [
+       246.7,
+       160.8
+      ],
+      [
+       240.9,
+       163
+      ],
+      [
+       234,
+       164.4
+      ],
+      [
+       221.2,
+       162.3
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_6_ID_6_COPY_0",
+     "center": [
+      218.336,
+      115.244
+     ],
+     "polygon": [
+      [
+       204.9,
+       124.4
+      ],
+      [
+       205.5,
+       120.2
+      ],
+      [
+       211.8,
+       107.3
+      ],
+      [
+       214.1,
+       104.7
+      ],
+      [
+       217.6,
+       103.6
+      ],
+      [
+       221,
+       104.4
+      ],
+      [
+       223.5,
+       106.8
+      ],
+      [
+       230.9,
+       119.2
+      ],
+      [
+       231.8,
+       123.3
+      ],
+      [
+       225.7,
+       125.5
+      ],
+      [
+       218.2,
+       126.9
+      ],
+      [
+       204.9,
+       124.4
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_7_ID_7_COPY_0",
+     "center": [
+      82.2756,
+      150.854
+     ],
+     "polygon": [
+      [
+       63.5,
+       140
+      ],
+      [
+       64.1,
+       137.5
+      ],
+      [
+       66.5,
+       134.2
+      ],
+      [
+       68.7,
+       132.8
+      ],
+      [
+       73,
+       132.2
+      ],
+      [
+       92.7,
+       136.7
+      ],
+      [
+       96.7,
+       138.6
+      ],
+      [
+       101.1,
+       142.6
+      ],
+      [
+       99,
+       149.6
+      ],
+      [
+       75.5,
+       168.9
+      ],
+      [
+       68.4,
+       169.5
+      ],
+      [
+       65.1,
+       164.5
+      ],
+      [
+       64,
+       160.2
+      ],
+      [
+       63.5,
+       140
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_8_ID_8_COPY_0",
+     "center": [
+      126.861,
+      175.695
+     ],
+     "polygon": [
+      [
+       111.5,
+       173.9
+      ],
+      [
+       111.6,
+       171.6
+      ],
+      [
+       113.3,
+       167.7
+      ],
+      [
+       117.1,
+       164.8
+      ],
+      [
+       135.2,
+       158.3
+      ],
+      [
+       140.9,
+       158.3
+      ],
+      [
+       142.1,
+       166.7
+      ],
+      [
+       142,
+       176.7
+      ],
+      [
+       139.2,
+       185.6
+      ],
+      [
+       135.4,
+       193.4
+      ],
+      [
+       130.1,
+       191.6
+      ],
+      [
+       114.9,
+       180.1
+      ],
+      [
+       112.1,
+       176.5
+      ],
+      [
+       111.5,
+       173.9
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_9_ID_9_COPY_0",
+     "center": [
+      146.615,
+      170.088
+     ],
+     "polygon": [
+      [
+       130.7,
+       176.8
+      ],
+      [
+       131.4,
+       172.4
+      ],
+      [
+       132.7,
+       170.4
+      ],
+      [
+       144.7,
+       156.1
+      ],
+      [
+       149.5,
+       153.2
+      ],
+      [
+       154.7,
+       159.9
+      ],
+      [
+       159.2,
+       167.6
+      ],
+      [
+       161.6,
+       177.4
+      ],
+      [
+       162.3,
+       185.7
+      ],
+      [
+       156.8,
+       187
+      ],
+      [
+       136,
+       184
+      ],
+      [
+       132.5,
+       181.3
+      ],
+      [
+       130.7,
+       176.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_10_ID_10_COPY_0",
+     "center": [
+      71.4925,
+      131.424
+     ],
+     "polygon": [
+      [
+       50.8,
+       141.6
+      ],
+      [
+       51.3,
+       137.1
+      ],
+      [
+       58,
+       118.2
+      ],
+      [
+       60.9,
+       114.9
+      ],
+      [
+       65.1,
+       113.4
+      ],
+      [
+       69.8,
+       114.3
+      ],
+      [
+       86.5,
+       125.5
+      ],
+      [
+       89.6,
+       128.8
+      ],
+      [
+       92.2,
+       134
+      ],
+      [
+       87.8,
+       139.9
+      ],
+      [
+       58.9,
+       149.5
+      ],
+      [
+       51.8,
+       147.4
+      ],
+      [
+       50.8,
+       141.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_11_ID_11_COPY_0",
+     "center": [
+      228.652,
+      167.93
+     ],
+     "polygon": [
+      [
+       216.9,
+       167.8
+      ],
+      [
+       219.3,
+       164.7
+      ],
+      [
+       230.5,
+       157.2
+      ],
+      [
+       233.6,
+       156.2
+      ],
+      [
+       236.9,
+       157
+      ],
+      [
+       239.3,
+       159.2
+      ],
+      [
+       240.2,
+       162.3
+      ],
+      [
+       240.3,
+       175.7
+      ],
+      [
+       239.1,
+       179.5
+      ],
+      [
+       226.9,
+       176.2
+      ],
+      [
+       221.2,
+       172.1
+      ],
+      [
+       216.9,
+       167.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_12_ID_12_COPY_0",
+     "center": [
+      58.993,
+      47.2044
+     ],
+     "polygon": [
+      [
+       37.8,
+       45
+      ],
+      [
+       38.7,
+       41.5
+      ],
+      [
+       40,
+       40.1
+      ],
+      [
+       66.3,
+       25.7
+      ],
+      [
+       67.9,
+       25.4
+      ],
+      [
+       79.9,
+       33.5
+      ],
+      [
+       80.2,
+       34.8
+      ],
+      [
+       76.6,
+       48.4
+      ],
+      [
+       58,
+       67.3
+      ],
+      [
+       54.7,
+       68.9
+      ],
+      [
+       50.8,
+       68.7
+      ],
+      [
+       48.5,
+       67.2
+      ],
+      [
+       39.3,
+       55
+      ],
+      [
+       37.8,
+       45
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_13_ID_13_COPY_0",
+     "center": [
+      170.106,
+      147.904
+     ],
+     "polygon": [
+      [
+       153.2,
+       137
+      ],
+      [
+       153.3,
+       135.2
+      ],
+      [
+       154.7,
+       134.5
+      ],
+      [
+       170,
+       133.4
+      ],
+      [
+       179.5,
+       135.8
+      ],
+      [
+       187,
+       139.1
+      ],
+      [
+       185.4,
+       144.2
+      ],
+      [
+       175.1,
+       159
+      ],
+      [
+       171.7,
+       161.8
+      ],
+      [
+       167.4,
+       162.5
+      ],
+      [
+       163,
+       160.8
+      ],
+      [
+       160.4,
+       157.4
+      ],
+      [
+       154.6,
+       143.2
+      ],
+      [
+       153.2,
+       137
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_14_ID_14_COPY_0",
+     "center": [
+      66.7238,
+      93.5773
+     ],
+     "polygon": [
+      [
+       46.5,
+       93.4
+      ],
+      [
+       49.6,
+       88.4
+      ],
+      [
+       53,
+       85.4
+      ],
+      [
+       70.6,
+       75.8
+      ],
+      [
+       75,
+       75.3
+      ],
+      [
+       77.5,
+       76
+      ],
+      [
+       80.7,
+       78.6
+      ],
+      [
+       82,
+       80.8
+      ],
+      [
+       86.9,
+       100.3
+      ],
+      [
+       87,
+       104.8
+      ],
+      [
+       85.4,
+       110.5
+      ],
+      [
+       78.2,
+       111.9
+      ],
+      [
+       50.3,
+       99.6
+      ],
+      [
+       46.5,
+       93.4
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_15_ID_15_COPY_0",
+     "center": [
+      94.5714,
+      92.0109
+     ],
+     "polygon": [
+      [
+       85,
+       87.3
+      ],
+      [
+       85.8,
+       83.9
+      ],
+      [
+       88.4,
+       81.1
+      ],
+      [
+       91.7,
+       80.1
+      ],
+      [
+       99.4,
+       80.5
+      ],
+      [
+       101.4,
+       83.5
+      ],
+      [
+       104.1,
+       95.5
+      ],
+      [
+       97.4,
+       101.5
+      ],
+      [
+       88.8,
+       104.1
+      ],
+      [
+       86.9,
+       99.9
+      ],
+      [
+       85,
+       87.3
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_16_ID_16_COPY_0",
+     "center": [
+      65.7806,
+      110.083
+     ],
+     "polygon": [
+      [
+       44.5,
+       121.4
+      ],
+      [
+       45.5,
+       115.6
+      ],
+      [
+       47.5,
+       111.5
+      ],
+      [
+       60.1,
+       95.9
+      ],
+      [
+       64,
+       93.7
+      ],
+      [
+       66.6,
+       93.5
+      ],
+      [
+       70.4,
+       94.6
+      ],
+      [
+       72.5,
+       96.2
+      ],
+      [
+       84.5,
+       112.3
+      ],
+      [
+       86.3,
+       116.4
+      ],
+      [
+       87.1,
+       122.2
+      ],
+      [
+       80.6,
+       126.7
+      ],
+      [
+       50.8,
+       126.1
+      ],
+      [
+       44.5,
+       121.4
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_17_ID_17_COPY_0",
+     "center": [
+      135.722,
+      41.672
+     ],
+     "polygon": [
+      [
+       103.3,
+       34.3
+      ],
+      [
+       108.6,
+       25.1
+      ],
+      [
+       115.4,
+       20.1
+      ],
+      [
+       163.6,
+       25
+      ],
+      [
+       165.2,
+       26.1
+      ],
+      [
+       167.2,
+       30.2
+      ],
+      [
+       168.2,
+       35.4
+      ],
+      [
+       167.7,
+       40
+      ],
+      [
+       166.6,
+       41.6
+      ],
+      [
+       123.2,
+       63.3
+      ],
+      [
+       115.1,
+       60.9
+      ],
+      [
+       107,
+       54.5
+      ],
+      [
+       103.3,
+       34.3
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_18_ID_18_COPY_0",
+     "center": [
+      105.122,
+      51.4881
+     ],
+     "polygon": [
+      [
+       87.1,
+       35.8
+      ],
+      [
+       92.3,
+       33.4
+      ],
+      [
+       96.5,
+       32.8
+      ],
+      [
+       113.9,
+       33.8
+      ],
+      [
+       118.3,
+       34.8
+      ],
+      [
+       121.7,
+       37.9
+      ],
+      [
+       123.1,
+       42.5
+      ],
+      [
+       122.1,
+       46.9
+      ],
+      [
+       115.2,
+       63
+      ],
+      [
+       112.8,
+       66.5
+      ],
+      [
+       108.6,
+       70.1
+      ],
+      [
+       106.9,
+       69.3
+      ],
+      [
+       101.2,
+       63.7
+      ],
+      [
+       96.1,
+       56.1
+      ],
+      [
+       89.7,
+       45.1
+      ],
+      [
+       87.1,
+       35.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_19_ID_19_COPY_0",
+     "center": [
+      182.428,
+      50.4779
+     ],
+     "polygon": [
+      [
+       169.6,
+       51.7
+      ],
+      [
+       170.1,
+       49.5
+      ],
+      [
+       172.5,
+       46.5
+      ],
+      [
+       185.4,
+       37.1
+      ],
+      [
+       189.9,
+       35.6
+      ],
+      [
+       192.9,
+       42.2
+      ],
+      [
+       195.1,
+       49.4
+      ],
+      [
+       195.1,
+       58.1
+      ],
+      [
+       194,
+       65.1
+      ],
+      [
+       189.2,
+       65.1
+      ],
+      [
+       174.2,
+       59.4
+      ],
+      [
+       171,
+       56.9
+      ],
+      [
+       169.6,
+       51.7
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_20_ID_20_COPY_0",
+     "center": [
+      87.7515,
+      62.9607
+     ],
+     "polygon": [
+      [
+       68.9,
+       53.9
+      ],
+      [
+       73.4,
+       50.1
+      ],
+      [
+       77.5,
+       48.2
+      ],
+      [
+       97.2,
+       44.2
+      ],
+      [
+       99.8,
+       44.4
+      ],
+      [
+       103.4,
+       46.2
+      ],
+      [
+       105.2,
+       48.1
+      ],
+      [
+       106.6,
+       52.3
+      ],
+      [
+       105.6,
+       72.4
+      ],
+      [
+       104.3,
+       76.7
+      ],
+      [
+       101.2,
+       81.7
+      ],
+      [
+       99.3,
+       81.4
+      ],
+      [
+       91.8,
+       77.5
+      ],
+      [
+       84.3,
+       71.6
+      ],
+      [
+       74.4,
+       62.6
+      ],
+      [
+       69.5,
+       55.8
+      ],
+      [
+       68.9,
+       53.9
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_21_ID_21_COPY_0",
+     "center": [
+      199.17,
+      55.7543
+     ],
+     "polygon": [
+      [
+       185.7,
+       51.1
+      ],
+      [
+       187.1,
+       46
+      ],
+      [
+       190.3,
+       43.6
+      ],
+      [
+       207.9,
+       41.7
+      ],
+      [
+       212.5,
+       42.9
+      ],
+      [
+       211.6,
+       49.8
+      ],
+      [
+       209.4,
+       58.1
+      ],
+      [
+       205.4,
+       64.4
+      ],
+      [
+       200.8,
+       69.8
+      ],
+      [
+       197.4,
+       67.7
+      ],
+      [
+       195.3,
+       65.4
+      ],
+      [
+       187.2,
+       54.9
+      ],
+      [
+       185.7,
+       51.1
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_22_ID_22_COPY_0",
+     "center": [
+      183.519,
+      189.747
+     ],
+     "polygon": [
+      [
+       157.4,
+       193.6
+      ],
+      [
+       163.2,
+       183.5
+      ],
+      [
+       167.7,
+       180.5
+      ],
+      [
+       185,
+       174.4
+      ],
+      [
+       189.1,
+       174.8
+      ],
+      [
+       205.4,
+       180.1
+      ],
+      [
+       208,
+       181.8
+      ],
+      [
+       209.5,
+       184.7
+      ],
+      [
+       208.6,
+       189.2
+      ],
+      [
+       196.7,
+       202.2
+      ],
+      [
+       190.5,
+       205
+      ],
+      [
+       174.6,
+       205.1
+      ],
+      [
+       169.5,
+       203.5
+      ],
+      [
+       161,
+       200.5
+      ],
+      [
+       158.5,
+       198.5
+      ],
+      [
+       157.4,
+       193.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_23_ID_23_COPY_0",
+     "center": [
+      214.06,
+      63.3824
+     ],
+     "polygon": [
+      [
+       200.4,
+       57.6
+      ],
+      [
+       200.9,
+       54
+      ],
+      [
+       203.2,
+       51.1
+      ],
+      [
+       205.1,
+       50
+      ],
+      [
+       208.8,
+       49.7
+      ],
+      [
+       222.3,
+       55.8
+      ],
+      [
+       227.8,
+       60.2
+      ],
+      [
+       218.4,
+       70.9
+      ],
+      [
+       210.9,
+       74.9
+      ],
+      [
+       204.5,
+       77.1
+      ],
+      [
+       202.3,
+       73
+      ],
+      [
+       200.4,
+       57.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_24_ID_24_COPY_0",
+     "center": [
+      171.026,
+      55.6799
+     ],
+     "polygon": [
+      [
+       156.5,
+       61.7
+      ],
+      [
+       162.2,
+       47.1
+      ],
+      [
+       163.6,
+       44.2
+      ],
+      [
+       166.5,
+       41.2
+      ],
+      [
+       172.6,
+       45.3
+      ],
+      [
+       178.8,
+       51.1
+      ],
+      [
+       182.8,
+       58.1
+      ],
+      [
+       185.6,
+       64.9
+      ],
+      [
+       182,
+       67
+      ],
+      [
+       178.8,
+       67.8
+      ],
+      [
+       163.3,
+       70.2
+      ],
+      [
+       159.7,
+       68.8
+      ],
+      [
+       158,
+       67.3
+      ],
+      [
+       156.6,
+       64
+      ],
+      [
+       156.5,
+       61.7
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_25_ID_25_COPY_0",
+     "center": [
+      60.1127,
+      67.58
+     ],
+     "polygon": [
+      [
+       48.7,
+       69.8
+      ],
+      [
+       51.2,
+       61.5
+      ],
+      [
+       52.6,
+       59.4
+      ],
+      [
+       64.9,
+       58.1
+      ],
+      [
+       68.4,
+       59
+      ],
+      [
+       69.8,
+       61.4
+      ],
+      [
+       71.5,
+       67.9
+      ],
+      [
+       70.6,
+       71.6
+      ],
+      [
+       68.1,
+       74.1
+      ],
+      [
+       54,
+       77.1
+      ],
+      [
+       49.4,
+       76.6
+      ],
+      [
+       48.7,
+       69.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_26_ID_26_COPY_0",
+     "center": [
+      114.696,
+      86.1215
+     ],
+     "polygon": [
+      [
+       94.5,
+       95.8
+      ],
+      [
+       95.5,
+       92
+      ],
+      [
+       110.8,
+       70.1
+      ],
+      [
+       123.3,
+       64.1
+      ],
+      [
+       124.7,
+       64.2
+      ],
+      [
+       134.9,
+       74.7
+      ],
+      [
+       125.6,
+       104.6
+      ],
+      [
+       124.2,
+       106.3
+      ],
+      [
+       121.2,
+       107.7
+      ],
+      [
+       111,
+       108.1
+      ],
+      [
+       97.3,
+       101.3
+      ],
+      [
+       95.5,
+       99.3
+      ],
+      [
+       94.5,
+       95.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_27_ID_27_COPY_0",
+     "center": [
+      158.802,
+      66.7258
+     ],
+     "polygon": [
+      [
+       143.9,
+       73.4
+      ],
+      [
+       149.8,
+       55.8
+      ],
+      [
+       152.8,
+       51.9
+      ],
+      [
+       159.2,
+       55.7
+      ],
+      [
+       166.1,
+       61.4
+      ],
+      [
+       170.5,
+       68
+      ],
+      [
+       173.7,
+       74.8
+      ],
+      [
+       170.1,
+       77.2
+      ],
+      [
+       167,
+       78.2
+      ],
+      [
+       151.4,
+       81.6
+      ],
+      [
+       147.6,
+       80.4
+      ],
+      [
+       145.8,
+       78.9
+      ],
+      [
+       144.2,
+       75.7
+      ],
+      [
+       143.9,
+       73.4
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_28_ID_28_COPY_0",
+     "center": [
+      225.075,
+      87.6259
+     ],
+     "polygon": [
+      [
+       211.1,
+       96.9
+      ],
+      [
+       211.8,
+       92.5
+      ],
+      [
+       218.6,
+       79.3
+      ],
+      [
+       221.1,
+       76.6
+      ],
+      [
+       224.5,
+       75.6
+      ],
+      [
+       228.2,
+       76.5
+      ],
+      [
+       230.7,
+       78.9
+      ],
+      [
+       238.1,
+       91.9
+      ],
+      [
+       239,
+       96.3
+      ],
+      [
+       232.6,
+       98.4
+      ],
+      [
+       224.8,
+       99.7
+      ],
+      [
+       217.6,
+       98.7
+      ],
+      [
+       211.1,
+       96.9
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_29_ID_29_COPY_0",
+     "center": [
+      146.967,
+      100.896
+     ],
+     "polygon": [
+      [
+       131.2,
+       95.2
+      ],
+      [
+       137.8,
+       91.2
+      ],
+      [
+       145.6,
+       87.9
+      ],
+      [
+       154.5,
+       86.9
+      ],
+      [
+       162.3,
+       87.3
+      ],
+      [
+       162.7,
+       92.4
+      ],
+      [
+       158.4,
+       109.1
+      ],
+      [
+       156.4,
+       112.6
+      ],
+      [
+       152.8,
+       114.7
+      ],
+      [
+       148.4,
+       114.6
+      ],
+      [
+       144.9,
+       112.5
+      ],
+      [
+       133.3,
+       99.9
+      ],
+      [
+       131.2,
+       95.2
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_30_ID_30_COPY_0",
+     "center": [
+      218.999,
+      103.592
+     ],
+     "polygon": [
+      [
+       206.2,
+       102.8
+      ],
+      [
+       209,
+       99.5
+      ],
+      [
+       221.5,
+       91.7
+      ],
+      [
+       224.8,
+       90.7
+      ],
+      [
+       228.5,
+       91.7
+      ],
+      [
+       230.9,
+       94.2
+      ],
+      [
+       231.8,
+       97.7
+      ],
+      [
+       231.5,
+       112.3
+      ],
+      [
+       230,
+       116.4
+      ],
+      [
+       223.5,
+       114.9
+      ],
+      [
+       216.2,
+       112
+      ],
+      [
+       206.2,
+       102.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_31_ID_31_COPY_0",
+     "center": [
+      211.02,
+      185.25
+     ],
+     "polygon": [
+      [
+       199.9,
+       175.1
+      ],
+      [
+       200.1,
+       174
+      ],
+      [
+       203.4,
+       173.3
+      ],
+      [
+       217,
+       175.2
+      ],
+      [
+       219.9,
+       176.5
+      ],
+      [
+       221.8,
+       179
+      ],
+      [
+       222.1,
+       182.4
+      ],
+      [
+       220.7,
+       185.3
+      ],
+      [
+       212,
+       195.2
+      ],
+      [
+       208.7,
+       197.2
+      ],
+      [
+       202,
+       187
+      ],
+      [
+       199.9,
+       175.1
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_32_ID_32_COPY_0",
+     "center": [
+      222.024,
+      179.851
+     ],
+     "polygon": [
+      [
+       210.4,
+       170.5
+      ],
+      [
+       214.1,
+       168.9
+      ],
+      [
+       227.3,
+       168.3
+      ],
+      [
+       230.4,
+       169
+      ],
+      [
+       232.7,
+       171.1
+      ],
+      [
+       233.6,
+       174.4
+      ],
+      [
+       232.8,
+       177.5
+      ],
+      [
+       226.2,
+       188.8
+      ],
+      [
+       223.3,
+       191.4
+      ],
+      [
+       214.6,
+       182.5
+      ],
+      [
+       210.4,
+       170.5
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_33_ID_33_COPY_0",
+     "center": [
+      124.59,
+      151.494
+     ],
+     "polygon": [
+      [
+       112,
+       151.6
+      ],
+      [
+       112,
+       148.8
+      ],
+      [
+       114.5,
+       146.3
+      ],
+      [
+       125.8,
+       141.2
+      ],
+      [
+       133,
+       146.6
+      ],
+      [
+       137.2,
+       154.5
+      ],
+      [
+       133.5,
+       157.2
+      ],
+      [
+       119.5,
+       161.7
+      ],
+      [
+       114.8,
+       159.5
+      ],
+      [
+       113.1,
+       156.5
+      ],
+      [
+       112,
+       151.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_34_ID_34_COPY_0",
+     "center": [
+      155.623,
+      111.971
+     ],
+     "polygon": [
+      [
+       139.9,
+       119.5
+      ],
+      [
+       143.6,
+       112.5
+      ],
+      [
+       149,
+       105.2
+      ],
+      [
+       156,
+       100
+      ],
+      [
+       162.9,
+       96.3
+      ],
+      [
+       165.9,
+       100.5
+      ],
+      [
+       171,
+       117.2
+      ],
+      [
+       171.1,
+       121.4
+      ],
+      [
+       168.8,
+       125.3
+      ],
+      [
+       165.2,
+       127.4
+      ],
+      [
+       160.9,
+       127.4
+      ],
+      [
+       144.2,
+       122.4
+      ],
+      [
+       139.9,
+       119.5
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_35_ID_35_COPY_0",
+     "center": [
+      76.6886,
+      77.0594
+     ],
+     "polygon": [
+      [
+       58.9,
+       72.9
+      ],
+      [
+       63.1,
+       65.9
+      ],
+      [
+       83.4,
+       59.3
+      ],
+      [
+       88.1,
+       59.7
+      ],
+      [
+       91.7,
+       62.3
+      ],
+      [
+       93.6,
+       66.3
+      ],
+      [
+       94.5,
+       87.7
+      ],
+      [
+       89.5,
+       94.1
+      ],
+      [
+       82.9,
+       94.8
+      ],
+      [
+       60.5,
+       79.4
+      ],
+      [
+       58.9,
+       72.9
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_36_ID_36_COPY_0",
+     "center": [
+      150.874,
+      83.964
+     ],
+     "polygon": [
+      [
+       135.4,
+       74.6
+      ],
+      [
+       136.1,
+       70.4
+      ],
+      [
+       137.5,
+       70
+      ],
+      [
+       150.5,
+       71.1
+      ],
+      [
+       160,
+       75.2
+      ],
+      [
+       166.3,
+       79.4
+      ],
+      [
+       164,
+       83.9
+      ],
+      [
+       152.1,
+       95.7
+      ],
+      [
+       148.5,
+       97.7
+      ],
+      [
+       146.2,
+       98
+      ],
+      [
+       142.4,
+       96.7
+      ],
+      [
+       139.6,
+       93.8
+      ],
+      [
+       135.4,
+       74.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_37_ID_37_COPY_0",
+     "center": [
+      107.623,
+      189.394
+     ],
+     "polygon": [
+      [
+       96.8,
+       187.3
+      ],
+      [
+       96.9,
+       183.7
+      ],
+      [
+       98.9,
+       181.8
+      ],
+      [
+       104.8,
+       178.6
+      ],
+      [
+       110,
+       179.2
+      ],
+      [
+       112.7,
+       181.8
+      ],
+      [
+       117.8,
+       193.5
+      ],
+      [
+       118.4,
+       198
+      ],
+      [
+       109.8,
+       200.5
+      ],
+      [
+       100.9,
+       198.9
+      ],
+      [
+       96.8,
+       187.3
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_38_ID_38_COPY_0",
+     "center": [
+      222.988,
+      75.7981
+     ],
+     "polygon": [
+      [
+       209.6,
+       69.9
+      ],
+      [
+       210.4,
+       66.3
+      ],
+      [
+       211.6,
+       64.6
+      ],
+      [
+       214.7,
+       62.7
+      ],
+      [
+       218.3,
+       62.6
+      ],
+      [
+       233.3,
+       70.7
+      ],
+      [
+       236.3,
+       74
+      ],
+      [
+       226.5,
+       83.9
+      ],
+      [
+       219,
+       87.4
+      ],
+      [
+       212.5,
+       89.2
+      ],
+      [
+       210.6,
+       85
+      ],
+      [
+       209.6,
+       69.9
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_39_ID_39_COPY_0",
+     "center": [
+      224.414,
+      130.76
+     ],
+     "polygon": [
+      [
+       211.9,
+       125.3
+      ],
+      [
+       212.6,
+       122
+      ],
+      [
+       213.7,
+       120.4
+      ],
+      [
+       216.5,
+       118.5
+      ],
+      [
+       219.9,
+       118.4
+      ],
+      [
+       232.1,
+       124.5
+      ],
+      [
+       236.9,
+       128.7
+      ],
+      [
+       227.9,
+       138.2
+      ],
+      [
+       220.9,
+       141.5
+      ],
+      [
+       214.9,
+       143.3
+      ],
+      [
+       213.1,
+       139.4
+      ],
+      [
+       211.9,
+       125.3
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_40_ID_40_COPY_0",
+     "center": [
+      111.401,
+      170.984
+     ],
+     "polygon": [
+      [
+       93.7,
+       166.1
+      ],
+      [
+       94.2,
+       162.1
+      ],
+      [
+       95.3,
+       160.1
+      ],
+      [
+       99.1,
+       157.2
+      ],
+      [
+       119.9,
+       152.1
+      ],
+      [
+       127.1,
+       155.7
+      ],
+      [
+       129.1,
+       160.8
+      ],
+      [
+       129.2,
+       162
+      ],
+      [
+       118.5,
+       187
+      ],
+      [
+       112.5,
+       189.9
+      ],
+      [
+       104.8,
+       187.2
+      ],
+      [
+       94.2,
+       168.6
+      ],
+      [
+       93.7,
+       166.1
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_41_ID_41_COPY_0",
+     "center": [
+      87.2476,
+      198.037
+     ],
+     "polygon": [
+      [
+       64.1,
+       193.8
+      ],
+      [
+       68.6,
+       179.8
+      ],
+      [
+       69.8,
+       179.1
+      ],
+      [
+       83.8,
+       178.9
+      ],
+      [
+       107.1,
+       191.6
+      ],
+      [
+       109.7,
+       194.5
+      ],
+      [
+       110.4,
+       198.1
+      ],
+      [
+       109.6,
+       200.9
+      ],
+      [
+       100.4,
+       213
+      ],
+      [
+       91.2,
+       217.2
+      ],
+      [
+       87.6,
+       217.2
+      ],
+      [
+       85.9,
+       216.4
+      ],
+      [
+       64.1,
+       193.8
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_42_ID_42_COPY_0",
+     "center": [
+      231.935,
+      142.374
+     ],
+     "polygon": [
+      [
+       219.8,
+       136.8
+      ],
+      [
+       220.6,
+       133.5
+      ],
+      [
+       221.8,
+       132
+      ],
+      [
+       224.7,
+       130.4
+      ],
+      [
+       228,
+       130.4
+      ],
+      [
+       241.4,
+       138.3
+      ],
+      [
+       244.1,
+       141.4
+      ],
+      [
+       234.8,
+       150.2
+      ],
+      [
+       227.8,
+       153.1
+      ],
+      [
+       221.8,
+       154.6
+      ],
+      [
+       220.2,
+       150.7
+      ],
+      [
+       219.8,
+       136.8
+      ]
+     ]
+    }
+   ],
+   "excluded_objects": [],
+   "current_object": "OBJECT_25_ID_25_COPY_0",
+   "in_excluded_region": false
+  },
+  "print_task_config": {
+   "filament_vendor": [
+    "Generic",
+    "Generic",
+    "NONE",
+    "NONE"
+   ],
+   "filament_type": [
+    "PLA",
+    "PLA",
+    "NONE",
+    "NONE"
+   ],
+   "filament_sub_type": [
+    "",
+    "",
+    "NONE",
+    "NONE"
+   ],
+   "filament_color": [
+    4294301225,
+    4278190080,
+    4294967295,
+    4294967295
+   ],
+   "filament_color_rgba": [
+    "F5D629FF",
+    "000000FF",
+    "FFFFFFFF",
+    "FFFFFFFF"
+   ],
+   "filament_color_multi": [
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "F5D629"
+     ]
+    },
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "000000"
+     ]
+    },
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "FFFFFF"
+     ]
+    },
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "FFFFFF"
+     ]
+    }
+   ],
+   "filament_official": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "filament_sku": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "filament_edit": [
+    true,
+    true,
+    false,
+    false
+   ],
+   "filament_exist": [
+    true,
+    true,
+    false,
+    false
+   ],
+   "filament_soft": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "extruder_map_table": [
+    1,
+    0,
+    2,
+    3,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "extruders_used": [
+    true,
+    true,
+    false,
+    false
+   ],
+   "extruders_replenished": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "time_lapse_camera": false,
+   "auto_bed_leveling": true,
+   "flow_calibrate": false,
+   "flow_calib_extruders": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "shaper_calibrate": false,
+   "auto_replenish_filament": true,
+   "replenish_ignore_color": false,
+   "filament_entangle_detect": false,
+   "filament_entangle_sen": "medium",
+   "reprint_info": {
+    "auto_bed_leveling": true,
+    "flow_calibrate": false,
+    "flow_calib_extruders": [
+     false,
+     false,
+     false,
+     false
+    ],
+    "time_lapse_camera": false,
+    "extruder_map_table": [
+     1,
+     0,
+     2,
+     3,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "extruders_used": [
+     true,
+     true,
+     false,
+     false
+    ],
+    "end_unload_filament": [
+     false,
+     false,
+     false,
+     false
+    ],
+    "flow_calibrate_extruders": [
+     true,
+     true,
+     true,
+     true
+    ]
+   },
+   "end_led_turn_off": false,
+   "end_unload_filament": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "flow_calibrate_extruders": [
+    true,
+    true,
+    true,
+    true
+   ]
+  },
+  "mqtt": {
+   "connected": true
+  },
+  "timelapse": {
+   "is_active": false
+  },
+  "filament_detect": {
+   "info": [
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    },
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    },
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    },
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    }
+   ],
+   "state": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "config": {
+    "startup_stay": false
+   }
+  },
+  "resonance_tester": {
+   "state": "idle"
+  },
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PRESTART": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHOMING": {
+   "force_homing": true
+  },
+  "gcode_macro _DETECT_PLATE": {
+   "hole_x": 13,
+   "hole_y": 233,
+   "hole_z": 3,
+   "solid_x": 13,
+   "solid_y": 220,
+   "solid_z": 3,
+   "delta_z": 1.1,
+   "check_ok_lift_z": 5,
+   "check_fail_lift_z": 150,
+   "move_speed": 200
+  },
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHEAT": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T3": {},
+  "gcode_macro EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_ALL": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_EXIT": {},
+  "gcode_macro XYZ_OFFSET_CALIBRATE": {},
+  "gcode_macro XYZ_OFFSET_CALIBRATE_ALL": {},
+  "heaters": {
+   "available_heaters": [
+    "heater_bed",
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3"
+   ],
+   "available_sensors": [
+    "heater_bed",
+    "temperature_sensor cavity",
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3"
+   ],
+   "available_monitors": [
+    "tmc2240 stepper_x",
+    "tmc2240 stepper_y"
+   ]
+  },
+  "stepper_enable": {
+   "steppers": {
+    "stepper_x": true,
+    "stepper_y": true,
+    "stepper_z": true,
+    "extruder": true,
+    "extruder1": true,
+    "extruder2": false,
+    "extruder3": false
+   }
+  },
+  "tmc2240 stepper_x": {
+   "mcu_phase_offset": 1,
+   "phase_offset_position": 249.60624999615897,
+   "run_current": 1.1987669649803188,
+   "hold_current": 1.1987669649803188,
+   "drv_status": {
+    "cs_actual": 31,
+    "stallguard": 1
+   },
+   "temperature": 84
+  },
+  "tmc2240 stepper_y": {
+   "mcu_phase_offset": 255,
+   "phase_offset_position": -223.20624999999956,
+   "run_current": 1.1987669649803188,
+   "hold_current": 1.1987669649803188,
+   "drv_status": {
+    "cs_actual": 31,
+    "stallguard": 1
+   },
+   "temperature": 85
+  },
+  "tmc2209 stepper_z": {
+   "mcu_phase_offset": 59,
+   "phase_offset_position": 150.47958333336643,
+   "run_current": 0.8566870618221633,
+   "hold_current": 0.8566870618221633,
+   "drv_status": {
+    "cs_actual": 27
+   },
+   "temperature": null
+  },
+  "heater_bed": {
+   "temperature": 45,
+   "target": 45,
+   "power": 0.19947682367635655
+  },
+  "temperature_sensor cavity": {
+   "temperature": 30,
+   "measured_min_temp": 23,
+   "measured_max_temp": 44
+  },
+  "fan_generic cavity_fan": {
+   "speed": 0.6980392156862745,
+   "rpm": 2415
+  },
+  "led cavity_led": {
+   "color_data": [
+    [
+     0,
+     0,
+     0,
+     1
+    ]
+   ]
+  },
+  "purifier": {
+   "power_detected": false,
+   "power_det_value": 3.3,
+   "mode": 0,
+   "desired_chamber_temp": 0,
+   "critical_chamber_temp": 0,
+   "inner_fan_work_time": 0,
+   "inner_fan_rpm": 0,
+   "exhaust_fan": {
+    "speed": 0,
+    "delay": 180,
+    "speed_threshold": 0
+   },
+   "inner_fan": {
+    "speed": 0,
+    "delay": 180,
+    "speed_threshold": 0
+   }
+  },
+  "bed_mesh": {
+   "profile_name": "default",
+   "mesh_min": [
+    3,
+    3
+   ],
+   "mesh_max": [
+    267,
+    267
+   ],
+   "probed_matrix": [
+    [
+     -0.07925,
+     -0.065917,
+     0.029083,
+     0.05325,
+     0.044917,
+     0.026167,
+     -0.015083,
+     -0.011333,
+     -0.010917,
+     0.006583,
+     0.049083
+    ],
+    [
+     -0.101333,
+     -0.054667,
+     -0.005083,
+     0.007417,
+     0.008667,
+     0.024083,
+     -0.027583,
+     -0.04925,
+     -0.053417,
+     -0.065917,
+     -0.03925
+    ],
+    [
+     -0.077583,
+     -0.06675,
+     -0.045083,
+     -0.048,
+     -0.038833,
+     -0.043417,
+     -0.06425,
+     -0.059667,
+     -0.069667,
+     -0.074667,
+     -0.053417
+    ],
+    [
+     -0.032583,
+     -0.0455,
+     -0.061333,
+     -0.062583,
+     -0.0705,
+     -0.082167,
+     -0.083417,
+     -0.090083,
+     -0.09675,
+     -0.09175,
+     -0.09175
+    ],
+    [
+     -0.037167,
+     -0.047167,
+     -0.0605,
+     -0.078,
+     -0.078,
+     -0.076333,
+     -0.094667,
+     -0.120917,
+     -0.113,
+     -0.09175,
+     -0.077167
+    ],
+    [
+     -0.048,
+     -0.038417,
+     -0.069667,
+     -0.106333,
+     -0.100083,
+     -0.118417,
+     -0.10675,
+     -0.152167,
+     -0.128,
+     -0.093,
+     -0.067167
+    ],
+    [
+     -0.030083,
+     -0.053417,
+     -0.080083,
+     -0.126333,
+     -0.148,
+     -0.153833,
+     -0.162583,
+     -0.158,
+     -0.126333,
+     -0.08925,
+     -0.05425
+    ],
+    [
+     -0.009667,
+     -0.031333,
+     -0.09675,
+     -0.167583,
+     -0.200083,
+     -0.21675,
+     -0.237583,
+     -0.202583,
+     -0.16175,
+     -0.118417,
+     -0.068417
+    ],
+    [
+     -0.00675,
+     -0.049667,
+     -0.09925,
+     -0.178417,
+     -0.21425,
+     -0.272167,
+     -0.288833,
+     -0.2405,
+     -0.174667,
+     -0.105917,
+     -0.016333
+    ],
+    [
+     -0.022583,
+     -0.049667,
+     -0.087167,
+     -0.150083,
+     -0.206333,
+     -0.243,
+     -0.2755,
+     -0.243833,
+     -0.162167,
+     -0.083833,
+     0.034083
+    ],
+    [
+     0.006167,
+     -0.05425,
+     -0.043417,
+     -0.091333,
+     -0.12675,
+     -0.187583,
+     -0.198833,
+     -0.183833,
+     -0.100083,
+     -0.054667,
+     0.05075
+    ]
+   ],
+   "mesh_matrix": [
+    [
+     -0.07925,
+     -0.077003,
+     -0.072386,
+     -0.065917,
+     -0.039843,
+     0.002528,
+     0.029083,
+     0.038645,
+     0.048281,
+     0.05325,
+     0.05196,
+     0.048114,
+     0.044917,
+     0.040142,
+     0.032404,
+     0.026167,
+     0.01425,
+     -0.004167,
+     -0.015083,
+     -0.015284,
+     -0.012985,
+     -0.011333,
+     -0.011367,
+     -0.011494,
+     -0.010917,
+     -0.006738,
+     0.000534,
+     0.006583,
+     0.01875,
+     0.037694,
+     0.049083
+    ],
+    [
+     -0.085654,
+     -0.08058,
+     -0.071416,
+     -0.062654,
+     -0.039548,
+     -0.002714,
+     0.020312,
+     0.028666,
+     0.037101,
+     0.041509,
+     0.040676,
+     0.037865,
+     0.035685,
+     0.033682,
+     0.030321,
+     0.026596,
+     0.014167,
+     -0.005781,
+     -0.017966,
+     -0.020263,
+     -0.021221,
+     -0.021571,
+     -0.02202,
+     -0.022443,
+     -0.022324,
+     -0.020401,
+     -0.016814,
+     -0.013157,
+     -0.002405,
+     0.014738,
+     0.025083
+    ],
+    [
+     -0.095985,
+     -0.086339,
+     -0.069832,
+     -0.057392,
+     -0.03926,
+     -0.011669,
+     0.005466,
+     0.01178,
+     0.018172,
+     0.02162,
+     0.021559,
+     0.020493,
+     0.020009,
+     0.022519,
+     0.026283,
+     0.026654,
+     0.013452,
+     -0.008886,
+     -0.023071,
+     -0.028746,
+     -0.034963,
+     -0.038549,
+     -0.039692,
+     -0.040633,
+     -0.041287,
+     -0.043063,
+     -0.045518,
+     -0.045787,
+     -0.037378,
+     -0.023229,
+     -0.01462
+    ],
+    [
+     -0.101333,
+     -0.089278,
+     -0.068926,
+     -0.054667,
+     -0.03988,
+     -0.018352,
+     -0.005083,
+     -0.000207,
+     0.004688,
+     0.007417,
+     0.007901,
+     0.008052,
+     0.008667,
+     0.013694,
+     0.021407,
+     0.024083,
+     0.010701,
+     -0.012552,
+     -0.027583,
+     -0.034991,
+     -0.043954,
+     -0.04925,
+     -0.050849,
+     -0.052225,
+     -0.053417,
+     -0.057361,
+     -0.063343,
+     -0.065917,
+     -0.058978,
+     -0.046744,
+     -0.03925
+    ],
+    [
+     -0.096145,
+     -0.086289,
+     -0.069644,
+     -0.05796,
+     -0.04567,
+     -0.027762,
+     -0.016818,
+     -0.013491,
+     -0.010588,
+     -0.008914,
+     -0.007759,
+     -0.006252,
+     -0.004957,
+     -0.001161,
+     0.004423,
+     0.006096,
+     -0.005362,
+     -0.025101,
+     -0.037719,
+     -0.043056,
+     -0.049123,
+     -0.052778,
+     -0.054685,
+     -0.05698,
+     -0.058728,
+     -0.062422,
+     -0.067893,
+     -0.07021,
+     -0.063691,
+     -0.052212,
+     -0.045182
+    ],
+    [
+     -0.085753,
+     -0.080205,
+     -0.070772,
+     -0.063901,
+     -0.055114,
+     -0.042009,
+     -0.034145,
+     -0.033079,
+     -0.033142,
+     -0.033059,
+     -0.030955,
+     -0.027541,
+     -0.025414,
+     -0.0243,
+     -0.023239,
+     -0.023799,
+     -0.03194,
+     -0.045488,
+     -0.053818,
+     -0.055308,
+     -0.055936,
+     -0.056472,
+     -0.058784,
+     -0.0625,
+     -0.06504,
+     -0.067773,
+     -0.071512,
+     -0.072836,
+     -0.066728,
+     -0.056162,
+     -0.049707
+    ],
+    [
+     -0.077583,
+     -0.074935,
+     -0.070361,
+     -0.06675,
+     -0.060448,
+     -0.050775,
+     -0.045083,
+     -0.045377,
+     -0.047151,
+     -0.048,
+     -0.045506,
+     -0.041253,
+     -0.038833,
+     -0.039509,
+     -0.041407,
+     -0.043417,
+     -0.04933,
+     -0.058744,
+     -0.06425,
+     -0.063463,
+     -0.060935,
+     -0.059667,
+     -0.062198,
+     -0.06671,
+     -0.069667,
+     -0.071648,
+     -0.074074,
+     -0.074667,
+     -0.068991,
+     -0.059315,
+     -0.053417
+    ],
+    [
+     -0.064478,
+     -0.063752,
+     -0.062453,
+     -0.061259,
+     -0.05824,
+     -0.053492,
+     -0.050735,
+     -0.051224,
+     -0.052658,
+     -0.05341,
+     -0.05212,
+     -0.049893,
+     -0.048809,
+     -0.050465,
+     -0.053627,
+     -0.056123,
+     -0.060297,
+     -0.066688,
+     -0.070423,
+     -0.070002,
+     -0.06849,
+     -0.067855,
+     -0.070342,
+     -0.074628,
+     -0.07733,
+     -0.078458,
+     -0.07957,
+     -0.079608,
+     -0.075551,
+     -0.068717,
+     -0.064559
+    ],
+    [
+     -0.044429,
+     -0.046265,
+     -0.049349,
+     -0.051454,
+     -0.053297,
+     -0.055902,
+     -0.057497,
+     -0.058025,
+     -0.058542,
+     -0.058951,
+     -0.059758,
+     -0.061097,
+     -0.062302,
+     -0.065173,
+     -0.069746,
+     -0.072719,
+     -0.074539,
+     -0.076901,
+     -0.078373,
+     -0.079137,
+     -0.080115,
+     -0.080988,
+     -0.083313,
+     -0.086961,
+     -0.089086,
+     -0.088887,
+     -0.087993,
+     -0.087198,
+     -0.085686,
+     -0.083314,
+     -0.081886
+    ],
+    [
+     -0.032583,
+     -0.035889,
+     -0.041491,
+     -0.0455,
+     -0.050204,
+     -0.057148,
+     -0.061333,
+     -0.062028,
+     -0.062241,
+     -0.062583,
+     -0.064617,
+     -0.068003,
+     -0.0705,
+     -0.073914,
+     -0.079049,
+     -0.082167,
+     -0.082756,
+     -0.083049,
+     -0.083417,
+     -0.085182,
+     -0.088077,
+     -0.090083,
+     -0.092182,
+     -0.09517,
+     -0.09675,
+     -0.095577,
+     -0.093219,
+     -0.09175,
+     -0.091602,
+     -0.091676,
+     -0.09175
+    ],
+    [
+     -0.032346,
+     -0.035702,
+     -0.041389,
+     -0.045457,
+     -0.050149,
+     -0.057102,
+     -0.061451,
+     -0.063302,
+     -0.065398,
+     -0.066821,
+     -0.068602,
+     -0.071272,
+     -0.073167,
+     -0.075441,
+     -0.078843,
+     -0.081093,
+     -0.082737,
+     -0.08506,
+     -0.086889,
+     -0.090331,
+     -0.095663,
+     -0.098972,
+     -0.100242,
+     -0.101475,
+     -0.101784,
+     -0.099298,
+     -0.094991,
+     -0.092238,
+     -0.091078,
+     -0.089773,
+     -0.089037
+    ],
+    [
+     -0.034923,
+     -0.03793,
+     -0.043023,
+     -0.046654,
+     -0.050666,
+     -0.056653,
+     -0.060698,
+     -0.064488,
+     -0.069869,
+     -0.073151,
+     -0.074213,
+     -0.075185,
+     -0.075759,
+     -0.076037,
+     -0.076465,
+     -0.077259,
+     -0.080906,
+     -0.087019,
+     -0.091509,
+     -0.097597,
+     -0.106692,
+     -0.111991,
+     -0.111887,
+     -0.110252,
+     -0.108503,
+     -0.104015,
+     -0.096741,
+     -0.091966,
+     -0.088752,
+     -0.084507,
+     -0.082028
+    ],
+    [
+     -0.037167,
+     -0.03971,
+     -0.044031,
+     -0.047167,
+     -0.050858,
+     -0.056475,
+     -0.0605,
+     -0.065691,
+     -0.073401,
+     -0.078,
+     -0.078543,
+     -0.078309,
+     -0.078,
+     -0.077272,
+     -0.076247,
+     -0.076333,
+     -0.08092,
+     -0.08884,
+     -0.094667,
+     -0.102522,
+     -0.114228,
+     -0.120917,
+     -0.11984,
+     -0.116188,
+     -0.113,
+     -0.107157,
+     -0.097889,
+     -0.09175,
+     -0.087123,
+     -0.080849,
+     -0.077167
+    ],
+    [
+     -0.040537,
+     -0.041379,
+     -0.042943,
+     -0.044596,
+     -0.049372,
+     -0.057211,
+     -0.062833,
+     -0.069738,
+     -0.079937,
+     -0.085926,
+     -0.08591,
+     -0.084447,
+     -0.083565,
+     -0.08433,
+     -0.085841,
+     -0.08717,
+     -0.089617,
+     -0.093738,
+     -0.097485,
+     -0.106974,
+     -0.121841,
+     -0.130309,
+     -0.12818,
+     -0.122337,
+     -0.117617,
+     -0.110527,
+     -0.099473,
+     -0.092148,
+     -0.08647,
+     -0.078731,
+     -0.074185
+    ],
+    [
+     -0.04563,
+     -0.043803,
+     -0.041046,
+     -0.040395,
+     -0.047021,
+     -0.05858,
+     -0.066833,
+     -0.076296,
+     -0.09016,
+     -0.098204,
+     -0.097438,
+     -0.094303,
+     -0.092722,
+     -0.096186,
+     -0.102208,
+     -0.105747,
+     -0.104471,
+     -0.101942,
+     -0.101951,
+     -0.113623,
+     -0.13292,
+     -0.143886,
+     -0.140193,
+     -0.131132,
+     -0.124179,
+     -0.115323,
+     -0.101758,
+     -0.092769,
+     -0.085618,
+     -0.075829,
+     -0.070074
+    ],
+    [
+     -0.048,
+     -0.04491,
+     -0.040117,
+     -0.038417,
+     -0.046154,
+     -0.059873,
+     -0.069667,
+     -0.080735,
+     -0.096932,
+     -0.106333,
+     -0.105435,
+     -0.101796,
+     -0.100083,
+     -0.105096,
+     -0.113645,
+     -0.118417,
+     -0.11509,
+     -0.108873,
+     -0.10675,
+     -0.11921,
+     -0.140262,
+     -0.152167,
+     -0.147407,
+     -0.136333,
+     -0.128,
+     -0.118074,
+     -0.103,
+     -0.093,
+     -0.084883,
+     -0.073728,
+     -0.067167
+    ],
+    [
+     -0.043713,
+     -0.042963,
+     -0.042014,
+     -0.042596,
+     -0.050186,
+     -0.063151,
+     -0.072546,
+     -0.084243,
+     -0.101631,
+     -0.112043,
+     -0.113276,
+     -0.11294,
+     -0.113099,
+     -0.11744,
+     -0.124461,
+     -0.128438,
+     -0.126451,
+     -0.122513,
+     -0.121299,
+     -0.130452,
+     -0.145741,
+     -0.154031,
+     -0.148251,
+     -0.136293,
+     -0.127463,
+     -0.117262,
+     -0.101862,
+     -0.091577,
+     -0.082715,
+     -0.070388,
+     -0.06312
+    ],
+    [
+     -0.035759,
+     -0.039215,
+     -0.045173,
+     -0.04983,
+     -0.057018,
+     -0.068388,
+     -0.07687,
+     -0.089304,
+     -0.108213,
+     -0.120049,
+     -0.12492,
+     -0.130289,
+     -0.133651,
+     -0.13655,
+     -0.140487,
+     -0.142886,
+     -0.143651,
+     -0.144425,
+     -0.145238,
+     -0.14857,
+     -0.15363,
+     -0.155543,
+     -0.148283,
+     -0.135305,
+     -0.125963,
+     -0.115552,
+     -0.09996,
+     -0.089432,
+     -0.079522,
+     -0.065509,
+     -0.057222
+    ],
+    [
+     -0.030083,
+     -0.036083,
+     -0.046231,
+     -0.053417,
+     -0.060731,
+     -0.07175,
+     -0.080083,
+     -0.093228,
+     -0.11341,
+     -0.126333,
+     -0.133556,
+     -0.142574,
+     -0.148,
+     -0.150111,
+     -0.152296,
+     -0.153833,
+     -0.156472,
+     -0.160407,
+     -0.162583,
+     -0.162056,
+     -0.160324,
+     -0.158,
+     -0.149735,
+     -0.136043,
+     -0.126333,
+     -0.11575,
+     -0.099981,
+     -0.08925,
+     -0.078559,
+     -0.063293,
+     -0.05425
+    ],
+    [
+     -0.024,
+     -0.029897,
+     -0.039978,
+     -0.047537,
+     -0.057694,
+     -0.07345,
+     -0.084923,
+     -0.100221,
+     -0.123305,
+     -0.138071,
+     -0.146495,
+     -0.157075,
+     -0.163485,
+     -0.166193,
+     -0.169161,
+     -0.171306,
+     -0.175236,
+     -0.181082,
+     -0.184034,
+     -0.181022,
+     -0.17492,
+     -0.16983,
+     -0.160653,
+     -0.146056,
+     -0.135799,
+     -0.124819,
+     -0.10851,
+     -0.097318,
+     -0.085545,
+     -0.068585,
+     -0.058522
+    ],
+    [
+     -0.015083,
+     -0.02029,
+     -0.029405,
+     -0.037065,
+     -0.051896,
+     -0.075564,
+     -0.092262,
+     -0.110994,
+     -0.138648,
+     -0.156253,
+     -0.166147,
+     -0.178503,
+     -0.186099,
+     -0.190086,
+     -0.194931,
+     -0.198389,
+     -0.204072,
+     -0.2124,
+     -0.216336,
+     -0.210024,
+     -0.198112,
+     -0.189327,
+     -0.178803,
+     -0.162778,
+     -0.151636,
+     -0.139974,
+     -0.122717,
+     -0.110738,
+     -0.097233,
+     -0.077573,
+     -0.065886
+    ],
+    [
+     -0.009667,
+     -0.014636,
+     -0.023457,
+     -0.031333,
+     -0.048855,
+     -0.077043,
+     -0.09675,
+     -0.11762,
+     -0.148176,
+     -0.167583,
+     -0.178343,
+     -0.191731,
+     -0.200083,
+     -0.205306,
+     -0.212046,
+     -0.21675,
+     -0.223472,
+     -0.233157,
+     -0.237583,
+     -0.229213,
+     -0.213694,
+     -0.202583,
+     -0.190997,
+     -0.173707,
+     -0.16175,
+     -0.149404,
+     -0.13117,
+     -0.118417,
+     -0.103429,
+     -0.081478,
+     -0.068417
+    ],
+    [
+     -0.008028,
+     -0.014689,
+     -0.026269,
+     -0.035704,
+     -0.05253,
+     -0.079219,
+     -0.098108,
+     -0.119767,
+     -0.151823,
+     -0.172194,
+     -0.183129,
+     -0.196714,
+     -0.205627,
+     -0.214164,
+     -0.226302,
+     -0.234235,
+     -0.241103,
+     -0.250222,
+     -0.254049,
+     -0.244435,
+     -0.226863,
+     -0.214247,
+     -0.200734,
+     -0.180506,
+     -0.166525,
+     -0.152215,
+     -0.131076,
+     -0.116182,
+     -0.098007,
+     -0.071247,
+     -0.055309
+    ],
+    [
+     -0.006778,
+     -0.016253,
+     -0.032402,
+     -0.044315,
+     -0.05931,
+     -0.082388,
+     -0.09917,
+     -0.121588,
+     -0.155386,
+     -0.176898,
+     -0.187948,
+     -0.201672,
+     -0.211373,
+     -0.225127,
+     -0.245775,
+     -0.258775,
+     -0.265656,
+     -0.273546,
+     -0.276293,
+     -0.265177,
+     -0.245171,
+     -0.23067,
+     -0.214156,
+     -0.189245,
+     -0.172022,
+     -0.15456,
+     -0.128756,
+     -0.110429,
+     -0.087194,
+     -0.052809,
+     -0.032312
+    ],
+    [
+     -0.00675,
+     -0.017778,
+     -0.036435,
+     -0.049667,
+     -0.063355,
+     -0.083951,
+     -0.09925,
+     -0.121886,
+     -0.156392,
+     -0.178417,
+     -0.189725,
+     -0.203886,
+     -0.21425,
+     -0.230938,
+     -0.25633,
+     -0.272167,
+     -0.279167,
+     -0.286556,
+     -0.288833,
+     -0.277056,
+     -0.255944,
+     -0.2405,
+     -0.222043,
+     -0.194031,
+     -0.174667,
+     -0.155201,
+     -0.126438,
+     -0.105917,
+     -0.079327,
+     -0.039867,
+     -0.016333
+    ],
+    [
+     -0.011429,
+     -0.02135,
+     -0.038153,
+     -0.050142,
+     -0.062925,
+     -0.082257,
+     -0.09666,
+     -0.118024,
+     -0.150687,
+     -0.171843,
+     -0.184752,
+     -0.201757,
+     -0.213679,
+     -0.229119,
+     -0.252113,
+     -0.266636,
+     -0.274672,
+     -0.284124,
+     -0.287833,
+     -0.277341,
+     -0.258011,
+     -0.243426,
+     -0.223759,
+     -0.193464,
+     -0.172543,
+     -0.152003,
+     -0.121703,
+     -0.099926,
+     -0.070721,
+     -0.027196,
+     -0.001219
+    ],
+    [
+     -0.019052,
+     -0.026858,
+     -0.04013,
+     -0.049802,
+     -0.061221,
+     -0.078741,
+     -0.091812,
+     -0.110916,
+     -0.140232,
+     -0.15975,
+     -0.175201,
+     -0.196756,
+     -0.211071,
+     -0.223783,
+     -0.241749,
+     -0.253457,
+     -0.263133,
+     -0.276034,
+     -0.282185,
+     -0.274066,
+     -0.258106,
+     -0.245259,
+     -0.224029,
+     -0.190638,
+     -0.167623,
+     -0.145849,
+     -0.113827,
+     -0.090565,
+     -0.05783,
+     -0.008767,
+     0.020543
+    ],
+    [
+     -0.022583,
+     -0.029451,
+     -0.041133,
+     -0.049667,
+     -0.059815,
+     -0.075426,
+     -0.087167,
+     -0.104688,
+     -0.131728,
+     -0.150083,
+     -0.166821,
+     -0.190762,
+     -0.206333,
+     -0.217568,
+     -0.232821,
+     -0.243,
+     -0.253463,
+     -0.268074,
+     -0.2755,
+     -0.268994,
+     -0.255414,
+     -0.243833,
+     -0.221673,
+     -0.186401,
+     -0.162167,
+     -0.140025,
+     -0.107586,
+     -0.083833,
+     -0.049194,
+     0.002926,
+     0.034083
+    ],
+    [
+     -0.015173,
+     -0.024617,
+     -0.040417,
+     -0.050923,
+     -0.057667,
+     -0.06707,
+     -0.074818,
+     -0.090753,
+     -0.115995,
+     -0.133142,
+     -0.148256,
+     -0.16987,
+     -0.184287,
+     -0.197092,
+     -0.215209,
+     -0.226948,
+     -0.236045,
+     -0.248073,
+     -0.254093,
+     -0.24883,
+     -0.237632,
+     -0.227488,
+     -0.205063,
+     -0.169117,
+     -0.144781,
+     -0.124965,
+     -0.096451,
+     -0.075185,
+     -0.041514,
+     0.009567,
+     0.040145
+    ],
+    [
+     -0.001948,
+     -0.015905,
+     -0.038937,
+     -0.052994,
+     -0.054352,
+     -0.053838,
+     -0.055228,
+     -0.068874,
+     -0.091628,
+     -0.107015,
+     -0.119106,
+     -0.13626,
+     -0.148444,
+     -0.164187,
+     -0.187669,
+     -0.20234,
+     -0.208966,
+     -0.216275,
+     -0.219648,
+     -0.216101,
+     -0.20835,
+     -0.200327,
+     -0.177702,
+     -0.141106,
+     -0.116914,
+     -0.101102,
+     -0.079294,
+     -0.062333,
+     -0.03077,
+     0.017792,
+     0.046929
+    ],
+    [
+     0.006167,
+     -0.010552,
+     -0.038012,
+     -0.05425,
+     -0.052361,
+     -0.045861,
+     -0.043417,
+     -0.055704,
+     -0.076991,
+     -0.091333,
+     -0.101559,
+     -0.115951,
+     -0.12675,
+     -0.144306,
+     -0.171102,
+     -0.187583,
+     -0.192691,
+     -0.197096,
+     -0.198833,
+     -0.196296,
+     -0.190593,
+     -0.183833,
+     -0.161108,
+     -0.12416,
+     -0.100083,
+     -0.086716,
+     -0.068997,
+     -0.054667,
+     -0.024429,
+     0.022531,
+     0.05075
+    ]
+   ],
+   "profiles": {
+    "default": {
+     "points": [
+      [
+       -0.07925,
+       -0.065917,
+       0.029083,
+       0.05325,
+       0.044917,
+       0.026167,
+       -0.015083,
+       -0.011333,
+       -0.010917,
+       0.006583,
+       0.049083
+      ],
+      [
+       -0.101333,
+       -0.054667,
+       -0.005083,
+       0.007417,
+       0.008667,
+       0.024083,
+       -0.027583,
+       -0.04925,
+       -0.053417,
+       -0.065917,
+       -0.03925
+      ],
+      [
+       -0.077583,
+       -0.06675,
+       -0.045083,
+       -0.048,
+       -0.038833,
+       -0.043417,
+       -0.06425,
+       -0.059667,
+       -0.069667,
+       -0.074667,
+       -0.053417
+      ],
+      [
+       -0.032583,
+       -0.0455,
+       -0.061333,
+       -0.062583,
+       -0.0705,
+       -0.082167,
+       -0.083417,
+       -0.090083,
+       -0.09675,
+       -0.09175,
+       -0.09175
+      ],
+      [
+       -0.037167,
+       -0.047167,
+       -0.0605,
+       -0.078,
+       -0.078,
+       -0.076333,
+       -0.094667,
+       -0.120917,
+       -0.113,
+       -0.09175,
+       -0.077167
+      ],
+      [
+       -0.048,
+       -0.038417,
+       -0.069667,
+       -0.106333,
+       -0.100083,
+       -0.118417,
+       -0.10675,
+       -0.152167,
+       -0.128,
+       -0.093,
+       -0.067167
+      ],
+      [
+       -0.030083,
+       -0.053417,
+       -0.080083,
+       -0.126333,
+       -0.148,
+       -0.153833,
+       -0.162583,
+       -0.158,
+       -0.126333,
+       -0.08925,
+       -0.05425
+      ],
+      [
+       -0.009667,
+       -0.031333,
+       -0.09675,
+       -0.167583,
+       -0.200083,
+       -0.21675,
+       -0.237583,
+       -0.202583,
+       -0.16175,
+       -0.118417,
+       -0.068417
+      ],
+      [
+       -0.00675,
+       -0.049667,
+       -0.09925,
+       -0.178417,
+       -0.21425,
+       -0.272167,
+       -0.288833,
+       -0.2405,
+       -0.174667,
+       -0.105917,
+       -0.016333
+      ],
+      [
+       -0.022583,
+       -0.049667,
+       -0.087167,
+       -0.150083,
+       -0.206333,
+       -0.243,
+       -0.2755,
+       -0.243833,
+       -0.162167,
+       -0.083833,
+       0.034083
+      ],
+      [
+       0.006167,
+       -0.05425,
+       -0.043417,
+       -0.091333,
+       -0.12675,
+       -0.187583,
+       -0.198833,
+       -0.183833,
+       -0.100083,
+       -0.054667,
+       0.05075
+      ]
+     ],
+     "mesh_params": {
+      "x_count": 11,
+      "y_count": 11,
+      "mesh_x_pps": 2,
+      "mesh_y_pps": 2,
+      "algo": "bicubic",
+      "tension": 0.2,
+      "min_x": 3,
+      "max_x": 267,
+      "min_y": 3,
+      "max_y": 267
+     }
+    }
+   },
+   "progress": {
+    "current_point": 121,
+    "total_points": 121,
+    "probe_state": "completed",
+    "preheat_total_duration": 60,
+    "preheat_remaining_time": 0
+   }
+  },
+  "homing_precise_corexy": {
+   "c_a_full_phase": 12.875,
+   "c_b_full_phase": 0.375,
+   "use_calibration_origin": true,
+   "calibrated_origin": [
+    12.875,
+    0.375
+   ]
+  },
+  "heater_fan power_fan": {
+   "speed": 0.6,
+   "rpm": null
+  },
+  "adc_current_sensor I_AD": {
+   "current": 1.555,
+   "sense_resistor": 0.01,
+   "adc_reference": 3.3,
+   "voltage_offset": 0.0498,
+   "scale": 33.333
+  },
+  "power_loss_check": {
+   "initialized": 1,
+   "high_level_tick": 44,
+   "low_level_tick": 38,
+   "voltage_type": 0,
+   "power_loss_flag": 0,
+   "duty_percent": 0.5365853658536586
+  },
+  "auto_screws_tilt_adjust": {
+   "probe_step": "adjust_idle",
+   "screw_order": [
+    2,
+    3,
+    4,
+    1
+   ],
+   "probe_after_delay": 0,
+   "min_z": null,
+   "max_z": null,
+   "target_z": null,
+   "base_point1": null,
+   "base_point2": null,
+   "base_point3": null,
+   "base_point4": null,
+   "current_point": 0,
+   "need_adjusted_z": null,
+   "adjust_tolerance": 0.025,
+   "screw_adjust_threshold": 0.05
+  },
+  "gcode_macro AUTO_BED_MESH_CALIBRATE": {},
+  "gcode_macro SHAKE_Z": {},
+  "gcode_macro SENSORLESS_HOME_X": {},
+  "gcode_macro SENSORLESS_HOME_Y": {},
+  "gcode_macro SENSORLESS_HOME_Z": {},
+  "gcode_macro _HOMING_PRECISE_COREXY_ADVANCED": {},
+  "gcode_macro _CLIENT_VARIABLE": {
+   "use_custom_pos": false,
+   "custom_park_x": 30,
+   "custom_park_y": 30,
+   "custom_park_dz": 5,
+   "retract": 2,
+   "cancel_retract": 2,
+   "speed_retract": 35,
+   "unretract": 1.8,
+   "speed_unretract": 7,
+   "speed_hop": 15,
+   "speed_move": 500,
+   "park_at_cancel": false,
+   "park_at_cancel_x": 30,
+   "park_at_cancel_y": 30,
+   "move_z_max_heigh": 270.5
+  },
+  "tmc2209 extruder": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": {
+    "cs_actual": 18,
+    "stst": 1
+   },
+   "temperature": null
+  },
+  "fan": {
+   "speed": 1,
+   "rpm": 8697.594577863067
+  },
+  "heater_fan e0_nozzle_fan": {
+   "speed": 0.7,
+   "rpm": 16161.905928879192
+  },
+  "output_pin e0_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e0_filament": {
+   "filament_detected": true,
+   "enabled": true
+  },
+  "filament_entangle_detect e0_filament": {
+   "detect_factor": 1
+  },
+  "extruder_offset_calibration": {
+   "calibration_step": "idle",
+   "bed_plate_check": false,
+   "is_prehoming": false,
+   "extruder_last_xyz_result": null,
+   "extruder1_last_xyz_result": null,
+   "extruder2_last_xyz_result": null,
+   "extruder3_last_xyz_result": null,
+   "extruder_nozzle_clean": false,
+   "extruder1_nozzle_clean": false,
+   "extruder2_nozzle_clean": false,
+   "extruder3_nozzle_clean": false
+  },
+  "probe": {
+   "name": "inductance_coil extruder",
+   "last_query": false,
+   "last_z_result": 0.024166666698253847,
+   "status": "idle"
+  },
+  "power_loss_check e0": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "tmc2209 extruder1": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": {
+    "cs_actual": 4,
+    "stst": 1
+   },
+   "temperature": null
+  },
+  "fan_generic e1_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "heater_fan e1_nozzle_fan": {
+   "speed": 0.45,
+   "rpm": 11340.023053821942
+  },
+  "output_pin e1_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e1_filament": {
+   "filament_detected": true,
+   "enabled": true
+  },
+  "filament_entangle_detect e1_filament": {
+   "detect_factor": 1
+  },
+  "power_loss_check e1": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "tmc2209 extruder2": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": null,
+   "temperature": null
+  },
+  "fan_generic e2_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "heater_fan e2_nozzle_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "output_pin e2_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e2_filament": {
+   "filament_detected": false,
+   "enabled": true
+  },
+  "filament_entangle_detect e2_filament": {
+   "detect_factor": 1
+  },
+  "power_loss_check e2": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "tmc2209 extruder3": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": null,
+   "temperature": null
+  },
+  "fan_generic e3_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "heater_fan e3_nozzle_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "output_pin e3_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e3_filament": {
+   "filament_detected": false,
+   "enabled": true
+  },
+  "filament_entangle_detect e3_filament": {
+   "detect_factor": 1
+  },
+  "power_loss_check e3": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "filament_feed left": {
+   "extruder1": {
+    "module_exist": true,
+    "filament_detected": true,
+    "disable_auto": false,
+    "channel_state": "load_finish",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "load_finish"
+   },
+   "extruder0": {
+    "module_exist": true,
+    "filament_detected": true,
+    "disable_auto": false,
+    "channel_state": "load_finish",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "load_finish"
+   }
+  },
+  "filament_feed right": {
+   "extruder2": {
+    "module_exist": true,
+    "filament_detected": false,
+    "disable_auto": false,
+    "channel_state": "wait_insert",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "unload_finish"
+   },
+   "extruder3": {
+    "module_exist": true,
+    "filament_detected": false,
+    "disable_auto": false,
+    "channel_state": "wait_insert",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "unload_finish"
+   }
+  },
+  "gcode_macro _FILAMENT_FEED_VARIABLE": {
+   "module_sequence": [
+    "left",
+    "left",
+    "right",
+    "right"
+   ],
+   "channel_sequence": [
+    1,
+    0,
+    0,
+    1
+   ]
+  },
+  "idle_timeout": {
+   "state": "Printing",
+   "printing_time": 40931.028690101
+  },
+  "filament_parameters": {},
+  "defect_detection": {
+   "main_enable": true,
+   "sen_high_factor": 0.2,
+   "sen_low_factor": 0.5,
+   "clean_bed": {
+    "enable": true,
+    "check_window": 3,
+    "sensitivity": "low"
+   },
+   "noodle": {
+    "enable": true,
+    "check_window": 10,
+    "sensitivity": "low"
+   },
+   "residue": {
+    "enable": false,
+    "check_window": 10,
+    "sensitivity": "low"
+   },
+   "nozzle": {
+    "enable": false,
+    "sensitivity": "low"
+   }
+  },
+  "motion_report": {
+   "live_position": [
+    46.851513765163396,
+    54.50797716079076,
+    21.000244186518334,
+    290008.0674754379
+   ],
+   "live_velocity": 83.55712611679095,
+   "live_extruder_velocity": 2.7734990724740305,
+   "steppers": [
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3",
+    "stepper_x",
+    "stepper_y",
+    "stepper_z"
+   ],
+   "trapq": [
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3",
+    "toolhead"
+   ]
+  },
+  "query_endstops": {
+   "last_query": {}
+  },
+  "system_stats": {
+   "sysload": 0.296875,
+   "cputime": 108946.425049381,
+   "memavail": 679076
+  },
+  "manual_probe": {
+   "is_active": false,
+   "z_position": null,
+   "z_position_lower": null,
+   "z_position_upper": null
+  },
+  "machine_state_manager": {
+   "main_state": 1,
+   "action_code": 0
+  },
+  "toolhead": {
+   "homed_axes": "xyz",
+   "axis_minimum": [
+    0,
+    0,
+    -6,
+    0
+   ],
+   "axis_maximum": [
+    271,
+    335,
+    275,
+    0
+   ],
+   "print_time": 519477.89649827883,
+   "stalls": 28,
+   "estimated_print_time": 519475.76891350833,
+   "extruder": "extruder",
+   "position": [
+    52.29938054926823,
+    71.8000721310342,
+    21.594052336901495,
+    290009.7161926468
+   ],
+   "max_velocity": 500,
+   "max_accel": 10000,
+   "minimum_cruise_ratio": 0.5,
+   "square_corner_velocity": 8
+  },
+  "extruder": {
+   "temperature": 215,
+   "target": 215,
+   "power": 0.4856761791664784,
+   "can_extrude": true,
+   "extruder_index": 0,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": -1.5,
+   "activating_move": false,
+   "state": "ACTIVATE",
+   "park_pin": false,
+   "active_pin": true,
+   "grab_valid_pin": true,
+   "real_extruder_stats": [
+    "extruder",
+    0
+   ],
+   "extruder_offset": [
+    0.2893805492682322,
+    0.05007213103419872,
+    0
+   ],
+   "switch_count": 8034,
+   "retry_count": 11,
+   "error_count": 0,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.02,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  },
+  "extruder1": {
+   "temperature": 99,
+   "target": 65,
+   "power": 0,
+   "can_extrude": false,
+   "extruder_index": 1,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": -10,
+   "activating_move": false,
+   "state": "PARKED",
+   "park_pin": true,
+   "active_pin": false,
+   "grab_valid_pin": false,
+   "real_extruder_stats": [
+    "extruder",
+    0
+   ],
+   "extruder_offset": [
+    0.2227449428149093,
+    0.023939549709609764,
+    0.09716666666930118
+   ],
+   "switch_count": 10678,
+   "retry_count": 0,
+   "error_count": 0,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.02,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  },
+  "extruder2": {
+   "temperature": 30,
+   "target": 0,
+   "power": 0,
+   "can_extrude": false,
+   "extruder_index": 2,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": -3.5,
+   "activating_move": false,
+   "state": "PARKED",
+   "park_pin": true,
+   "active_pin": false,
+   "grab_valid_pin": false,
+   "real_extruder_stats": [
+    "extruder",
+    0
+   ],
+   "extruder_offset": [
+    0.12872129172270164,
+    -0.00005294889598417285,
+    0.16733333333849343
+   ],
+   "switch_count": 4979,
+   "retry_count": 11,
+   "error_count": 0,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.021063,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  },
+  "extruder3": {
+   "temperature": 30,
+   "target": 0,
+   "power": 0,
+   "can_extrude": false,
+   "extruder_index": 3,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": 0,
+   "activating_move": false,
+   "state": "PARKED",
+   "park_pin": true,
+   "active_pin": false,
+   "grab_valid_pin": false,
+   "real_extruder_stats": [
+    "extruder",
+    0
+   ],
+   "extruder_offset": [
+    -0.2893805492682322,
+    -0.05007213103419872,
+    0.12400000000783118
+   ],
+   "switch_count": 7296,
+   "retry_count": 3,
+   "error_count": 0,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.022058,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  }
+ }
+}

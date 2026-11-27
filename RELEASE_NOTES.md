@@ -549,7 +549,186 @@ Chamber temperature is still not shown. The printer reports two readings that mi
 neither has been confirmed.
 
 
-0.8.0
+2026.11.0
+
+### New version numbers
+SnapCon now numbers its releases by date (calendar versioning) instead of 0.x. This release was
+going to be 0.8.0; it is **2026.11.0**, with everything that was planned for 0.8.0.
+
+The three numbers are **year . month . fix**, with no leading zeros:
+- **2026.11.0** — the release for November 2026.
+- **2026.11.1**, **2026.11.2** — fixes to that release, nothing new.
+- **2026.12.0** — the next monthly release; the last number starts again at 0.
+
+The number tells you how recent your SnapCon is at a glance. It says nothing about how big a release
+is. The update check added in this release (see "Update check" below) counts 2026.11.0 as newer than
+any 0.x number. SnapCon 0.7.2 and earlier have no update check, so they do not announce this release.
+
+### Remote Access: cloudflared updated to 2026.10.5 (security)
+Remote Access now runs cloudflared **2026.10.5** instead of 2026.7.2. Versions before 2026.10.2
+trust eight certificates that Cloudflare announced in October 2026 as compromised, which could let
+someone impersonate a service the tunnel connects to.
+
+There is nothing to do beyond updating SnapCon. The next time Remote Access starts, SnapCon
+downloads the new cloudflared once and checks it against the checksums Cloudflare published before
+running it. The remote link drops for a moment while the tunnel reconnects.
+
+### Web-server libraries updated (security)
+The downloads and installs from source now use Express 4.22.3 with current versions of the libraries it
+builds on (`body-parser`, `proxy-addr`, `qs`). The versions used before had published security
+advisories; these have none. A Docker image gets the current versions each time it is built, so
+rebuild yours to pick them up.
+
+### Every upload is checked on the printer before it prints
+After a printer accepts a file, SnapCon now reads it back before starting it or showing it as Loaded:
+- On Snapmaker U1, Creality, Klipper and FlashForge printers running Moonraker, it checks that the file
+  is there under its exact name, with the same size, and that its beginning, middle and end match what
+  was sent — a sample of the file, not every byte. The upload then reads **Verified on {printer} (size and
+  sampled content)**. SnapCon also checks that the file on your computer did not change while it was being
+  sent: if it did, the upload is **not confirmed** — "the file changed on this computer while it was being
+  sent" — and if it cannot be checked again, it is not confirmed either; nothing is started or Loaded.
+- On FlashForge's own firmware, which lists names only, and on Bambu Lab printers, which report a size,
+  the upload reads **Sent — {printer} lists it**: the printer has it, but its content could not be compared.
+- If the file is not on the printer, or its copy cannot be checked, the upload shows **Not confirmed**, in
+  amber, and nothing is started. If the printer holds a different file under that name, the upload has
+  **failed**, nothing is started, and the printer's file is left as it is.
+- **Every file you send is uploaded.** "Skip uploading a file the printer already has" is gone: a
+  printer's copy can only be sampled — Moonraker offers no checksum — so a matching sample could hide an
+  edit elsewhere in the file and print the old one. Sending a file the printer already has now takes as
+  long as any upload (about 2 MB/s on a Snapmaker U1; a 25 MB file, about 13 s). A
+  `"skipIdenticalUploads"` left in `config.json` is ignored.
+- **"Replace a file on the printer that has the same name"** (formerly "Overwrite a file on the printer
+  when the content differs") is still on by default. Turned off, SnapCon now sends a file only when the
+  printer is known *not* to have that name: if it has one — even an identical one, which SnapCon cannot
+  prove — or SnapCon cannot tell (its file list cannot be read; a FlashForge on its own firmware lists only
+  its ten newest files), the send is refused and nothing is sent. Before, a copy SnapCon could not
+  compare was overwritten. With it off:
+  - re-printing a file sent before is refused (printers keep what they printed) — delete the printer's
+    copy, rename, or turn replacing on;
+  - a queue holding several copies of one file prints the first, and the rest wait for you;
+  - a FlashForge on its own firmware holding ten or more files refuses every send;
+  - files from your slicer and files waiting for a busy printer follow the same rule: one whose name
+    the printer has fails (nothing is sent); if the printer cannot say, it waits and SnapCon asks again
+    a minute later.
+  A same-named file in a printer subfolder no longer counts — uploads land in the top folder. On Bambu Lab
+  printers, only a clear "no such file" answer counts as the file not being there; an answer SnapCon
+  cannot read is treated as "can't tell".
+
+The check takes a moment after the upload; the card says "Checking the printer's copy" meanwhile.
+Bambu Lab: the check has been tested in software only; it has not yet been tried on a real printer.
+
+### A Loaded file is checked on the printer before it prints
+A file waiting on a printer ("Loaded") is now checked on that printer — at its exact name and the size
+SnapCon sent — a minute after SnapCon starts, every 15 minutes after that, and when you press Print on
+its card. The check reads the printer's file list; it does not read the file's content again.
+- **No longer on the printer:** the Loaded badge goes, the card says so, and **Dismiss** clears it.
+  Nothing is sent again by itself.
+- **Changed:** a different file now has that name on the printer (another size). Print is refused, and
+  the card says why.
+- **Unable to verify:** the printer could not be asked (offline, or it did not answer). Print is refused
+  until a check succeeds — **Check again** on the card asks once more. An offline printer is never
+  reported as missing its file.
+- Printing a file you pick from the printer's own file list is unaffected: it does not depend on the
+  Loaded file of the same name.
+- A Loaded file now stays with its printer when printers are reordered in Settings.
+
+What the check can and cannot see:
+- **It protects the card's Print of its Loaded file**, and nothing else. A file you print from the
+  printer's own file list, or a print started on the printer or from another program, is not checked.
+- **It compares the name and the size SnapCon sent**, not the content. A file replaced on the printer by
+  one of exactly the same size is not noticed.
+- **A printer that rewrites every upload** (Moonraker's "object processing", `enable_object_processing`,
+  turned on) changes its copy by design, so SnapCon cannot use the size to tell whether the file was
+  replaced. On such a printer the check confirms only that *a* file of that name exists there — not that
+  it is the file SnapCon sent, and not that it is intact. It is off on the printers SnapCon has been
+  tested on.
+
+FlashForge printers on their own firmware list only their ten newest files; a Loaded file older than
+those shows "Unable to verify" and can still be printed from the printer's file list. This check has been
+tested in software, on a virtual printer, and on a Snapmaker U1: a Loaded file found present; one found
+changed, and its Print refused; and one found missing, and its Print refused.
+
+### Files waiting for a busy printer are kept, in order, and survive a restart
+A file sent to a printer that is busy — Upload with "upload while printing" off, or a file pushed from
+your slicer with SnapCon's command-line hook — now waits on disk until the printer is free:
+- **Nothing is lost on a restart.** Each waiting file is saved before SnapCon answers that it is queued.
+  Files pushed from a slicer are kept in SnapCon's `data/deferred-files` folder until they are sent.
+- **First in, first out, per printer**, several at a time — each with its own **Cancel** and the time it
+  started waiting. A second file of the same name for the same printer is refused instead of replacing the
+  first.
+- **One transfer per printer at a time.** While a printer is receiving a file, another upload to it says
+  it is receiving another file and is refused; queued files and the print queue wait their turn.
+- **The file sent is the file you chose.** If it changes or disappears while it waits, it is not sent. A
+  file sent from the Library keeps its link to its Model while it waits, across a restart too.
+  If its folder (a network share) does not answer for a while, the file keeps waiting — SnapCon asks
+  again a minute later — and other files for that printer, and its print queue, go ahead meanwhile.
+- **If SnapCon stops in the middle of sending,** it checks the printer afterwards. A file that arrived
+  whole becomes Loaded; anything else waits for you — **Send again**, **Check again** or **Cancel**.
+  SnapCon never resends, overwrites, deletes or prints anything by itself.
+- A printer removed from Settings keeps its waiting files (admins see them above the fleet); they are
+  sent only if a printer with the same ID comes back.
+- **If SnapCon's list of waiting files is damaged,** it is restored from its backup, every file in it waits
+  for you, and none of the kept files is deleted until an admin has looked and acknowledged. Files that no
+  waiting send needs any more are moved aside, never deleted on their own; admins see how many there are
+  above the fleet and can delete them there.
+
+Limits for files pushed from a slicer: 512 MB each and 4 GB in total by default, and SnapCon keeps
+256 MB of disk free. They can be changed in `config.json` under `"deferredSends"`
+(`"maxFileMB"`, at most 2048; `"maxTotalMB"`; `"freeMarginMB"`). Downgrading to an earlier version
+drops files still waiting. Tested in software, on a virtual printer, and on one Snapmaker U1: a file sent
+during a short print waited, was delivered when the print ended, and checked out. Not yet on other printers,
+or through a restart on a physical printer.
+
+### The command-line hook can wait for the printer's answer
+Until now the command-line hook (and the Orca integration built on it) exited as soon as SnapCon
+**accepted** a file — which is not the same as the printer having it. Add `--wait` to have it follow the
+transfer to its end:
+
+    SnapCon --load "Part.gcode" --printer "U1 White" --wait [seconds]
+
+- It prints SnapCon's first answer as before, then the final result on its own line (`SnapCon result:
+  {…}`), with progress and one plain sentence on the error output — at most a line every 10 seconds.
+- **Exit codes:** `0` delivered — *verified* (the printer's copy has the same size, and its start,
+  middle and end match the file: a sampled check, not every byte) or *acknowledged* (checked by size or
+  name only; the result says which); `1` failed, cancelled, or refused
+  when sent; `3` still waiting or sending when the time ran out (default 300 s, at most 1800); `4` not
+  known — the printer's copy could not be confirmed, or SnapCon no longer knows the transfer or did not
+  answer by the end.
+- If SnapCon restarts while it waits, it keeps asking and picks the transfer up again when SnapCon is back.
+- **Without `--wait`, nothing changes**: same output, same exit codes.
+
+Known limits of the hook in this release:
+- **Sending to SnapCon on another computer (`--snapcon`)**, as the Orca integration does when Orca runs on
+  a different machine: the hook reads the file and sends its bytes as they are on disk at that moment. The
+  check that the file did not change while it was sent (see above) covers files SnapCon reads itself, not
+  the copy on the slicer's computer. If another program changes the file while it is being sent, SnapCon
+  does not notice; if it is shortened, the hook can wait without end. Orca finishes writing the file before
+  it runs the hook and waits for it, so Orca itself does not do this.
+- **SnapCon's first answer has no time limit.** If SnapCon takes the file and then stops answering, the
+  hook waits — with or without `--wait` — until it is stopped. Stop it, then check the printer's card in
+  SnapCon before sending again.
+- **Orca and `--wait`:** leave `--wait` out of Orca's post-processing script by default. Without it, exit code
+  `0` means SnapCon accepted the file, not that it was delivered. With it, Orca waits until the transfer ends or
+  the time runs out, and exit code `3` means the transfer is still waiting or sending, not necessarily that it
+  failed: Orca may report the export as failed while SnapCon keeps the transfer and delivers it later. Exit code
+  `1` is different, and doesn't always mean the same thing. If SnapCon refused the send or couldn't be reached,
+  such as with an unknown printer name, no transfer was created and nothing appears on a card. With `--wait`, it
+  can also mean a transfer SnapCon had accepted then failed or was cancelled: the card says what happened, and a
+  transfer cancelled late may already have reached the printer. In neither case does SnapCon send the file again
+  by itself. Orca may report only that the script failed and its error code, not SnapCon's reason; to see the
+  reason, run the command in a terminal. Before retrying, look at the printer's card in SnapCon, especially when
+  sending the same file name; a second send of a name that is already waiting is refused.
+- **Orca's Export G-code gives its output name as a full path** (`SLIC3R_PP_OUTPUT_NAME`). SnapCon refuses
+  an `--outputname` containing a path (`Bad output name`), so a script passing that value straight through
+  fails on Export. Pass only the file name: the README's Orca example now shows how.
+
+Each transfer's outcome is kept for 24 hours (at most 1,000), across restarts, in `data/transfer-results.json`;
+both can be changed in `config.json` under `"transferResults"` (`"retentionHours"`, 1–720; `"maxCount"`,
+100–10,000). **Send again** on a card is a new transfer with its own ID, so a command waiting on the first
+attempt gets that attempt's outcome, never a later one's. A file pushed with `--snapcon` to SnapCon on
+another machine can be followed the same way only while logins are off there, as pushing itself. Tested in
+software, against a virtual printer, and with Orca on Windows sending to a virtual printer (accepted, delivered,
+timed out while busy, and refused); not yet with physical printers.
 
 ### "Upload" now always means upload
 The Upload button used to do two different things depending on the printer, with nothing on screen
@@ -566,6 +745,13 @@ Upload now always means upload. Scheduling a print is a separate, explicit choic
   else happens. Turn **Upload into queue** on to get the old behaviour back.
 - It applies **always**, not only when the printer happens to be mid-print. A setting that only
   sometimes does what its label says is the thing this replaces.
+- **An upload changes nothing on the printer but its files.** Uploading, and a file delivered when a busy
+  printer frees up, used to also send the printer's toolhead map and print options (auto-level, flow
+  calibration, timelapse) if it had any, including during a print. These are now sent only when a print starts.
+  A map you chose, and options you ticked, with the upload stay with the Loaded file and are used by its
+  **Print** on the card; an option you left unticked follows the printer's default. They are not sent if you
+  start the file from the printer's own screen or file list. If a saved map cannot be read, **Print** is refused
+  and says so; upload the file again or eject it.
 
 ### Uploading to a printer that is already printing
 - **Allow uploading while a printer is printing** (Settings → Sending prints) — **on by default**.
@@ -575,15 +761,6 @@ Upload now always means upload. Scheduling a print is a separate, explicit choic
 - **A file can never be sent over the one being printed.** Moonraker replaces a same-named file in
   place while Klipper is streaming the running job out of it, so SnapCon refuses that outright on
   every path: the card, the printer-files dialog and the queue.
-
-### Sending a file the printer already has
-- **Skip uploading a file the printer already has** — on by default. SnapCon compares the exact byte
-  size, then samples three windows of the copy on the printer and compares them with your file. A
-  65MB job was confirmed in 309ms, moving 192KB instead of 65MB.
-- Anything it cannot confirm is uploaded as usual. The check can only ever skip work, never block it.
-- **Overwrite a file on the printer when the content differs** — on by default, so re-slicing and
-  re-sending under the same name keeps working. Turn it off and SnapCon refuses to replace a file
-  whose content differs, and asks you to rename instead.
 
 ### Send to printers: only compatible printers are pre-ticked
 Opening Send with a file sliced for one printer family used to tick every idle printer, other brands
@@ -669,16 +846,166 @@ and never silently prints a different one.
 - **A file sent now and started later** — uploaded to a busy printer and started from it afterwards —
   is recorded in the print history as exactly what was sent.
 
-### Known limitations
-- Starting a Bambu plate other than plate 1 has not yet been tested on physical hardware (see above).
-- Existing translation files are not overwritten on upgrade. If your installation already has its
-  own Spanish file (or a customised one), text added since — the Library included — shows in English
-  until that file is updated or replaced. A fresh installation is fully translated.
-- A send that is still waiting for a busy printer (not yet transferred) is forgotten if SnapCon
-  restarts before the printer frees up. Sends already on the printer keep their Library identity.
+### Uploads
+- **Every upload ends.** A printer that stops reading, or takes the whole file and never answers, no longer
+  leaves an upload running for ever. It ends as sent, failed or **unknown**, and an unknown upload never
+  starts a print. The time limits can be changed in `config.json` under `"uploadTimeouts"`.
+- **Cancel upload** stops a file while it is still sending, from the card or a Send row. Every tab and device
+  shows the upload strip and can cancel it, and it survives a page reload.
+- **The Send dialog says "waiting to be sent"** for a file accepted but not yet sent. It says "Done" only when
+  every file was sent.
 
-Unreleased
+### Printers
+- **Delete a file from a printer** in the printer-files dialog, on printers that support it. It asks first,
+  naming the file.
+- **Filament material on a U1 slot** can now be set, not just its colour. A slot with no material set starts on
+  Generic PLA.
+- **Several colors can share one toolhead** when sending a print. This used to be refused.
+- **Auto-level on FlashForge 5M printers** on their own firmware: before a print, from the job's choice or the
+  printer's default. Tested on a 5M PRO.
+- **FlashForge print starts** get 15 seconds to show, not 2.5, so a healthy start is no longer reported as failed.
+- **Rediscover** (Settings → Printers) checks saved U1 printers for a changed address, serial or name, and offers
+  to update them.
+- **Discover** scans only the default network adapter's subnet, not VPN and virtual adapters.
+- **FlashForge printers on ZMOD or Forge-X:** file sync now works. Camera snapshots from ZMOD printers now work.
+  An AD5X on ZMOD can be allowed to start prints over Moonraker, per printer; this is unverified, so it stays off
+  by default.
+- **Fixed:** one unreachable printer no longer hangs the whole Firmware tab.
+
+### Fleet and interface
+- **A new top bar**, and status pills that filter the fleet.
+- **A new printing card** in Full view, now the default. **Classic** is still in Settings → View → Printer card
+  layout.
+- **Compact view** has its own card.
+- **Offline cards** are clear about it and say when the printer was last reached. Preheat is disabled, with the
+  reason, on a printer that is offline, updating or rebooting.
+- **File names keep their extension** wherever they are shown.
+- **Keyboard focus** survives a card update, and List view rows show feedback from an action.
+- **The Library** has a folder tree beside the grid with Rescan, and file type tags on model cards.
+- The light theme's remaining gaps are closed, danger buttons have a real outline, and scrollbars match the theme.
+
+### Queue
+- **A printer that goes idle without reporting how its print ended** no longer leaves the item "printing" for
+  ever: the queue asks a person. **Mark as completed** records a print you saw finish, and Resume is no longer
+  offered where it could only fail.
+- **A queue dispatch's upload** shows on the card and can be cancelled.
+- **Clear** stops a dispatch that has not started its print, instead of letting it start anyway.
+
+### Virtual printers
+- **Enable virtual printers** (Settings → General) is off by default. While it is off, virtual printers are left
+  out of the fleet and stay saved in `config.json`.
+- **Virtual U1** is a new printer type that runs a simulated U1 on this machine, for trying SnapCon without a
+  real printer. The Simulator is now shown as "Test printer".
+
+### Reliability and upgrades
+- **An unreachable network share no longer freezes SnapCon.** File access that may touch a share now runs apart
+  from the server, so printers and pages keep working while it is down.
+- **The audit and sync databases are backed up nightly**, the way the Library is.
+- **Installed translations now receive new strings** at startup, and their existing values are never changed.
+
 ### Update check
 - SnapCon now checks GitHub once a day for a newer release and tells admins in the top bar and in
   Settings → General → Updates. It is on by default; the request carries only SnapCon's version
   (nothing about your printers or files), and the "Check for updates" switch turns it off.
+
+### Docker: settings now live in a mounted folder (action needed to use Queue Management)
+If you run SnapCon with Docker, `config.json` is now kept in a mounted folder (`./config`) instead of
+being mounted as a single file.
+
+- **Why:** switching Queue Management on or off, and changing a printer's pool, now save the settings by
+  writing a complete new file and swapping it in, so a crash or power cut cannot leave half a settings
+  file. A file mounted on its own cannot be swapped, so on the old layout those three actions fail (the
+  settings are left untouched, and the message says why).
+- **Existing installations keep running** on their current compose file after an image update. Everything
+  else still saves. To use those three actions, move to the new layout: stop SnapCon, copy `config.json`
+  into a new `config` folder, switch to the new compose file, start again. The steps are in
+  `docs/docker-config-migration.md`.
+- **SnapCon refuses to start rather than run on default settings** if the new layout is used but an
+  existing installation's `config.json` was not copied into the folder, or the copy there cannot be used
+  (damaged, empty, or not a file). The file is left exactly as it is. Default settings have user
+  accounts switched off, so starting anyway could have opened an installation that required sign-in. The
+  log says what to do.
+- **New installations** follow the quick start in `docker-compose.yml`; nothing extra is needed.
+
+Tested on Docker Engine on Linux. Not tested on Docker Desktop (macOS, Windows), rootless Docker, or
+settings folders on network storage.
+
+### Fleet utilization (new)
+- **A Utilization page**, opened from the top bar, shows how the fleet's time was spent over 7, 30 or 90
+  days: printing, idle, paused, in error, and unreachable from SnapCon, per day and per printer, with CSV
+  export.
+- **Four headline figures:** utilization, average print time per printer per day, time lost to failed
+  prints, and paused and error time. Job success rate is shown with how many outcomes are actually known.
+- **Only what SnapCon saw counts as confirmed.** Estimated time is marked as an estimate, and time
+  SnapCon was not running is shown as not recorded, never filled in.
+- **Farm hours** (count only your working hours) are set in `config.json` under `utilization.farmHours`;
+  there is no Settings option yet.
+- **Reading each printer's own job history** to fill in outcomes is off by default
+  (`utilization.readPrinterHistory` in `config.json`).
+- Recording starts when you install this release.
+
+### Delete files from the File Browser
+- **Delete** one file or a selection. **Move to Trash** is the default: the file is kept for 30 days in a
+  trash folder inside the G-code folder and can be restored. Nothing empties the trash automatically yet.
+- **Delete permanently** is offered only to a signed-in Admin, and only while user accounts are switched
+  on. It asks twice.
+- **A file SnapCon still needs is not deleted:** one being uploaded, waiting to be sent, or named by a
+  queue item.
+- **Nothing is overwritten:** a restore never replaces a file that has since taken the same name. On
+  storage that cannot guarantee this, restore is refused and the file stays in the trash.
+- If the storage stops answering part-way, the result is reported as unknown, not as done.
+
+### Queue: saving and recovery
+- **Queue saves are flushed to disk**, and so is the folder they are in where the system allows it, so a
+  finished save is far less likely to be lost in a crash. This has not been tested against a real power
+  loss, and Windows cannot flush a folder.
+- **A queue file that cannot be read is never guessed at or replaced.** SnapCon keeps it, stops queue
+  changes, and asks an Admin to decide; that state now survives a restart. Starting the queue empty is an
+  explicit Admin action, and the files that were in place are kept under new names.
+- **Switching Queue Management on or off, and changing a printer's pool, now either happen completely or
+  not at all.** If the settings cannot be saved, the queue is put back and the message says what is on
+  disk.
+- **The command-line mode** (`--load`) no longer touches the queue files of a running SnapCon.
+- How recovery, reset and rollback work: `docs/queue-recovery.md`.
+
+### Design refresh (preview)
+A new look you can try without giving up the current one. Switch it on in **Settings → View → Design
+refresh (preview)**. It applies at once, in this browser only, and you can switch back to the current
+design at any time.
+- **Three themes** from the theme button: Day, Night and Awareness.
+- **Clearer buttons:** the main action stands out. E-Stop has its own danger style: it is filled, where
+  Cancel and the other destructive actions are outlined.
+- **Errors you cannot miss:** a printer in Error gets a red outline and a moving light until someone
+  clicks its card or opens its Health page.
+- **Printer cards:** the action buttons line up along the bottom of every card. In Full and Compact,
+  spools are laid out two by two (1 and 2 on the left, 3 and 4 on the right on a Snapmaker U1). Camera
+  view shows no spools, as today.
+
+This is a preview: some screens are only recoloured, and details may change.
+
+Also fixed, in both designs: a card's fourth action no longer runs off the card, and number steppers keep
+their value visible.
+
+The theme icons are from Lucide. Third-party notices are in `THIRD_PARTY_NOTICES.md`, which is in the
+Docker image and the downloads; every installation also shows it at `/THIRD_PARTY_NOTICES.md`.
+
+### Fleet, Health and files
+- **One unreachable printer no longer slows the whole Fleet page.** A printer last seen offline is shown
+  from that result at once and re-checked in the background. It can be switched off with
+  `"fleetFastOffline": false` in `config.json`.
+- **The Health page always gets an answer.** It used to wait forever for an offline FlashForge printer,
+  or one on stock firmware. It now says the printer is offline, or that its firmware has no health data.
+- **File search stays in the folder you are in.** Searching inside a folder used to list matches from
+  every folder. It now covers that folder and the ones below it; from the top it still covers everything.
+- **Energy cost uses each printer's power draw** (Settings → Printers → Power draw). It used to assume
+  1,000 W per printer, several times too high for most printers. No energy cost is shown when the power
+  draw, the rate or the print time is unknown.
+- **Fixed:** saving Settings no longer drops the `utilization` and `openeiKey` entries set by hand in
+  `config.json`.
+- **Fixed:** the command-line upload to a remote SnapCon no longer crashes or hangs when the file
+  disappears or the connection drops while sending.
+
+### Known limitations
+- Docker: the three Queue Management actions above need the new settings folder layout; see
+  `docs/docker-config-migration.md`.
+- Starting a Bambu plate other than plate 1 has not yet been tested on physical hardware (see above).

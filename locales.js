@@ -274,6 +274,63 @@ function syncCanonicalEnglish(localesDir, bundledDir) {
   // exist yet — ordinary first-run seeding, not worth a log line.
 }
 
+// Every other bundled locale: add what the installed copy lacks, change
+// nothing it has. seedDefaultLocales copies a translation once and never again,
+// so without this a string added to SnapCon after that first copy never
+// reached an existing install — it showed in English there for good, however
+// complete the bundled translation was.
+//
+// A key that's missing can't be a translator's choice: the Language Editor
+// edits values of English's keys and has no way to remove one (an empty value
+// is how "not translated" is stored). So adding it never undoes anything, and
+// every value already there — translated, empty, or a key English no longer
+// has — is kept exactly as it is. A wording change to an existing key does
+// not travel this way; it needs a new key name.
+//
+// A runtime file that can't be read or parsed is left alone (its own problem,
+// reported by scanLocales), as is a key whose place in the runtime file is
+// taken by a plain value instead of a section. Written only when something
+// was added, atomically, so an up-to-date file is never touched.
+function addMissingBundledKeys(localesDir, bundledDir) {
+  let bundledFiles = [];
+  try {
+    bundledFiles = fs.readdirSync(bundledDir).filter(f => f.toLowerCase().endsWith(".json"));
+  } catch {
+    return;
+  }
+  for (const filename of bundledFiles) {
+    if (filename === "en.json") continue; // syncCanonicalEnglish owns it
+    const locale = filename.slice(0, -5);
+    const runtimePath = safeLocalePath(localesDir, locale);
+    if (!runtimePath || !fs.existsSync(runtimePath)) continue; // seedDefaultLocales' case
+    let bundled, runtime;
+    try {
+      bundled = JSON.parse(fs.readFileSync(path.join(bundledDir, filename), "utf8"));
+      runtime = JSON.parse(fs.readFileSync(runtimePath, "utf8"));
+    } catch (e) {
+      console.error(`[locales] ${filename}: not adding new strings, a file could not be read (${e.message})`);
+      continue;
+    }
+    if (!isPlainObject(bundled) || !isPlainObject(runtime)) continue;
+    let added = 0;
+    const fill = (from, into) => {
+      for (const [k, v] of Object.entries(from)) {
+        if (k === "_meta" && from === bundled) continue;
+        if (!(k in into)) { into[k] = JSON.parse(JSON.stringify(v)); added += isPlainObject(v) ? Object.keys(flattenKeys(v)).length : 1; }
+        else if (isPlainObject(v) && isPlainObject(into[k])) fill(v, into[k]);
+      }
+    };
+    fill(bundled, runtime);
+    if (!added) continue;
+    try {
+      writeLocaleFile(localesDir, locale, runtime);
+      console.log(`[locales] ${filename}: added ${added} new string${added === 1 ? "" : "s"} from the bundled translation`);
+    } catch (e) {
+      console.error(`[locales] ${filename}: could not add new strings (${e.message}) — the installed file is untouched`);
+    }
+  }
+}
+
 // ---- fingerprint (concurrent/external edit detection) ----
 // Transient only — never stored in the locale JSON itself (would conflict
 // with the earlier decision not to store an en.json hash in metadata).
@@ -322,5 +379,5 @@ module.exports = {
   flattenKeys, isTranslatedValue, computeCompletion, findOrphanedKeys,
   extractPlaceholders, placeholderSetsEqual, findPlaceholderMismatches,
   validateLocaleShape, readAndValidateLocaleFile, scanLocales,
-  seedDefaultLocales, syncCanonicalEnglish, computeFingerprint, safeLocalePath, writeLocaleFile,
+  seedDefaultLocales, syncCanonicalEnglish, addMissingBundledKeys, computeFingerprint, safeLocalePath, writeLocaleFile,
 };

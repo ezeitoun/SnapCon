@@ -27,7 +27,7 @@ function routeSrc() {
   return serverSrc.slice(start, end + 4);
 }
 
-const PRINTER = { id: "p1", name: "U1 Pink", url: "http://192.168.4.193", connector: "snapmaker-u1-klipper-ws" };
+const PRINTER = { id: "p1", name: "U1 Pink", url: "http://192.168.40.193", connector: "snapmaker-u1-klipper-ws" };
 
 // Builds the route's world. `over` replaces any piece of it.
 function harness(over = {}) {

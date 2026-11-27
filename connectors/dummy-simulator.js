@@ -37,8 +37,14 @@ function computeSimState(entry, nowMs) {
   return { progress: 0, phase: "idle" };
 }
 
-exports.label = "Simulator (testing)";
-exports.brand = "Simulator";
+// Shown as "Test printer": a tool for testing SnapCon's own flows, standing
+// for no real printer. Was "Simulator (testing)" / brand "Simulator" until
+// 2026-10-15; server.js renameSimulatorBrand updates printers saved before.
+exports.label = "Test printer";
+exports.brand = "Test printer";
+// A virtual printer: shown only while Settings › General › Enable virtual
+// printers is on (isVirtualType in connectors/index.js).
+exports.virtual = true;
 // Address contract: no hardware, no address. The client auto-fills a
 // synthetic sim:// URL purely so the printer persists at all, so neither
 // an address nor a port field belongs on this connector.
@@ -90,6 +96,15 @@ async function uploadFile(p, fp, name, job) {
   entryFor(p.id).filename = name;
 }
 exports.uploadFile = uploadFile;
+
+// Read back after an upload (docs/TODO.md §37 P2): the simulator holds one
+// file name and no content, so the most it can say is "acknowledged".
+async function verifyUpload(p, name) {
+  return entryFor(p.id).filename === name
+    ? { result: "acknowledged", basis: "name", evidence: `${name} is the simulated printer's file` }
+    : { result: "absent", evidence: `the simulated printer holds ${entryFor(p.id).filename || "no file"}` };
+}
+exports.verifyUpload = verifyUpload;
 
 // The one place a simulated printer's lifecycle is fully reinitialized —
 // fresh progress/timer/filename every time, regardless of whatever phase

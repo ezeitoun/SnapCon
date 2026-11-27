@@ -259,6 +259,7 @@ function createNetFs({
 
     stat: (p, o) => submit("stat", [p], opts(p, o)),
     lstat: (p, o) => submit("lstat", [p], opts(p, o)),
+    identity: (p, o) => submit("identity", [p], opts(p, o)),
     exists: (p, o) => submit("exists", [p], opts(p, o)),
     readdir: (p, o) => submit("readdir", [p], opts(p, o)),
     realpath: (p, o) => submit("realpath", [p], opts(p, o)),
@@ -270,6 +271,8 @@ function createNetFs({
     writeFileExclusive: (p, data, o) => submit("writeFileExclusive", [p, data], opts(p, { timeoutMs: 120000, ...o })),
     mkdir: (p, mo, o) => submit("mkdir", [p, mo || {}], opts(p, o)),
     rename: (a, b, o) => submit("rename", [a, b], opts(a, o)),
+    moveNoReplace: (a, b, o) => submit("moveNoReplace", [a, b], opts(a, o)),
+    unlinkFile: (p, expect, o) => submit("unlinkFile", [p, expect], opts(p, o)),
     walk: (dir, wo, o) => submit("walk", [dir, { ...wo, filter: wo.filter ? wo.filter.source : null }], opts(dir, { timeoutMs: 60000, ...o })),
     firmwareInspect: (p, io, o) => submit("firmwareInspect", [p, io || {}], opts(p, { timeoutMs: 60000, ...o })),
     threemfRead: (p, ro, o) => submit("threemfRead", [p, ro], opts(p, o)),

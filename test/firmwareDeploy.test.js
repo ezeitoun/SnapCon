@@ -720,8 +720,8 @@ test("the row re-reads its version once the deploy lands", () => {
   // A printer still rebooting cannot answer; keep what is on screen.
   assert.match(fn, /if\(!fresh\|\|fresh\.error\|\|fresh\.skipped\)\{/);
   // Server side: one printer, same shape /api/fleet?printer=i already uses.
-  const route = serverSrc.slice(serverSrc.indexOf('app.get("/api/firmware", requireAuth'),
-                                serverSrc.indexOf("// ---- Health diagnostics"));
+  const inventorySrc = fs.readFileSync(path.join(__dirname, "..", "routes", "firmwareInventory.js"), "utf8"), routeAt = inventorySrc.indexOf('app.get("/api/firmware", requireAuth');
+  const route = inventorySrc.slice(routeAt, inventorySrc.indexOf("\n  });\n", routeAt));
   assert.match(route, /if \(req\.query\.printer !== undefined\) \{/);
   assert.match(route, /if \(!p \|\| !printerVisibleTo\(req\.user, p\)\) return res\.status\(404\)/,
     "a single-printer read is still subject to group visibility");

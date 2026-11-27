@@ -1,0 +1,49 @@
+{
+  "comment": "Known test results in the isolated harness environment (Node 22, the image below), reviewed by the owner: 6 genuine failures and 1 failing todo test (\"kind\": \"todo\", a test declared { todo } for a documented known bug, which node:test does not count as a failure). Recorded on the unchanged base. scripts/verify-refactor.js requires EXACTLY these to fail, on base and on every head run, each with a matching signature and kind (a todo entry must be a failing todo, every other entry a genuine failure); any other failure or failing todo, a changed signature or kind, or a known entry that passes blocks. Not fixed by any refactor: see docs/TODO.md (Node 22 compatibility).",
+  "environment": "node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a",
+  "recordedOn": "9bd447a73c5e36a61cdb8bb8750ef7d7b2e2e238 + Phase 2 tests",
+  "failures": [
+    {
+      "file": "test/connectors/bambu-lab-live.test.js",
+      "name": "a printer that is not there is reported as unreachable, not as a wrong code",
+      "exact": "The input did not match the regular expression /refused|reach|timeout/i. Input:\n\n'connection closed before MQTT handshake completed'\n"
+    },
+    {
+      "file": "test/connectors/virtual-u1.test.js",
+      "name": "files: list, metadata palette, thumbnail, upload, identity check, delete",
+      "regex": "^Expected values to be strictly equal:\n\n\\d+ !== \\d+\n$",
+      "reason": "upload byte count: the multipart boundary has a random length (connectors/http-utils.js:174), so the two numbers vary between runs; everything else in the message is fixed"
+    },
+    {
+      "file": "test/connectors/virtual-u1.test.js",
+      "name": "hotend shows the active head, not a parked head that is preheating",
+      "kind": "todo",
+      "exact": "Expected values to be strictly equal:\n\n30 !== 215\n",
+      "reason": "declared { todo: ... } in test/connectors/virtual-u1.test.js: a documented known bug (probe() picks the first heating head, not the active one); it also failed as a todo on Node 24.21.0 (G0a, 2026-11-14), so it is not a Node 22 compatibility failure"
+    },
+    {
+      "file": "test/firmwareProgress.test.js",
+      "name": "a file that comes back different is still refused, and nothing is flashed",
+      "regex": "^the whole image was sent before the gate refused it\n\n\\d+ !== \\d+\n$",
+      "reason": "upload byte count: the multipart boundary has a random length (connectors/http-utils.js:174), so the two numbers vary between runs; everything else in the message is fixed"
+    },
+    {
+      "file": "test/firmwareProgress.test.js",
+      "name": "upload progress ends at sent === total, against the bytes really transferred",
+      "regex": "^the last report is a completed transfer\n\n\\d+ !== \\d+\n$",
+      "reason": "upload byte count: the multipart boundary has a random length (connectors/http-utils.js:174), so the two numbers vary between runs; everything else in the message is fixed"
+    },
+    {
+      "file": "test/uploadTransfer.test.js",
+      "name": "FlashForge native: an answer accepting the file resolves; the bytes went out on a connection of its own",
+      "regex": "^Expected values to be strictly equal:\n\\+ actual - expected\n\n\\+ \\d+\n- \\d+\n       \\^\n$",
+      "reason": "upload byte count: the multipart boundary has a random length (connectors/http-utils.js:174), so the two numbers vary between runs; everything else in the message is fixed"
+    },
+    {
+      "file": "test/uploadTransfer.test.js",
+      "name": "Moonraker: an answer accepting the file resolves; the bytes went out on a connection of its own",
+      "regex": "^Expected values to be strictly equal:\n\\+ actual - expected\n\n\\+ \\d+\n- \\d+\n       \\^\n$",
+      "reason": "upload byte count: the multipart boundary has a random length (connectors/http-utils.js:174), so the two numbers vary between runs; everything else in the message is fixed"
+    }
+  ]
+}

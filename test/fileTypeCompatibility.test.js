@@ -10,6 +10,7 @@
 // A connector says what it accepts with capabilities.fileTypes. ABSENT means
 // today's whole set, so no existing connector changes behaviour.
 const test = require("node:test");
+const { routeEnd } = require("./helpers/routeEnd");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
@@ -33,9 +34,9 @@ vm.runInContext(extract("fileTypeRefusal"), sandbox);
 const refusal = (caps, name, printerName) => vm.runInContext("fileTypeRefusal", sandbox)(caps, name, printerName);
 
 test("a Bambu printer refuses plain gcode, and says what it needs instead", () => {
-  const why = refusal({ fileTypes: ["3mf"] }, "benchy.gcode", "Macky's P2S");
+  const why = refusal({ fileTypes: ["3mf"] }, "benchy.gcode", "Sam's P2S");
   assert.ok(why, "this must not reach the printer");
-  assert.match(why, /Macky's P2S/);
+  assert.match(why, /Sam's P2S/);
   assert.match(why, /\.3mf/, "say what it does take");
 });
 
@@ -65,7 +66,7 @@ for (const [route, marker] of [
   test(`${route} refuses a file the printer cannot print`, () => {
     const at = serverSrc.indexOf(marker);
     assert.ok(at > 0, route + " must exist");
-    const body = serverSrc.slice(at, serverSrc.indexOf("\n});", at));
+    const body = serverSrc.slice(at, routeEnd(serverSrc, at));
     assert.match(body, /fileTypeRefusal/, "every route that puts a file on a printer checks first");
   });
 }

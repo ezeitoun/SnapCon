@@ -20,7 +20,7 @@ const ad5x = require("../../connectors/flashforge-ad5x");
 
 let n = 0;
 const printer = (over = {}) => Object.assign(
-  { id: "ff" + (++n), name: "AD5X Blue", url: "http://192.168.4.212", transport: "moonraker" }, over);
+  { id: "ff" + (++n), name: "AD5X Blue", url: "http://192.168.40.212", transport: "moonraker" }, over);
 
 function withMockFetch(handler, fn) {
   const real = global.fetch;

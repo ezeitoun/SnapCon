@@ -22,7 +22,7 @@ const { createFakeFtpsServer } = require("../helpers/fakeFtpsServer");
 const FIX = path.join(__dirname, "..", "fixtures", "bambu-tls");
 const KEY = fs.readFileSync(path.join(FIX, "TESTSERIAL0001-key.pem"));
 const CERT = fs.readFileSync(path.join(FIX, "TESTSERIAL0001.pem"));
-const CODE = "603db0db";
+const CODE = "123ab4cd";
 
 async function withServer(opts, fn) {
   const srv = createFakeFtpsServer({ key: KEY, cert: CERT, accessCode: CODE, ...opts });

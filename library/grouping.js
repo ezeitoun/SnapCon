@@ -32,7 +32,7 @@ const { refreshStats } = require("./prints");
 // 1  §4.4/§7 as written: a folders-mode model folder is structural (auto alone)
 // 2  after the first real-library run (§26): a folders-mode folder is medium
 //    location Evidence — it corroborates one other independent group, never
-//    groups alone (the owner's folders-mode location is organised by designer,
+//    groups alone (a real folders-mode location was organised by designer,
 //    and "one folder = one model" merged different models); "common" object
 //    names count UNRELATED title groups (rule 7), so a model's own colourway
 //    titles no longer make its part names generic

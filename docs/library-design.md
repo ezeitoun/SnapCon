@@ -22,7 +22,7 @@ This document is the single implementation reference. Where any earlier draft or
 disagrees with it, this document wins.
 
 Claims about SnapCon were checked against current source. Claims about the library were measured
-on `\\192.168.2.18\SnapCon\Files` (58 G-code, 2 3MF, 5.8 GB).
+on a real G-code folder on a NAS share (58 G-code, 2 3MF, 5.8 GB).
 
 ### Canonical terminology
 
@@ -1336,7 +1336,7 @@ time (§18).
 
 ## 21. M0 spike results (2026-09-30, commit 4311c47)
 
-Measured on the owner's Windows machine and NAS (`\192.168.2.18\SnapCon`). The spike code is in
+Measured on a Windows machine against a NAS share (SMB). The spike code is in
 `spike/library-m0/`. §1–§20 above are unchanged. The changes proposed below await the owner's
 approval before M1.
 
@@ -1467,7 +1467,7 @@ ee8c635 (backup failures). Nothing from M2 or later was implemented.
 
   A dynamic `require` in the fallback path, which pkg could not bundle, was replaced with a static
   one.
-- **UNC behaviour (live, on the owner's NAS):**
+- **UNC behaviour (live, on a NAS share):**
 
   | Case | Result |
   |---|---|
@@ -1565,7 +1565,7 @@ thumbnails). Nothing from M3 or later was implemented. Prerequisite: §23 (cd006
 - The raw diagnostic view (`/library-raw.html`, admin, `library.diagnostics`) is the M2
   checkpoint tool; the full Diagnostics of §13.1 is M4.
 
-**Real library, first scan (owner's NAS, 3 locations, 299 files, 28.8 GB):**
+**Real library, first scan (a NAS, 3 locations, 299 files, 28.8 GB):**
 
 | Location | Files | Scan | Read |
 |---|---|---|---|
@@ -1735,7 +1735,7 @@ Nothing from M5 was implemented.
 **Rule evolution during the checkpoint (evidence that it tested the architecture):**
 1. *Folder grouping merged different animals (rule v1 → v2).* v1 followed §4.4/§7 as written: in
    a folders-mode location a top-level folder was a model folder, structural Evidence that grouped
-   on its own. The owner's U1 Files location is organised by **designer**, so `Cinderwin/` became
+   on its own. The scanned U1 Files location is organised by **designer**, so `Cinderwin/` became
    one Model of Butterfly Dragon, Crystal Dragon ×2 and Crystal Wing Dragon, and `Zou/` one of
    Axolotl, Bearded Dragon and Sea Turtle. v2 makes the folder **medium location Evidence**: it
    corroborates one other independent group and never groups alone. Before/after (dry runs on a
@@ -2060,7 +2060,7 @@ AMS mapping is now indexed by filament number with -1 for unused filaments — e
 own report — and identical to the hardware-verified array whenever a plate uses all of the project's
 filaments. The Library's plate-1 rule is gone for printing (the server decides per printer); the
 queue keeps it. Verified: connector tests (plate 3 sent as `plate_3`, trays for one plate refused for
-another, sparse mapping `[-1, 3, -1, 0]`), a two-plate project built from the owner's real
+another, sparse mapping `[-1, 3, -1, 0]`), a two-plate project built from a real
 `ams.gcode.3mf` over real HTTP (plate 2 maps only filament 2; plate 2 to a printer that cannot choose
 plates and plate 9 refused with nothing sent; plate 1 printed and recorded as plate 1, exact). **Not
 verified on hardware:** no multi-plate sliced Bambu file exists in the Library and no print was sent
@@ -2142,7 +2142,7 @@ Docker was not available.
 **Localisation:** every Library string has a real Spanish translation (the 35 strings identical in
 both languages are words like "Material" and placeholders). An installation upgraded from an earlier
 version keeps its existing runtime `locales/es.json` (never overwritten, by design), so it shows every
-string added since in English — on the owner's instance, the Spanish file is at version 20 of 69.
+string added since in English (one long-running installation was at version 20 of 69 in Spanish).
 Release notes say so; changing that policy is the owner's decision.
 
 **Release:** approved by the owner as **SnapCon 0.8.0** (2026-10-04). The Library, printing from it,

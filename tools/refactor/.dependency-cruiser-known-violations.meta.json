@@ -1,0 +1,6 @@
+{
+  "comment": "Reviewed dependency baseline (docs/refactoring-policy.md §3.9). Zero known violations at the approved base. bin/depcruise.js refuses a baseline that holds violations not counted here or whose base is not an ancestor of HEAD; a change to either file needs a reviewed commit.",
+  "base": "9bd447a73c5e36a61cdb8bb8750ef7d7b2e2e238",
+  "knownViolations": 0,
+  "approved": "owner, Gate 1, 2026-11-13"
+}

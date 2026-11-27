@@ -275,6 +275,16 @@
   .jcard-actions{display:flex; gap:2px; flex:none; margin-top:1px;}
   .jcard-btn{background:transparent; border:none; color:var(--ink-faint); font-size:16px; cursor:pointer; padding:2px 5px; border-radius:5px; line-height:1; display:flex; align-items:center;}
   .jcard-btn:hover{color:var(--ink); background:var(--panel-2);}
+  /* Delete on the file card: a text button in the danger role, so it never reads as one of the icon actions beside it. */
+  .jcard-del{font-size:12px; padding:3px 9px; margin-right:4px;}
+  /* Delete dialog: the files, then the method (Move to Trash is always the one selected when it opens). */
+  .delete-files-list{margin:10px 0 0; padding-left:18px; max-height:180px; overflow-y:auto; font-family:var(--mono); font-size:12px; color:var(--ink-dim); overflow-wrap:anywhere;}
+  .delete-mode-row{display:flex; align-items:center; gap:8px; margin-top:8px;}
+  .delete-mode-row label{cursor:pointer;}
+  /* The selected method in the theme's accent, like the heat dialog's slider,
+     not the browser's default blue. */
+  .delete-mode-row input[type=radio]{accent-color:var(--accent);}
+  .delete-mode-help{margin:2px 0 0 24px;}
   .jcard-icon{width:14px; height:14px; display:block;}
   .send-list{display:flex; flex-direction:column; gap:4px; margin:12px 0; max-height:320px; overflow:auto;}
   .send-row{position:relative; overflow:hidden; display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line-soft); border-radius:8px; cursor:pointer; user-select:none;}
@@ -284,11 +294,12 @@
   .send-row-fill{position:absolute; inset:0; width:0%; background:color-mix(in srgb,var(--accent) 16%,transparent); transition:width .3s ease; pointer-events:none;}
   .send-row-fill.err{background:color-mix(in srgb,var(--bad) 18%,transparent);}
   .send-row-fill.ok{background:color-mix(in srgb,var(--ok) 16%,transparent);}
+  .send-row-fill.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);}
   .send-dot{position:relative; width:7px; height:7px; border-radius:50%; flex:none;}
   .send-name{position:relative; flex:1; font-size:13px;}
   .send-name.incompatible{color:var(--bad);}
   .send-status-txt{position:relative; font-family:var(--mono); font-size:11px; color:var(--ink-faint); white-space:nowrap;}
-  .send-status-txt.ok{color:var(--ok);} .send-status-txt.err{color:var(--bad);} .send-status-txt.work{color:var(--accent);}
+  .send-status-txt.ok{color:var(--ok);} .send-status-txt.err{color:var(--bad);} .send-status-txt.work{color:var(--accent);} .send-status-txt.warn{color:var(--warn);}
   .send-footer{display:flex; gap:8px; align-items:center; margin-top:4px;}
   .send-footer-status{flex:1; font-size:12px; color:var(--ink-dim);}
 
@@ -371,7 +382,11 @@
   .h .lab{padding:5px 6px 7px; text-align:center;}
   .h .ht{font-family:var(--mono); font-size:9px; color:var(--ink-faint); letter-spacing:.08em;}
   .h .hm{font-size:10px; color:var(--ink-dim); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-  .pcard .foot{display:flex; align-items:center; gap:9px; justify-content:space-between;}
+  /* flex-wrap: four actions (a completed print: Upload, Print, Preheat, Print
+     again; a print with objects to exclude) do not fit a standard 300px card
+     with readable labels, so the last one moves to a second row instead of
+     overflowing the card. Three or fewer stay on one row, as before. */
+  .pcard .foot{display:flex; align-items:center; gap:9px; justify-content:space-between; flex-wrap:wrap;}
   .pcard .foot-idle{margin-top:10px;}
   /* A printer with no filament-heads capability (e.g. Creality V3 Plus) skips
      the whole .afc-section block — without this, the card grid's default row
@@ -912,7 +927,7 @@
   .ntf-provider-footer{display:flex; align-items:center; gap:10px;}
   .pstatus{font-family:var(--mono); font-size:11px;}
   .pstatus:empty{display:none;} /* empty status row shouldn't reserve space below the buttons */
-  .pstatus.ok{color:var(--ok);} .pstatus.err{color:var(--bad);} .pstatus.work{color:var(--accent);}
+  .pstatus.ok{color:var(--ok);} .pstatus.err{color:var(--bad);} .pstatus.work{color:var(--accent);} .pstatus.warn{color:var(--warn);}
   .progress-section{padding:12px 16px 10px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(255,255,255,0.01);}
   [data-theme="light"] .progress-section{border-top-color:var(--line);background:transparent;}
   /* ---- Printer card layout v2 (Settings > View, in preview). Every rule is
@@ -1260,7 +1275,7 @@
      names); View and Sort keep their values, since they're read as well as
      pressed; search collapses to a magnifier; the clock shows the time only. */
   @container topbar (max-width: 1619.98px){
-    #filesBtn, #healthBtn, #bulkHeatBtn, #queueBtn, #libraryBtn{width:46px; padding:0; justify-content:center;}
+    #filesBtn, #healthBtn, #bulkHeatBtn, #queueBtn, #libraryBtn, #utilizationBtn{width:46px; padding:0; justify-content:center;}
     .tb-label{display:none;}
     .tb-health .health-badge{top:6px; right:4px;}
     .tb-search{display:none;}
@@ -1273,12 +1288,12 @@
     .topbar:has(#tbSearchBtn[hidden]) .tb-status-box{margin-left:auto;}
     .tb-date{display:none;}
   }
-  /* Narrow tier: the brand is just the icon; Files, Heat, Queue, Library,
+  /* Narrow tier: the brand is just the icon; Files, Heat, Queue, Library, Utilization,
      Settings, Theme, the user's cells and the clock move into the menu sheet. */
   @container topbar (max-width: 1309.98px){
     .tb-brand{padding:0 12px;}
     .tb-brand-text{display:none;}
-    #filesBtn, #bulkHeatBtn, #queueBtn, #libraryBtn, #themeBtn, #gear, .tb-user, #topbarClock{display:none;}
+    #filesBtn, #bulkHeatBtn, #queueBtn, #libraryBtn, #utilizationBtn, #themeBtn, #gear, .tb-user, #topbarClock{display:none;}
     #tbMenuBtn{display:flex;}
   }
   /* Phone tier: brand icon, status pills, then (pushed right) search and the
@@ -1691,7 +1706,10 @@
      the placeholder, that a plain `color` rule on .field doesn't reliably
      override — this closes that off directly on every stepper-wrapped
      number input rather than relying on inheritance to win. */
-  .number-field input.field{width:auto; flex:1; min-width:0; text-align:center; border-radius:0; -moz-appearance:textfield; color:var(--ink); opacity:1; -webkit-text-fill-color:var(--ink);}
+  /* min-width and the narrower side padding: the − and + buttons frame the
+     value, and a stepper squeezed by its row (the heat dialog's seconds) must
+     still show three digits rather than shrink to its padding. */
+  .number-field input.field{width:auto; flex:1; min-width:calc(3ch + 10px); padding-left:4px; padding-right:4px; text-align:center; border-radius:0; -moz-appearance:textfield; color:var(--ink); opacity:1; -webkit-text-fill-color:var(--ink);}
   .number-field input.field::-webkit-outer-spin-button,
   .number-field input.field::-webkit-inner-spin-button{-webkit-appearance:none; margin:0;}
   .number-step{flex:none; width:30px; background:var(--panel-2); border:1px solid var(--line); color:var(--ink-dim); font:inherit; font-size:15px; font-weight:700; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; user-select:none; padding:0;}
@@ -1740,7 +1758,7 @@
      not a native <table>, matching this file's existing row patterns. Each
      row is two lines: What and Delete after on top, the Destination field
      (with Browse) across the full width below, so a full network path such
-     as \\192.168.2.18\SnapCon\G-Code Archive fits (it did not beside two
+     as \\198.51.100.7\Storage\G-Code Archive fits (it did not beside two
      other columns: 307px needed, 274px at most). Delete after's stepper
      needs 120px for a 3-digit value. The header line keeps What and Delete
      after; each Destination field carries its own aria-label. */
@@ -1944,6 +1962,17 @@
   .disc-count{font-family:var(--mono); font-size:11px; color:var(--ink-faint); white-space:nowrap;}
   .disc-bar{height:3px; border-radius:2px; background:var(--line-soft); overflow:hidden; margin:0 2px 10px;}
   .disc-bar-fill{height:100%; width:0; background:var(--signal); transition:width .25s ease;}
+  /* Rediscover's report (Settings > Printers): Discover's rows, grouped under
+     plain headings, with the reason a finding needs a person on its own line. */
+  .rd-box{max-width:640px;}
+  .rd-box .settings-help.warn{margin:6px 0 0;}
+  .rd-section{margin-top:12px;}
+  .rd-head{font-size:12px; font-weight:600; color:var(--ink-dim); margin:0 2px 6px;}
+  .rd-row .di{min-width:0; overflow-wrap:anywhere;}
+  .rd-note{display:block; margin-top:3px; font-family:var(--sans); font-size:12px; color:var(--ink-faint);}
+  .rd-done{font-size:12px; color:var(--ok); white-space:nowrap;}
+  .rd-row .btn{flex:none;}
+  .rd-footer{display:flex; justify-content:flex-end; gap:8px; margin-top:14px;}
   /* The same bar reused in the Firmware tab's status line, where it sits under
      the text rather than as a standalone row — spans need the explicit block
      display to take a height. */
@@ -1957,8 +1986,11 @@
   .browse-up{color:var(--ink-dim);font-style:italic;}
   .browse-empty{padding:20px;text-align:center;color:var(--ink-faint);font-size:12px;}
 
-  .warn{display:none; margin-top:12px; background:#2a1f1c; border:1px solid #5a3b34; border-radius:8px; padding:11px 13px; font-size:12.5px; color:#f0c9c0; line-height:1.5;}
-  .warn.show{display:block;}
+  /* The print panel's no-colors warning box. By id, not by .warn: .warn is
+     also the amber colour modifier (.settings-help.warn, .file-kind.warn,
+     .fwstat-chip.warn, …), and as a class this rule hid every one of them. */
+  #warn{display:none; margin-top:12px; background:#2a1f1c; border:1px solid #5a3b34; border-radius:8px; padding:11px 13px; font-size:12.5px; color:#f0c9c0; line-height:1.5;}
+  #warn.show{display:block;}
   .klipper-err-panel{margin:10px 0 0;background:var(--panel-2);border:1px solid color-mix(in srgb,var(--bad) 28%,transparent);border-radius:10px;overflow:hidden;text-align:center;}
   .klipper-err-title{font-size:14px;font-weight:700;color:var(--ink);padding:13px 16px 8px;letter-spacing:0.01em;}
   .klipper-err-code{display:flex;align-items:center;justify-content:center;gap:6px;padding:0 16px 11px;font-family:var(--mono);font-size:12px;color:#f59e0b;text-decoration:underline;letter-spacing:0.03em;word-break:break-all;}
@@ -1975,6 +2007,11 @@
   .queued-banner{margin:10px 0 0;padding:9px 12px;border-radius:8px;font-size:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;}
   .queued-banner.work{background:color-mix(in srgb,var(--accent) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);color:var(--ink-dim);}
   .queued-banner-text{min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .queued-banner-actions{flex:none; display:flex; gap:6px;}
+  /* Sends waiting for a printer (§37 P3): one banner each, stacked. */
+  .pending-sends .queued-banner+.queued-banner{margin-top:6px;}
+  /* A banner with buttons carries a sentence, not a name: it wraps (§37 P5). */
+  .queued-banner:has(.queued-banner-actions) .queued-banner-text{white-space:normal; overflow:visible; overflow-wrap:anywhere;}
   /* ---- The card's upload strip (uploadStripHtml): the banner position, the
      accent-tinted look of .queued-banner.work, a 3px bar along its bottom
      edge. Failed: red-tinted, with Retry and Dismiss. Compact and Camera view
@@ -2002,6 +2039,10 @@
   .upload-strip.failed{background:color-mix(in srgb,var(--bad) 10%,var(--panel-2)); border-color:color-mix(in srgb,var(--bad) 35%,transparent);}
   .upload-strip.failed .upload-strip-title{display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:color-mix(in srgb,var(--bad) 70%,var(--ink));}
   .upload-strip.failed .upload-strip-fill{background:var(--bad);}
+  /* Not confirmed (docs/TODO.md §37 P1): the failed strip's layout, in amber — it may have arrived. */
+  .upload-strip.failed.unconfirmed{background:color-mix(in srgb,var(--warn) 10%,var(--panel-2)); border-color:color-mix(in srgb,var(--warn) 35%,transparent);}
+  .upload-strip.failed.unconfirmed .upload-strip-title{color:color-mix(in srgb,var(--warn) 70%,var(--ink));}
+  .upload-strip.failed.unconfirmed .upload-strip-fill{background:var(--warn);}
   /* A failed strip keeps the file name readable: when the card is narrow,
      Retry and Dismiss move under the text (right-aligned) rather than
      squeezing it. The reason is the point: it wraps rather than being cut. */
@@ -2009,6 +2050,15 @@
   .upload-strip.failed .upload-strip-text{flex:1 1 220px;}
   .upload-strip.failed .upload-strip-actions{margin-left:auto;}
   .upload-strip.failed .upload-strip-detail{white-space:normal; font-family:inherit; font-size:11.5px;}
+  /* Its print start cancelled while the printer confirms (§37 P1): what
+     happened and what it waits for are the point, so they wrap like a
+     failed strip's reason rather than being cut. */
+  .upload-strip.start-cancelled{flex-wrap:wrap; row-gap:8px;}
+  .upload-strip.start-cancelled .upload-strip-text{flex:1 1 220px;}
+  .upload-strip.start-cancelled .upload-strip-btn{margin-left:auto;}
+  .upload-strip.start-cancelled .upload-strip-name,
+  .upload-strip.start-cancelled .upload-strip-detail{white-space:normal; overflow:visible;}
+  .upload-strip.start-cancelled .upload-strip-detail{font-family:inherit; font-size:11.5px;}
   body.compact .upload-strip, body.camview .upload-strip{padding:7px 10px 10px;}
   body.compact .upload-strip-detail, body.camview .upload-strip-detail{display:none;}
   body.compact .upload-strip-pct, body.camview .upload-strip-pct{display:inline;}
@@ -2022,6 +2072,7 @@
   @media (prefers-reduced-motion: reduce){ .qp-upload-fill{transition:none;} }
   .queued-banner.ready{background:color-mix(in srgb,var(--signal) 10%,var(--panel-2));border:1px solid color-mix(in srgb,var(--signal) 32%,transparent);color:var(--ink-dim);}
   .queued-banner.err{background:color-mix(in srgb,var(--bad) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--bad) 35%,transparent);color:var(--ink-dim);}
+  .queued-banner.warn{background:color-mix(in srgb,var(--warn) 12%,var(--panel-2));border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);color:var(--ink-dim);}
 
   /* ---- User Access Management ---- */
 
@@ -2056,39 +2107,99 @@
   body.compact:not(.showfiles) .side{display:none;}
   body.compact:not(.showfiles) .shell{grid-template-columns:1fr;}
   body.compact .fleet{grid-template-columns:repeat(auto-fill,minmax(260px,1fr));}
-  /* hide sections irrelevant in compact */
+  /* smaller text for the selected model in compact */
   body.compact .sechead:has(#needcount),
   body.compact #jobloading,
-  body.compact #jobcard,
-  /* tighten time row so values stay on one line */
-  body.compact .prog-time-val{font-size:11px;}
-  body.compact .prog-time-sep{margin:0 5px;}
-  /* Upload stays hidden in compact — it's the one action that doesn't fit
-     the "quick glance/quick action" idiom this mode is for. Everything else
-     (print/preheat/reprint) now shows the same as the full card. While
-     printing there's only room for 3 of the 4 full-card buttons: E-Stop
-     drops (Stop already covers "get me out of this print"), and the
-     remaining three are reordered via flex order to Pause, Plate, Stop. */
-  body.compact .foot button[data-start="0"]{display:none;}
-  body.compact .foot button[data-estop]{display:none;}
-  body.compact .foot button[data-act="pause"],
-  body.compact .foot button[data-act="resume"]{order:1;}
-  body.compact .foot button[data-plate]{order:2;}
-  body.compact .foot button[data-act="cancel"]{order:3;}
-  /* shrink filament lanes */
-  body.compact .afc-lanes{gap:4px;}
-  body.compact .afc-lane-card{border-radius:7px;}
-  body.compact .afc-lane-hdr{font-size:8px; padding:3px 2px;}
-  body.compact .afc-spool-area{padding:4px 2px 3px; gap:2px;}
-  body.compact .afc-spool-area svg{width:28px !important; height:28px !important;}
-  body.compact .afc-active-label,body.compact .afc-weight,body.compact .afc-badge{display:none;}
-  body.compact .afc-btn-row{display:none;}
-  /* hide color assignment + map section */
-  body.compact .cmap,body.compact .needstrip,body.compact .jcompat,body.compact .nohint{display:none;}
-  /* tighten card padding */
-  body.compact .pcard{padding:10px; gap:8px;}
-  body.compact .stats-bar{display:none;}
-  body.compact .klipper-err-body,body.compact .klipper-err-link{display:none;}
+  body.compact #jobcard{font-size:11px;}
+  /* hide the file panel's colour hints */
+  body.compact .needstrip,body.compact .jcompat,body.compact .nohint{display:none;}
+
+  /* ---- Compact card (buildCompactCardHtml in app.js) ---- */
+  /* Its own markup, so every rule here is scoped to .cc-* or .cc-card.
+     --status-color is set on the card from statusColorText(). */
+  body.compact .pcard.cc-card{padding:11px 12px 12px; gap:8px;}
+  body.compact .pcard.cc-card.offline{opacity:.55;}
+  body.compact .pcard.cc-menu-open{position:relative; z-index:5;}
+  /* Header: checkbox, brand, icons and badge on one line; the name on its
+     own full-width line under it. */
+  body.compact .cc-card .top.cc-top{flex-direction:column; align-items:stretch; gap:0; min-width:0;}
+  body.compact .cc-head{display:flex; align-items:center; gap:8px; min-width:0;}
+  body.compact .cc-head .cam-select{align-self:center; margin-top:0;}
+  body.compact .cc-head .hdr-brand{flex:1 1 auto; min-width:0; margin-bottom:0;}
+  body.compact .cc-card .hdr-brand{font-size:10px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--ink-dim); line-height:1.25; margin-bottom:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-card .hdr-name{font-size:14px; font-weight:700; color:var(--ink); line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-badge{gap:5px; padding:3px 7px 3px 6px; border-radius:4px; font-family:var(--sans); font-size:11px; font-weight:600; letter-spacing:0; text-transform:none; line-height:1.25;
+    background:color-mix(in srgb,var(--status-color) 13%,transparent); border-color:color-mix(in srgb,var(--status-color) 40%,transparent); box-shadow:none;}
+  body.compact .cc-dot{flex:none; width:6px; height:6px; border-radius:50%; background:var(--status-color);}
+  body.compact .cc-pulse .cc-dot{animation:cc-pulse 1.6s ease-in-out infinite;}
+  @keyframes cc-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @media (prefers-reduced-motion: reduce){ body.compact .cc-pulse .cc-dot{animation:none;} }
+  body.compact .cc-line{height:2px; margin-top:-2px; background:var(--status-color);}
+  body.compact .cc-file{font-family:var(--mono); font-size:10.5px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-headline{display:flex; justify-content:space-between; align-items:baseline; gap:8px; min-width:0; font-size:11px; color:var(--ink-dim);}
+  body.compact .cc-lead{min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-headline .cc-pct{margin-left:auto;}
+  /* A line's parts: a missing one is hidden, and " · " goes between the
+     parts that show. */
+  body.compact .cc-part[hidden]{display:none;}
+  body.compact .cc-part:not([hidden]) ~ .cc-part:not([hidden])::before{content:"\00a0·\00a0";}
+  body.compact .cc-big{font-family:var(--mono); font-size:18px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums;}
+  body.compact .cc-paused .cc-big,body.compact .cc-big.cc-state{color:var(--status-color);}
+  body.compact .cc-track{flex:none; height:5px; border-radius:5px;}
+  body.compact .cc-track .prog-fill{border-radius:5px;}
+  body.compact .cc-track .prog-fill.amber{background:var(--paused);}
+  body.compact .cc-fill-done{background:var(--status-color);}
+  body.compact .cc-quiet{font-size:11px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-val{font-family:var(--mono); font-weight:600; color:var(--ink);}
+  body.compact .cc-ready{font-size:16px; font-weight:700; color:var(--ink);}
+  body.compact .cc-error{font-size:12px; font-weight:600; color:color-mix(in srgb,var(--bad) 70%,#fff); overflow-wrap:anywhere;}
+  [data-theme="light"] body.compact .cc-error{color:var(--bad);}
+  body.compact .cc-offline{margin-top:0;}
+  body.compact .cc-offline .offline-info-seen{white-space:normal; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2;}
+  /* Upload strip, one line: arrow, name, percentage, ✕. */
+  body.compact .cc-upload{gap:7px;}
+  body.compact .cc-upload-icon{flex:none; color:var(--busy);}
+  body.compact .cc-upload-name{flex:1 1 auto; min-width:0; font-size:12px; font-weight:600; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-upload-pct{flex:none; font-family:var(--mono); font-size:11px; font-weight:600; color:var(--ink-dim);}
+  body.compact .cc-upload-cancel{flex:none; display:flex; align-items:center; justify-content:center; width:22px; height:22px; padding:0; border-radius:50%;
+    border:1px solid color-mix(in srgb,var(--bad) 55%,transparent); background:transparent; color:color-mix(in srgb,var(--bad) 70%,#fff); cursor:pointer;}
+  [data-theme="light"] body.compact .cc-upload-cancel{color:var(--bad);}
+  body.compact .cc-upload-cancel:hover:not(:disabled){background:color-mix(in srgb,var(--bad) 14%,transparent);}
+  body.compact .cc-upload-cancel:disabled{opacity:.6; cursor:default;}
+  body.compact .cc-upload-cancel:focus-visible{outline:2px solid var(--signal); outline-offset:2px;}
+  /* Spool tiles. The border is --ink at 18% so a black spool shows on the
+     dark card and a white one on the light card. */
+  body.compact .cc-tiles{display:grid; gap:6px;}
+  body.compact .cc-tile{display:block; min-width:0; height:22px; padding:0 4px; border:1px solid color-mix(in srgb,var(--ink) 18%,transparent); border-radius:5px;
+    font:700 10px/20px var(--mono); text-align:center; color:#F4F6F8; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  body.compact .cc-tile.on-light{color:#15171B;}
+  body.compact button.cc-tile{appearance:none; cursor:pointer;}
+  body.compact .cc-tile.active{outline:2px solid var(--ink); outline-offset:1px;}
+  body.compact .cc-tile.empty{background:transparent; border:1px dashed var(--line); color:var(--ink-faint); font-weight:600;}
+  body.compact button.cc-tile:focus-visible{outline:2px solid var(--signal); outline-offset:2px;}
+  /* The spools and the buttons together at the bottom of the card
+     (margin-top:auto), so they line up across a row; spare height goes
+     above them. */
+  body.compact .cc-bottom{display:flex; flex-direction:column; gap:8px; margin-top:auto;}
+  /* Buttons: the state's two actions, then "···" at the right. */
+  body.compact .cc-foot{display:flex; align-items:center; gap:8px;}
+  body.compact .cc-actions{display:flex; gap:6px; min-width:0;}
+  body.compact .btn-chip.cc-pill{flex:0 1 auto; min-width:0; height:28px; padding:0 11px; gap:5px; font-size:11.5px; font-weight:600;}
+  body.compact .btn-chip.cc-pill img{width:13px; height:13px;}
+  body.compact .cc-menu-wrap{position:relative; flex:none; margin-left:auto;}
+  body.compact .cc-more{display:flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:1px solid var(--line); border-radius:50%;
+    background:var(--panel-2); color:var(--ink); font:700 13px/1 var(--sans); letter-spacing:-1px; cursor:pointer;}
+  body.compact .cc-more:hover,body.compact .cc-more[aria-expanded="true"]{border-color:var(--ink-faint);}
+  body.compact .cc-more:focus-visible,body.compact .cc-menu-item:focus-visible{outline:2px solid var(--signal); outline-offset:2px;}
+  body.compact .cc-menu{position:absolute; right:0; top:calc(100% + 6px); z-index:45; width:150px; padding:5px;
+    background:var(--tb-menu); border:1px solid var(--tb-menu-border); border-radius:8px; box-shadow:var(--tb-menu-shadow);}
+  body.compact .cc-menu[hidden]{display:none;}
+  body.compact .cc-menu.up{top:auto; bottom:calc(100% + 6px);}
+  body.compact .cc-menu-item{display:block; width:100%; padding:7px 9px; border:0; border-radius:5px; background:none; color:var(--ink); font:inherit; font-size:12.5px; text-align:left; cursor:pointer;}
+  body.compact .cc-menu-item:hover:not(:disabled),body.compact .cc-menu-item:focus-visible{background:var(--tb-hover);}
+  body.compact .cc-menu-item:disabled{opacity:.45; cursor:not-allowed;}
+  body.compact .cc-menu-item.danger{color:var(--bad);}
+  body.compact .cc-menu-sep{height:1px; margin:4px 0; background:var(--tb-menu-border);}
 
   /* ---- Camera view ---- */
   /* Same minimal-density hides as compact mode, minus the footer-button
@@ -2266,6 +2377,9 @@
   .list-progress-fill, .list-progress-fill::after{animation:none !important;}
   .list-progress-fill::after{will-change:auto;}   /* static here: no layer needed */
   .list-progress-meta{font-size:10.5px; color:var(--ink-dim); font-family:var(--mono);}
+  /* Action feedback under a List row's status badge; wraps rather than
+     cutting a message short, the row grows while one shows. */
+  .fleet-list .pstatus{margin-top:4px; font-size:10.5px; line-height:1.3; overflow-wrap:anywhere;}
   /* min-width sized to "9999 / 9999" (4 digits each side — the widest
      realistic value, tabular numerals) at this font: measures 72.578px via
      headless Chromium; 76px rounds that up with a small safety margin. The
@@ -2642,4 +2756,188 @@
   @media (max-width:760px){
     .lib-menu-list,.lib-tools .lib-menu-list{right:0; left:auto; min-width:200px; max-width:calc(100vw - 40px);}
     .lib-dlg-foot .btn{flex:1;}
+  }
+
+  /* ---- Fleet utilization (public/utilization.js) ----
+     Chart hues: validated as one categorical palette in both themes (dataviz
+     validate_palette.js, adjacent pairs, in the page's stack order). The
+     three coverage gaps are textures over the panel, never hues, so missing
+     time can't be mistaken for a state; estimated time is its bucket's hue,
+     hatched. */
+  :root, [data-theme="dark"]{
+    --uz-printing:#3987e5; --uz-running:#199e70; --uz-failed:#d95926; --uz-unknown:#9085e9;
+    --uz-paused:#c98500; --uz-offline:#6b7280; --uz-idle:#008300; --uz-error:#e66767;
+    --uz-gap:color-mix(in srgb, var(--ink-dim) 70%, transparent); --uz-none-line:color-mix(in srgb, var(--ink-faint) 55%, transparent);
+  }
+  [data-theme="light"]{
+    --uz-printing:#2a78d6; --uz-running:#1baf7a; --uz-failed:#eb6834; --uz-unknown:#6250d6;
+    --uz-paused:#eda100; --uz-offline:#8a8f98; --uz-idle:#008300; --uz-error:#e34948;
+    --uz-gap:color-mix(in srgb, var(--ink-dim) 60%, transparent); --uz-none-line:color-mix(in srgb, var(--ink-faint) 45%, transparent);
+  }
+  .utilization-page{display:none; margin-bottom:18px;}
+  .utilization-page.show{display:block; max-height:calc(100vh - 120px); overflow-y:auto; overflow-x:hidden;}
+  .uz-shell{max-width:1400px; margin:0 auto; padding:0 2px 32px;}
+  .uz-sr{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0;}
+  .uz-head{display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:12px 20px; padding:14px 0 10px;}
+  .uz-title{min-width:0;}
+  .uz-title h1{font-size:20px; font-weight:700; margin:0; color:var(--ink);}
+  .uz-range{margin:4px 0 0; display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline;}
+  .uz-range-dates{font-family:var(--mono); font-size:13px; color:var(--ink); font-weight:600;}
+  .uz-range-meta{font-size:12px; color:var(--ink-dim);}
+  .uz-controls{display:flex; flex-wrap:wrap; align-items:flex-end; gap:12px 16px;}
+  .uz-field-label, .uz-seg-legend{display:block; font-size:11.5px; color:var(--ink-dim); margin:0 0 4px; padding:0;}
+  .uz-seg{border:0; margin:0; padding:0; min-width:0;}
+  .uz-seg-opt{position:relative; display:inline-flex;}
+  .uz-seg-opt input{position:absolute; inset:0; opacity:0; margin:0; cursor:pointer;}
+  .uz-seg-opt span{display:inline-flex; align-items:center; height:32px; padding:0 12px; border:1px solid var(--line); border-left-width:0; background:var(--panel); color:var(--ink-dim); font-size:12.5px; white-space:nowrap;}
+  .uz-seg-opt:first-of-type span{border-left-width:1px; border-radius:7px 0 0 7px;}
+  .uz-seg-opt:last-of-type span{border-radius:0 7px 7px 0;}
+  .uz-seg-opt input:checked + span{background:var(--tb-active-bg); color:var(--tb-active-text); font-weight:600; box-shadow:inset 0 -2px 0 var(--tb-accent);}
+  .uz-seg-opt input:focus-visible + span{outline:2px solid var(--tb-accent); outline-offset:1px; position:relative; z-index:1;}
+  .uz-end-row, .uz-export-row{display:flex; gap:6px; align-items:center;}
+  .uz-date{height:32px; padding:0 8px; border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--ink); font:inherit; font-size:12.5px; color-scheme:dark;}
+  [data-theme="light"] .uz-date{color-scheme:light;}
+  .uz-small{padding:6px 10px; font-size:11.5px;}
+  .uz-csv{padding:7px 10px; font-size:11.5px; text-decoration:none; display:inline-flex; align-items:center;}
+  .uz-virtual .switch-desc{max-width:260px;}
+  .uz-status{min-height:16px; font-size:12px; color:var(--ink-dim);}
+  .uz-body.is-loading{opacity:.55; transition:opacity .15s;}
+  .uz-note{margin:0 0 12px; padding:9px 12px; border-left:3px solid var(--signal); background:color-mix(in srgb, var(--signal) 8%, var(--panel)); color:var(--ink); font-size:12.5px; border-radius:0 7px 7px 0;}
+  .uz-note-info{border-left-color:var(--ink-dim); background:var(--panel-2); margin-top:-6px;}
+  .uz-panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:0 0 14px; min-width:0;}
+  .uz-panel h2{font-size:14px; font-weight:700; margin:0; color:var(--ink);}
+  .uz-panel-head{display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:6px 12px; margin-bottom:6px;}
+  .uz-panel-meta{font-size:12px; color:var(--ink-dim);}
+  .uz-loading-panel{color:var(--ink-dim); text-align:center; padding:48px 8px; font-size:13px;}
+  .uz-empty, .uz-error{text-align:left;}
+  .uz-empty h2, .uz-error h2{margin-bottom:6px;}
+  .uz-empty p, .uz-error p{margin:0 0 8px; font-size:13px; color:var(--ink-dim); max-width:72ch;}
+  .uz-error{border-color:color-mix(in srgb, var(--bad) 45%, var(--line));}
+  .uz-error-actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;}
+  .uz-help summary{cursor:pointer; font-size:11.5px; color:var(--ink-dim); width:fit-content; line-height:24px;}
+  .uz-help p{margin:6px 0 0; font-size:12px; color:var(--ink-dim); line-height:1.45;}
+  .uz-help-block{margin:-6px 0 14px;}
+
+  /* KPI tiles: the confirmed figure first; estimates, change and coverage below it. */
+  .uz-kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:12px; margin-bottom:12px;}
+  .uz-kpi{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; display:flex; flex-direction:column; gap:4px; min-width:0;}
+  .uz-kpi-label{font-size:12.5px; font-weight:600; color:var(--ink-dim); margin:0;}
+  .uz-kpi-value{font-family:var(--mono); font-size:30px; font-weight:600; color:var(--ink); line-height:1.15; font-variant-numeric:tabular-nums;}
+  .uz-kpi-est{font-size:12px; color:var(--ink-dim); display:flex; align-items:center; gap:6px;}
+  .uz-est-mark{width:14px; height:10px; border-radius:2px; flex:none; background:repeating-linear-gradient(135deg, var(--ink-dim) 0 2px, transparent 2px 4px); border:1px solid var(--ink-faint);}
+  .uz-kpi-sub, .uz-kpi-cov{font-size:12px; color:var(--ink-dim);}
+  .uz-kpi-delta{display:flex; flex-wrap:wrap; gap:2px 8px; font-size:12px; align-items:baseline;}
+  .uz-kpi-prev{color:var(--ink-dim);}
+  /* The change and its verdict are text in ink (readable in both themes); the
+     verdict is also an arrow in the status colour, never the colour alone. */
+  .uz-delta{font-weight:600; color:var(--ink);}
+  .uz-delta-num{font-family:var(--mono);}
+  .uz-delta-mark{display:inline-block; margin-right:3px; font-size:10px;}
+  .uz-delta.is-better .uz-delta-mark{color:var(--ok);} .uz-delta.is-worse .uz-delta-mark{color:var(--bad);}
+  .uz-delta.is-same, .uz-delta.is-none{color:var(--ink-dim); font-weight:400;}
+  .uz-delta-partial{font-weight:400; color:var(--ink-dim);}
+  .uz-kpi .uz-help{margin-top:auto; padding-top:6px;}
+  .uz-secondary{display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 14px; padding:10px 16px; margin:0 0 14px; background:var(--panel-2); border:1px solid var(--line-soft); border-radius:10px;}
+  .uz-sec-label{font-size:12.5px; font-weight:600; color:var(--ink-dim); margin:0;}
+  .uz-sec-value{font-family:var(--mono); font-size:18px; font-weight:600; color:var(--ink);}
+  .uz-sec-detail{font-size:12px; color:var(--ink-dim);}
+  .uz-secondary .uz-help{flex-basis:100%;}
+
+  /* Buckets: a hue per state; the gaps are textures. */
+  .uz-b-printing{--c:var(--uz-printing);} .uz-b-provisionalRunning{--c:var(--uz-running);} .uz-b-failed{--c:var(--uz-failed);}
+  .uz-b-provisionalUnknown{--c:var(--uz-unknown);} .uz-b-paused{--c:var(--uz-paused);} .uz-b-offline{--c:var(--uz-offline);}
+  .uz-b-idle{--c:var(--uz-idle);} .uz-b-error{--c:var(--uz-error);}
+  .uz-sw, .uz-seg-part, .uz-hseg{background:var(--c);}
+  .uz-seg-part.is-est, .uz-hseg.is-est, .uz-sw.is-est{background:repeating-linear-gradient(135deg, var(--c) 0 3px, color-mix(in srgb, var(--c) 25%, var(--panel)) 3px 6px);}
+  .uz-b-unobserved{--c:var(--panel-2); background:repeating-linear-gradient(45deg, var(--uz-gap) 0 1.5px, var(--panel-2) 1.5px 5px) !important;}
+  .uz-b-historicalUncertain{--c:var(--panel-2); background:radial-gradient(var(--uz-gap) 1.1px, transparent 1.5px) 0 0/5px 5px, var(--panel-2) !important;}
+  .uz-b-notRecorded{--c:transparent; background:repeating-linear-gradient(-45deg, var(--uz-none-line) 0 1px, transparent 1px 7px) !important;}
+  .uz-sw{display:inline-block; width:12px; height:12px; border-radius:3px; flex:none; vertical-align:-2px; box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--ink) 18%, transparent);}
+
+  /* The stacked chart: each column is 100% of that day's eligible time. */
+  .uz-legend{display:flex; flex-wrap:wrap; gap:4px 14px; list-style:none; margin:8px 0 10px; padding:0; font-size:12px; color:var(--ink-dim);}
+  .uz-legend li{display:inline-flex; align-items:center; gap:6px;}
+  .uz-plot-wrap{position:relative; display:grid; grid-template-columns:auto 1fr; gap:6px;}
+  .uz-yaxis{display:flex; flex-direction:column; justify-content:space-between; height:220px; font-size:10.5px; color:var(--ink-dim); font-family:var(--mono); text-align:right; transform:translateY(-6px);}
+  /* Gridlines at 100/75/50/25/0%, over the bars' 220px only, not the labels. */
+  .uz-plot{--uz-h:220px; display:flex; gap:3px; min-width:0; background:repeating-linear-gradient(to bottom, var(--line-soft) 0 1px, transparent 1px calc(var(--uz-h) / 4)) 0 0/100% calc(var(--uz-h) + 1px) no-repeat; list-style:none; margin:0; padding:0;}
+  .uz-col{flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:6px;}
+  .uz-bar{height:var(--uz-h); flex:none; display:flex; flex-direction:column-reverse; border-radius:3px 3px 0 0; overflow:hidden; cursor:default; outline-offset:2px;}
+  .uz-bar.is-empty{border:1px dashed var(--line); border-bottom:0;}
+  .uz-seg-part{display:block; flex:none; min-height:0;}
+  .uz-seg-part:not(:first-child){border-bottom:1px solid var(--panel);}
+  .uz-bar:focus-visible{outline:2px solid var(--tb-accent);}
+  .uz-x{font-size:10.5px; color:var(--ink-dim); text-align:center; white-space:nowrap; overflow:visible; font-family:var(--mono); line-height:16px; min-height:16px;}
+  .uz-x.is-skip{visibility:hidden;}
+  .uz-tip{position:absolute; top:0; z-index:5; width:280px; max-width:100%; padding:10px 12px; background:var(--tb-menu); border:1px solid var(--tb-menu-border); border-radius:8px; box-shadow:var(--tb-menu-shadow); color:var(--ink); font-size:12px; pointer-events:none;}
+  .uz-tip-head{font-weight:700; margin-bottom:2px;}
+  .uz-tip-meta{color:var(--ink-dim); margin-bottom:6px;}
+  .uz-tip ul{list-style:none; margin:0; padding:0; display:grid; gap:4px;}
+  .uz-tip li{display:grid; grid-template-columns:auto 1fr auto; gap:0 6px; align-items:center;}
+  .uz-tip-val{font-family:var(--mono);}
+  .uz-tip-src{grid-column:2 / 4; color:var(--ink-dim); font-size:11px;}
+  .uz-tip p{margin:0; color:var(--ink-dim);}
+
+  /* Machine time for the whole fleet. */
+  .uz-hbar{display:flex; height:18px; border-radius:4px; overflow:hidden; margin:8px 0 12px; gap:2px; background:transparent;}
+  .uz-hseg{display:block; min-width:0;}
+  .uz-table-wrap{overflow-x:auto; max-width:100%;}
+  .uz-table{border-collapse:collapse; width:100%; font-size:12.5px; font-variant-numeric:tabular-nums;}
+  .uz-table th, .uz-table td{padding:7px 10px; border-bottom:1px solid var(--line-soft); text-align:right; white-space:nowrap; color:var(--ink);}
+  .uz-table thead th{font-size:11.5px; font-weight:600; color:var(--ink-dim); vertical-align:bottom;}
+  .uz-table th[scope="row"], .uz-table thead th:first-child{text-align:left;}
+  .uz-table tbody th[scope="row"]{font-weight:500;}
+  .uz-break th[scope="row"]{white-space:normal; min-width:240px;}
+  .uz-state{display:flex; gap:8px; align-items:flex-start;}
+  .uz-state .uz-sw{margin-top:3px;}
+  .uz-state-name{display:block; font-weight:600;}
+  .uz-state-desc{display:block; font-size:11.5px; color:var(--ink-dim); font-weight:400; max-width:52ch;}
+  .uz-kind-gap td{color:var(--ink-dim);}
+  .uz-defs{display:grid; grid-template-columns:auto 1fr; gap:4px 12px; margin:12px 0 0; font-size:12px;}
+  .uz-defs dt{font-weight:600; color:var(--ink); display:flex; gap:6px; align-items:center;}
+  .uz-defs dd{margin:0; color:var(--ink-dim);}
+
+  /* Jobs */
+  .uz-jobs{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px 24px;}
+  .uz-jobs h3{font-size:12.5px; font-weight:600; color:var(--ink-dim); margin:4px 0 8px;}
+  .uz-jobs h4{font-size:12px; font-weight:600; color:var(--ink-dim); margin:10px 0 6px;}
+  .uz-counts{list-style:none; margin:0; padding:0; display:grid; gap:6px;}
+  .uz-counts li{display:grid; grid-template-columns:3.5em 1fr; gap:8px; align-items:baseline; font-size:12.5px;}
+  .uz-counts.is-sub li{font-size:12px;}
+  .uz-count{font-family:var(--mono); text-align:right; color:var(--ink); font-weight:600;}
+  .uz-count-name{display:block; color:var(--ink);}
+  .uz-count-desc{display:block; color:var(--ink-dim); font-size:11.5px;}
+  .uz-none{font-size:12.5px; color:var(--ink-dim); margin:0;}
+
+  /* Per printer */
+  .uz-sort{all:unset; cursor:pointer; display:inline-flex; gap:4px; align-items:center; border-radius:4px; min-height:24px;}
+  .uz-sort:focus-visible{outline:2px solid var(--tb-accent); outline-offset:2px;}
+  .uz-sort-mark{font-size:9px; min-width:9px;}
+  .uz-printers th[scope="row"]{position:sticky; left:0; background:var(--panel); z-index:1; max-width:220px;}
+  .uz-pname{display:inline-block; max-width:180px; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom;}
+  .uz-tag{display:inline-block; margin-left:6px; padding:1px 6px; border:1px solid var(--line); border-radius:999px; font-size:10.5px; color:var(--ink-dim); font-weight:400;}
+  .uz-conf{color:var(--signal); font-weight:700;}
+
+  .uz-limits ul{margin:8px 0 0; padding-left:18px; display:grid; gap:6px; font-size:12.5px; color:var(--ink); line-height:1.45;}
+  .uz-limits p{margin:6px 0 0; font-size:12.5px; color:var(--ink-dim);}
+
+  @media (max-width:720px){
+    .uz-head{align-items:stretch;}
+    .uz-controls{gap:10px 12px;}
+    .uz-kpis{grid-template-columns:1fr 1fr; gap:8px;}
+    .uz-kpi{padding:12px;}
+    .uz-kpi-value{font-size:22px;}
+    .uz-panel{padding:12px;}
+    .uz-yaxis{height:180px;}
+    .uz-plot{--uz-h:180px; gap:2px;}
+    .uz-x{font-size:9.5px;}
+    .uz-break th[scope="row"]{min-width:200px;}
+  }
+  @media (max-width:420px){
+    .uz-kpis{grid-template-columns:1fr;}
+  }
+  @media (prefers-reduced-motion:reduce){ .uz-body.is-loading{transition:none;} }
+  @media (forced-colors:active){
+    .uz-seg-part, .uz-hseg, .uz-sw{forced-color-adjust:none;}
+    .uz-bar{border:1px solid CanvasText;}
   }

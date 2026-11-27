@@ -35,7 +35,7 @@ const conn = require("../../connectors/creality-klipper");
 const moonraker = require("../../connectors/klipper-moonraker");
 const u1 = require("../../connectors/snapmaker-u1-klipper");
 
-const P = { name: "SPARKX i7", url: "http://192.168.4.240:7125" };
+const P = { name: "SPARKX i7", url: "http://192.168.40.240:7125" };
 const FILE = "Benchy.gcode";
 
 // A scripted printer: answers objects/query from its own state and mutates that

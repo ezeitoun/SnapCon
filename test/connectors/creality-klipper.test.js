@@ -108,14 +108,14 @@ function withMockFetch(handler, fn) {
   global.fetch = handler;
   return Promise.resolve(fn()).finally(() => { global.fetch = realFetch; });
 }
-const p = { name: "Test Creality", url: "http://192.168.4.162:7125" };
+const p = { name: "Test Creality", url: "http://192.168.40.162:7125" };
 
 test("getCapabilities: no cameraUrl reports camera:false, unchanged from the static default", () => {
   assert.equal(conn.getCapabilities({}).camera, false);
 });
 
 test("getCapabilities: a printer with a detected cameraUrl reports camera:true", () => {
-  assert.equal(conn.getCapabilities({ cameraUrl: "http://192.168.4.162:8080/?action=snapshot" }).camera, true);
+  assert.equal(conn.getCapabilities({ cameraUrl: "http://192.168.40.162:8080/?action=snapshot" }).camera, true);
 });
 
 test("detectCamera throws when Moonraker itself is unreachable (caller must not cache this as a confirmed 'no camera')", async () => {
@@ -138,14 +138,14 @@ test("detectCamera resolves the as-published relative URL when it actually works
       if (String(url).includes("/server/webcams/list")) {
         return { ok: true, status: 200, json: async () => ({ result: { webcams: [{ snapshot_url: "/webcam/?action=snapshot", stream_url: "/webcam/?action=stream" }] } }) };
       }
-      if (String(url) === "http://192.168.4.162/webcam/?action=snapshot") {
+      if (String(url) === "http://192.168.40.162/webcam/?action=snapshot") {
         return { ok: true, status: 200, headers: { get: () => "image/jpeg" } };
       }
       return { ok: false, status: 404, headers: { get: () => "text/html" } };
     },
     () => conn.detectCamera(p)
   );
-  assert.equal(result, "http://192.168.4.162/webcam/?action=snapshot");
+  assert.equal(result, "http://192.168.40.162/webcam/?action=snapshot");
 });
 
 test("detectCamera falls back to the MJPG-Streamer default port 8080 when the published relative path 404s (confirmed live: the real .162 unit's own port-80 httpd doesn't proxy it)", async () => {
@@ -154,14 +154,14 @@ test("detectCamera falls back to the MJPG-Streamer default port 8080 when the pu
       if (String(url).includes("/server/webcams/list")) {
         return { ok: true, status: 200, json: async () => ({ result: { webcams: [{ snapshot_url: "/webcam/?action=snapshot" }] } }) };
       }
-      if (String(url) === "http://192.168.4.162:8080/?action=snapshot") {
+      if (String(url) === "http://192.168.40.162:8080/?action=snapshot") {
         return { ok: true, status: 200, headers: { get: () => "image/jpeg" } };
       }
       return { ok: false, status: 404, headers: { get: () => "text/html" } };
     },
     () => conn.detectCamera(p)
   );
-  assert.equal(result, "http://192.168.4.162:8080/?action=snapshot");
+  assert.equal(result, "http://192.168.40.162:8080/?action=snapshot");
 });
 
 test("detectCamera returns null when a webcam is registered but no candidate URL actually resolves to an image", async () => {
@@ -193,10 +193,10 @@ test("getCameraSnapshot fetches the stored cameraUrl and returns {contentType, b
   const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
   const result = await withMockFetch(
     async (url) => {
-      assert.equal(url, "http://192.168.4.162:8080/?action=snapshot");
+      assert.equal(url, "http://192.168.40.162:8080/?action=snapshot");
       return { ok: true, status: 200, headers: { get: () => "image/jpeg" }, arrayBuffer: async () => jpegBytes };
     },
-    () => conn.getCameraSnapshot({ cameraUrl: "http://192.168.4.162:8080/?action=snapshot" })
+    () => conn.getCameraSnapshot({ cameraUrl: "http://192.168.40.162:8080/?action=snapshot" })
   );
   assert.equal(result.contentType, "image/jpeg");
   assert.ok(Buffer.isBuffer(result.buffer));
@@ -204,7 +204,7 @@ test("getCameraSnapshot fetches the stored cameraUrl and returns {contentType, b
 });
 
 // ---- Auto-level (applyHeadMapping) ----
-// G29 confirmed as a real, registered gcode macro live on 192.168.4.162 (a
+// G29 confirmed as a real, registered gcode macro live on 192.168.40.162 (a
 // real Ender-3 V3 Plus) and present, unmodified, in K1's and Ender-3 V3 KE's
 // own gcode_macro.cfg — a full leveling routine (home, clear old mesh,
 // nozzle-clear, re-home, probe, save), not a bare BED_MESH_CALIBRATE

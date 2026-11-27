@@ -159,6 +159,9 @@ function idleEnv({ fwPhase = null, online = true, state = "standby" } = {}) {
     FW_QUEUE: [], FW_RUNNING: ["preparing","upload","verify","flash"].includes(fwPhase) ? "p_aaa" : null,
     FW_REBOOT_GRACE_MS: 15 * 60 * 1000,
     probeCached: async () => ({ online, state }),
+    // isPrinterIdle also asks whether the queue is sending to the printer
+    // (TODO §28); never here (test/queueDispatchUpload.test.js covers it).
+    queueDispatchJob: () => null,
     console,
   });
   vm.runInContext(extractFrom(serverSrc, "firmwareCardState"), env);

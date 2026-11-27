@@ -1,0 +1,25 @@
+{
+  "comment": "Targeted contract for GET /api/health (docs/refactoring-policy.md). Printers: 0 Alpha (everyone), 1 Bravo (grp_staff only), 2 Charlie (offline). Users: admin; viewer (no groups = Everyone). Volatile fields are declared per request in volatile.json and masked only if they also vary between two base runs.",
+  "steps": [
+    { "do": "login", "user": "admin", "password": "admin-pass-1" },
+    { "do": "login", "user": "viewer", "password": "viewer-pass-1" },
+    { "do": "request", "id": "health-anon-401", "path": "/api/health?printer=0" },
+    { "do": "request", "id": "health-admin-alpha-idle", "path": "/api/health?printer=0", "as": "admin" },
+    { "do": "request", "id": "health-viewer-bravo-hidden-400", "path": "/api/health?printer=1", "as": "viewer" },
+    { "do": "request", "id": "health-viewer-alpha-200", "path": "/api/health?printer=0", "as": "viewer" },
+    { "do": "request", "id": "health-admin-bravo-200", "path": "/api/health?printer=1", "as": "admin" },
+    { "do": "request", "id": "health-out-of-range-400", "path": "/api/health?printer=9", "as": "admin" },
+    { "do": "request", "id": "health-not-a-number-400", "path": "/api/health?printer=abc", "as": "admin" },
+    { "do": "request", "id": "health-offline-charlie", "path": "/api/health?printer=2", "as": "admin" },
+    { "do": "printer", "printer": "alpha", "body": { "objects": { "extruder": { "temperature": 200, "target": 200, "power": 0.4 }, "fan": { "speed": 1, "rpm": 0 } } } },
+    { "do": "request", "id": "health-dwell-settling-fan-first", "path": "/api/health?printer=0", "as": "admin" },
+    { "do": "request", "id": "health-fan-second-flagged", "path": "/api/health?printer=0", "as": "admin" },
+    { "do": "wait", "ms": 31000 },
+    { "do": "request", "id": "health-dwell-stable-after-31s", "path": "/api/health?printer=0", "as": "admin" },
+    { "do": "reload", "id": "config-reload", "as": "admin" },
+    { "do": "request", "id": "health-after-reload-state-kept", "path": "/api/health?printer=0", "as": "admin" },
+    { "do": "restart", "id": "server-restart" },
+    { "do": "login", "user": "admin", "password": "admin-pass-1" },
+    { "do": "request", "id": "health-after-restart-state-empty", "path": "/api/health?printer=0", "as": "admin" }
+  ]
+}

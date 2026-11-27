@@ -1,0 +1,254 @@
+{
+  "comment": "Targeted contract for GET /api/firmware, the read-only firmware inventory (docs/refactoring-policy.md). The deployment routes (/api/firmware-files, -inspect, -deploy, -options, -stop, -status, -deploy-status) are not part of this set and are never called. Runs in the isolated container: the only network interface is lo. Printers: 0 Alpha (everyone), 1 Bravo (grp_staff only), 2 Charlie (offline, nothing listening); all klipper-moonraker, which declares firmwareInfo but NOT firmwareDeploy. Users: admin; viewer (no groups = Everyone). So the LIST is empty for everyone here (no fixture printer is flashable): the JSON answer is [] and the stream is exactly 2 records (initial, done) — list rows, batching and the per-row decoration are pinned in-process only (test/firmwareInventoryBehaviour.test.js). The single-printer read (?printer=i) does not apply eligibility and reaches the fake printer through connectors/http-utils.js queryFirmwareInfo: GET /printer/info and /machine/system_info (both 404 on the fake unless switched on), /printer/objects/list and /printer/objects/query?mcu; those requests are compared like every other side effect. One read runs with Alpha told to answer /machine/system_info (product and distribution fields) for that step only; it is switched back afterwards. Every request declares the status the fixture must produce (\"expect\"), and the stream its record count; a miss, or a control step the fake printer does not acknowledge, is an error of the run. Nothing here is declared volatile. trackDelays: every single read of a printer that answers creates one 20 s timer (FW_PROBE_TIMEOUT_MS) and clears it; the lifecycle probe records runtime timers only for declared delays, so 20000 is declared here and its created/cleared/fired counts are compared per process start.",
+  "trackDelays": [
+    20000
+  ],
+  "steps": [
+    {
+      "do": "login",
+      "user": "admin",
+      "password": "admin-pass-1"
+    },
+    {
+      "do": "login",
+      "user": "viewer",
+      "password": "viewer-pass-1"
+    },
+    {
+      "do": "request",
+      "id": "firmware-anon-list-401",
+      "path": "/api/firmware",
+      "expect": {
+        "status": 401
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-anon-single-401",
+      "path": "/api/firmware?printer=0",
+      "expect": {
+        "status": 401
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-anon-stream-401",
+      "path": "/api/firmware?stream=1",
+      "expect": {
+        "status": 401
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-admin-list-empty",
+      "path": "/api/firmware",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-admin-stream-2-records",
+      "path": "/api/firmware?stream=1",
+      "as": "admin",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 2
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-viewer-list-empty",
+      "path": "/api/firmware",
+      "as": "viewer",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-viewer-stream-2-records",
+      "path": "/api/firmware?stream=1",
+      "as": "viewer",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 2
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-admin-alpha",
+      "path": "/api/firmware?printer=0",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-viewer-alpha",
+      "path": "/api/firmware?printer=0",
+      "as": "viewer",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-viewer-bravo-hidden-404",
+      "path": "/api/firmware?printer=1",
+      "as": "viewer",
+      "expect": {
+        "status": 404
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-admin-bravo",
+      "path": "/api/firmware?printer=1",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-out-of-range-404",
+      "path": "/api/firmware?printer=9",
+      "as": "admin",
+      "expect": {
+        "status": 404
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-not-a-number-404",
+      "path": "/api/firmware?printer=abc",
+      "as": "admin",
+      "expect": {
+        "status": 404
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-single-wins-over-stream",
+      "path": "/api/firmware?printer=0&stream=1",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-offline-charlie",
+      "path": "/api/firmware?printer=2",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "printer",
+      "printer": "alpha",
+      "body": {
+        "systemInfo": {
+          "product_info": {
+            "machine_type": "Fixture Klipper",
+            "firmware_version": "1.2.3",
+            "software_version": "4.5.6"
+          },
+          "distribution": {
+            "name": "Fixture Linux 12",
+            "kernel_version": "6.1.0-fixture"
+          }
+        }
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-admin-alpha-with-system-info",
+      "path": "/api/firmware?printer=0",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "printer",
+      "printer": "alpha",
+      "body": {
+        "systemInfo": null
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-admin-alpha-after-switch-off",
+      "path": "/api/firmware?printer=0",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "reload",
+      "id": "firmware-config-reload",
+      "as": "admin"
+    },
+    {
+      "do": "request",
+      "id": "firmware-after-reload-alpha",
+      "path": "/api/firmware?printer=0",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-after-reload-viewer-bravo-hidden-404",
+      "path": "/api/firmware?printer=1",
+      "as": "viewer",
+      "expect": {
+        "status": 404
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-after-reload-list-empty",
+      "path": "/api/firmware",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "restart",
+      "id": "firmware-server-restart"
+    },
+    {
+      "do": "login",
+      "user": "admin",
+      "password": "admin-pass-1"
+    },
+    {
+      "do": "request",
+      "id": "firmware-after-restart-alpha",
+      "path": "/api/firmware?printer=0",
+      "as": "admin",
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "do": "request",
+      "id": "firmware-after-restart-stream-2-records",
+      "path": "/api/firmware?stream=1",
+      "as": "admin",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 2
+      }
+    }
+  ]
+}

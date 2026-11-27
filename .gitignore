@@ -13,10 +13,17 @@ notify-token.json
 remote-access-data/
 audit-data/
 sync-data/
+utilization-data/
 library-data/
 data/
 locales/
-.claude/
+# Claude Code: everything under .claude/ is local and stays ignored (settings,
+# permissions, agents, skills, worktrees) — except the shared path-scoped
+# rules named here, which are tracked.
+.claude/*
+!.claude/rules/
+.claude/rules/*
+!.claude/rules/ui-conventions.md
 .agents/
 skills-lock.json
 # Claude Code's private, machine-specific instructions (CLAUDE.md itself is tracked)

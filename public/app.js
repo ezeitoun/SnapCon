@@ -12,7 +12,7 @@ function lookupKlipperError(code, msg){
   return{code, title:entry?entry.t:(code||t("fleet.error_panel.unknown_error_title")), description:(entry&&entry.d)||msg||code||'', url:entry?entry.u:''};
 }
 const $ = id => document.getElementById(id);
-const VERSION = "0.8.0";
+const VERSION = "2026.11.0";
 // A session that expired mid-use (idle timeout, or an Admin deleted the
 // account) shows the login overlay again on the next call rather than
 // leaving the UI silently broken.
@@ -83,6 +83,8 @@ let RA_POLL_TIMER = null, RA_INFLIGHT = false;
 // server (single source of truth — connectors/index.js) instead of a
 // hardcoded list duplicated in this file.
 let CONNECTOR_TYPES = [];
+// Settings › General › Enable virtual printers, as last loaded or saved.
+let VIRTUAL_PRINTERS_ON = false;
 async function loadConnectorTypes(){
   try{ CONNECTOR_TYPES=await getJSON("/api/connectors"); }catch{ CONNECTOR_TYPES=[]; }
 }
@@ -214,23 +216,51 @@ const QUEUE_ERROR_KEYS={
   no_printer_access:"queue.error_no_printer_access",
   pool_not_found:"queue.error_pool_not_found",
   pool_name_required:"queue.error_pool_name_required",
-  reset_confirm_mismatch:"queue.error_reset_confirm_mismatch"
+  reset_confirm_mismatch:"queue.error_reset_confirm_mismatch",
+  queue_store_unavailable:"queue.error_queue_save_failed",
+  stale_decision:"queue.error_stale_decision",
+  queue_moved_during_clear:"queue.error_queue_moved_during_clear",
+  not_awaiting_bed_clear:"queue.error_not_awaiting_bed_clear",
+  clear_failed:"queue.error_clear_failed"
 };
 function queueErrorText(d,fallback){
   if(d&&d.code==="queue_save_failed") return d.detail?t("queue.error_queue_save_failed_detail",{detail:d.detail}):t("queue.error_queue_save_failed");
+  if(d&&d.code==="cancel_failed") return t("queue.error_cancel_failed_detail",{detail:d.detail||""});
   return (d&&d.code&&QUEUE_ERROR_KEYS[d.code])?t(QUEUE_ERROR_KEYS[d.code]):fallback;
 }
 function renderQueueStoreWarning(){
   const card=$("queueStoreWarningCard"), box=$("queueStoreWarning");
   if(!card||!box) return;
   const s=QUEUE_STORE_STATUS;
-  if(!QUEUE_MANAGEMENT_ENABLED || (!s.storeDegraded && !s.storeStoppedByAdmin && !s.queueStoreRecoveryRequired)){
+  // Shown in every one of these states even with Queue Management off: the
+  // server refuses to switch it on in each of them, so this card is then the
+  // only place they can be seen and cleared from.
+  if(!s.storeDegraded && !s.storeStoppedByAdmin && !s.queueStoreRecoveryRequired){
     card.style.display="none"; return;
   }
   card.style.display="";
+  // A queue file that could not be read is not known to be damaged: the
+  // server refuses a reset, so none is offered — only what to do instead.
+  if(s.saveBlocked==="unreadable"){
+    box.innerHTML=`<div class="settings-warning-title">${t("queue.unreadable_title")}</div>`+
+      `<div>${t("queue.unreadable_body")}</div>`+
+      (s.saveBlockedDetail?`<div class="settings-help warn" style="margin-top:8px">${esc(s.saveBlockedDetail)}</div>`:"");
+    return;
+  }
+  // The server's own reason for refusing saves, when it gives one (file names
+  // and an error code only, never a path) — shown as it is, escaped.
+  const blockReason=s.saveBlockedDetail?`<div class="settings-help warn" style="margin-top:8px">${esc(s.saveBlockedDetail)}</div>`:"";
   if(s.queueStoreRecoveryRequired){
-    box.innerHTML=`<div class="settings-warning-title">${t("queue.recovery_required_title")}</div>`+
-      `<div>${t("queue.recovery_required_body")}</div>`+
+    // Recovery is required for more than one reason, and the card must not
+    // name one that did not happen: a marker carried over a restart, no valid
+    // queue file at this start-up (the files then set aside are listed in
+    // corruptFilePaths), or anything else — a reset that did not finish.
+    const reason=s.recoveryCarriedOver?"queue.recovery_reason_carried_over":
+      (s.corruptFilePaths&&s.corruptFilePaths.length?"queue.recovery_reason_no_valid_file":"queue.recovery_reason_general");
+    box.innerHTML=`<div class="settings-warning-title">${t("queue.recovery_title")}</div>`+
+      `<div>${t(reason)} ${t("queue.recovery_explain")}</div>`+
+      blockReason+
+      `<div style="margin-top:8px">${t("queue.recovery_reset_warning")}</div>`+
       `<div style="margin-top:10px;display:flex;gap:8px;align-items:center">`+
       `<input class="field" id="queueResetConfirm" placeholder="${esc(t("queue.reset_confirm_placeholder"))}" style="max-width:200px">`+
       `<button class="btn ghost danger" id="queueAckResetBtn">${t("queue.reset_button")}</button>`+
@@ -250,7 +280,10 @@ function renderQueueStoreWarning(){
   const parts=[];
   if(s.storeDegraded) parts.push(`<div>${t("queue.store_degraded_line")}</div>`);
   if(s.storeStoppedByAdmin) parts.push(`<div>${t("queue.store_stopped_by_admin_line")}</div>`);
-  box.innerHTML=`<div class="settings-warning-title">${t("queue.needs_attention_title")}</div>`+parts.join("")+
+  // Stop all is offered with Queue Management off as well: "stopped" is the
+  // queue store's state and refuses manual queue changes too, not only
+  // automatic dispatch.
+  box.innerHTML=`<div class="settings-warning-title">${t("queue.needs_attention_title")}</div>`+parts.join("")+blockReason+
     `<div style="margin-top:10px;display:flex;gap:8px">`+
     (s.storeDegraded?`<button class="btn ghost" id="queueRetrySaveBtn">${t("queue.retry_save_button")}</button>`:"")+
     (s.storeStoppedByAdmin?`<button class="btn ghost" id="queueResumeAllBtn">${t("queue.resume_all_queues_button")}</button>`:`<button class="btn ghost" id="queueStopAllBtn">${t("queue.stop_all_queues_button")}</button>`)+
@@ -265,7 +298,7 @@ async function queueStoreAction(url){
   if(st){ st.className="pstatus work"; st.textContent=t("queue.working"); }
   try{
     const r=checkAuthFailure(await postJSON(url,{}));
-    const d=await r.json(); if(!r.ok||d.error) throw new Error(queueErrorText(d,d.error||("HTTP "+r.status)));
+    const d=await r.json(); if(!r.ok||d.error||d.ok===false) throw new Error(queueErrorText(d,typeof d.error==="string"?d.error:("HTTP "+r.status)));
     await loadQueueManagementUI();
   }catch(e){ if(st){ st.className="pstatus err"; st.textContent=e.message; } }
 }
@@ -429,9 +462,13 @@ function setSendFill(printerId, start, pct){
 
 // ---- The card's upload strip ----
 // One per printer while an upload is going out, or after one this tab started
-// failed (until Retry or Dismiss): String(printer id) ->
-// { state:"uploading"|"failed", origin:"local"|"fleet", jobId, name, pct,
-//   sent, total, cancellable (fleet), reason, retry (local) }.
+// failed or went unconfirmed (until Retry or Dismiss): String(printer id) ->
+// { state:"uploading"|"failed"|"unconfirmed", origin:"local"|"fleet", jobId,
+//   name, pct, sent, total, cancellable (fleet), reason, retry (local),
+//   confirming, startCancelled, startsPrint (every byte out, the printer has
+//   not answered; a cancel meanwhile called off the start — §37 P1) }.
+// An unconfirmed strip's reason is the whole message: why, whether the print
+// was started, and to check the printer.
 // "local": started by this tab, which polls its job every 400 ms (pollJob)
 // and owns the entry — the fleet data never overrides it. "fleet": started
 // elsewhere (another tab, user or device, or this tab before a reload), as
@@ -460,14 +497,19 @@ function reconcileFleetUploads(rows, uploads, ended, now){
     const cur=uploads.get(key), up=row.upload;
     if(cur && cur.origin!=="fleet") continue;
     if(up && up.jobId && !ended.has(up.jobId)){
-      const pct=up.total ? Math.min(100, Math.round(up.sent/up.total*100)) : 0;
+      const pct=uploadPct(up.sent, up.total);
       if(!cur || cur.jobId!==up.jobId){
-        uploads.set(key, { state:"uploading", origin:"fleet", jobId:up.jobId, name:up.file, sent:up.sent, total:up.total, pct, cancellable:!!up.cancellable });
+        uploads.set(key, { state:"uploading", origin:"fleet", jobId:up.jobId, name:up.file, sent:up.sent, total:up.total, pct, cancellable:!!up.cancellable,
+          confirming:!!up.confirming, startCancelled:!!up.startCancelled, startsPrint:!!up.startsPrint, verifying:!!up.verifying });
         rebuild.add(key);
         continue;
       }
       if(up.sent>=cur.sent){ cur.sent=up.sent; cur.total=up.total; cur.pct=pct; paint.add(key); }
       if(cur.cancellable!==!!up.cancellable){ cur.cancellable=!!up.cancellable; rebuild.add(key); }
+      // Every byte out, waiting for the printer; or its start called off meanwhile.
+      if(cur.confirming!==!!up.confirming || cur.startCancelled!==!!up.startCancelled){ cur.confirming=!!up.confirming; cur.startCancelled=!!up.startCancelled; cur.startsPrint=!!up.startsPrint; rebuild.add(key); }
+      // The printer answered; its copy is being read back (§37 P2).
+      if(cur.verifying!==!!up.verifying){ cur.verifying=!!up.verifying; rebuild.add(key); }
     } else if(cur){
       ended.set(cur.jobId, now);
       uploads.delete(key);
@@ -494,22 +536,46 @@ const UPLOAD_FAILURE_REASONS = {
   ECONNREFUSED:"unreachable", EHOSTUNREACH:"unreachable", ENETUNREACH:"unreachable", ENOTFOUND:"unreachable", EAI_AGAIN:"unreachable",
   UPLOAD_REJECTED:"rejected",
   NAS_UNREACHABLE:"file_unreadable", ENOENT:"file_unreadable", EACCES:"file_unreadable",
+  UPLOAD_CONNECT_TIMEOUT:"connect_timeout", UPLOAD_STALLED:"stalled",
+  UPLOAD_MISMATCH:"mismatch",
 };
-function uploadFailureReason(code, message){
+// Every byte sent and no definite answer (docs/TODO.md §37 P1): why, from the
+// job's errorReason.
+// not-on-printer / verify-unreadable / gone-from-printer / local-changed: the read-back after the upload (§37 P2).
+const UPLOAD_UNCONFIRMED_REASONS = { timeout:"unconfirmed_timeout", "connection-lost":"unconfirmed_lost", "unreadable-reply":"unconfirmed_reply", "not-on-printer":"unconfirmed_absent", "verify-unreadable":"unconfirmed_unchecked", "gone-from-printer":"unconfirmed_gone", "local-changed":"unconfirmed_local_changed", "local-unreadable":"unconfirmed_local_unreadable" };
+// d (optional): the job as /api/print-status reports it, for the deadline that
+// ran out (errorSeconds), the unconfirmed reason and the 5M / 5M Pro
+// screen-message hint (printerPrompt).
+function uploadFailureReason(code, message, d){
+  const s=(d&&d.errorSeconds)||"";
+  if(code==="UPLOAD_UNCONFIRMED") return t("fleet.upload.reason_"+(UPLOAD_UNCONFIRMED_REASONS[d&&d.errorReason]||"unconfirmed_lost"),{s});
   const key=UPLOAD_FAILURE_REASONS[code] || (/socket hang up/i.test(message||"") ? "lost_connection" : null);
-  return key ? t("fleet.upload.reason_"+key) : (message || t("fleet.upload.reason_unknown"));
+  const timed=key==="connect_timeout" || key==="stalled";
+  const txt=key ? t("fleet.upload.reason_"+key, timed ? {s} : undefined) : (message || t("fleet.upload.reason_unknown"));
+  return d&&d.printerPrompt ? txt+". "+t("fleet.upload.ff_prompt") : txt;
 }
 function uploadStripHtml(p){
   const u=UPLOADS.get(String(p.id));
   if(!u) return "";
-  const name=stripExt(u.name);
+  const name=u.name;
   const bar=`<div class="upload-strip-bar"><div class="upload-strip-fill" data-live="upload-bar" style="width:${u.pct}%"></div></div>`;
   if(u.state==="failed"){
     return `<div class="upload-strip failed">`+
-      `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}">${esc(t("fleet.upload.failed_title",{pct:u.pct, file:name}))}</div>`+
+      `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}">${esc(u.mismatch ? t("fleet.upload.mismatch_title",{file:name}) : t("fleet.upload.failed_title",{pct:u.pct, file:name}))}</div>`+
       `<div class="upload-strip-detail">${esc(u.reason)}</div></div>`+
       `<div class="upload-strip-actions">`+
         `<button type="button" class="upload-strip-btn" data-upload-retry="${esc(p.id)}">${esc(t("settings.firmware.st_retry"))}</button>`+
+        `<button type="button" class="upload-strip-btn quiet" data-upload-dismiss="${esc(p.id)}">${esc(t("library.dismiss_btn"))}</button>`+
+      `</div>`+bar+`</div>`;
+  }
+  // Every byte sent and the printer never confirmed it (or SnapCon lost track
+  // of the job): it may or may not have the file. Amber, not red, and no Retry:
+  // a person checks the printer first (docs/TODO.md §37 P1, decision Q3).
+  if(u.state==="unconfirmed"){
+    return `<div class="upload-strip failed unconfirmed">`+
+      `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}">${esc(t("fleet.upload.unconfirmed_title",{file:name}))}</div>`+
+      `<div class="upload-strip-detail">${esc(u.reason)}</div></div>`+
+      `<div class="upload-strip-actions">`+
         `<button type="button" class="upload-strip-btn quiet" data-upload-dismiss="${esc(p.id)}">${esc(t("library.dismiss_btn"))}</button>`+
       `</div>`+bar+`</div>`;
   }
@@ -519,16 +585,30 @@ function uploadStripHtml(p){
   // from the fleet data. View-only users see why they can't (the server
   // checks the role again on /api/print-cancel).
   const job=u.origin==="fleet" ? (u.cancellable ? u.jobId : null) : UPLOAD_CANCEL.get(String(p.id));
-  const why=!canAct() ? t("fleet.upload.cancel_view_only_title") : !job ? t("fleet.upload.cancel_not_yet_title") : null;
-  return `<div class="upload-strip">`+
-    `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}"><span class="upload-strip-name">${esc(t(next?"fleet.upload.uploading_next":"fleet.upload.uploading",{file:name}))}</span><span class="upload-strip-pct" data-live="upload-pct">${u.pct}%</span></div>`+
-    `<div class="upload-strip-detail" data-live="upload-detail">${esc(uploadDetailText(u.pct,u.sent,u.total))}</div></div>`+
+  // Every byte is out and the printer has not answered (confirming). A cancel
+  // then calls off the start at once, and the strip says so until the
+  // printer's answer settles what became of the file.
+  // The printer has answered and its copy is being read back (verifying,
+  // §37 P2): nothing is left to cancel, and the strip stays until the check
+  // settles, so an Unknown or failed check lands on it like a failed upload.
+  const why=!canAct() ? t("fleet.upload.cancel_view_only_title") : u.startCancelled ? t("fleet.upload.cancelled_waiting_detail") : u.verifying ? t("fleet.upload.verifying_cancel_title") : !job ? t("fleet.upload.cancel_not_yet_title") : null;
+  const title=u.startCancelled ? t(u.startsPrint?"fleet.upload.start_cancelled_title":"fleet.upload.upload_cancelled_title",{file:name})
+    : u.verifying ? t("fleet.upload.verifying_title",{file:name})
+    : u.confirming ? t("fleet.upload.confirming_title",{file:name})
+    : t(next?"fleet.upload.uploading_next":"fleet.upload.uploading",{file:name});
+  const detail=u.startCancelled ? t("fleet.upload.cancelled_waiting_detail")
+    : u.verifying ? t("fleet.upload.verifying_detail")
+    : u.confirming ? t("fleet.upload.confirming_detail",{total:uploadMB(u.total)})
+    : uploadDetailText(u.pct,u.sent,u.total);
+  return `<div class="upload-strip${u.startCancelled?" start-cancelled":""}">`+
+    `<div class="upload-strip-text"><div class="upload-strip-title" title="${esc(u.name)}"><span class="upload-strip-name">${esc(title)}</span><span class="upload-strip-pct" data-live="upload-pct">${u.pct}%</span></div>`+
+    `<div class="upload-strip-detail" data-live="upload-detail">${esc(detail)}</div></div>`+
     `<button type="button" class="upload-strip-btn danger" data-cancel-upload="${esc(job||"")}" data-printer="${esc(p.id)}"${why?` disabled title="${esc(why)}"`:""}>${esc(t("fleet.print.cancel_upload"))}</button>`+
     bar+`</div>`;
 }
 // What about a strip rebuilds its card: its state, file and job, and (for
 // another tab's upload) whether it can be cancelled yet. Progress is painted.
-const uploadStripKey=u=>[u.state, u.name, u.jobId||"", u.origin==="fleet"&&u.cancellable?"c":""].join("|");
+const uploadStripKey=u=>[u.state, u.name, u.jobId||"", u.origin==="fleet"&&u.cancellable?"c":"", u.confirming?"w":"", u.startCancelled?"x":"", u.verifying?"v":""].join("|");
 // A state change (uploading, failed, gone) rebuilds the card.
 function setUploadState(printerId, entry){
   if(printerId==null) return;
@@ -537,16 +617,20 @@ function setUploadState(printerId, entry){
   renderFleet({incremental:true});
 }
 // A progress tick from this tab's own job poll: no rebuild.
+// Never 100% until the printer has answered: the last bytes are with the OS,
+// not yet confirmed by the printer (§37 P1).
+function uploadPct(sent, total){ return total ? Math.min(99, Math.round(sent/total*100)) : 0; }
 function patchUploadProgress(printerId, d){
   const u=UPLOADS.get(String(printerId));
   if(!u || u.state!=="uploading" || !d.total) return;
-  u.sent=d.sent; u.total=d.total; u.pct=Math.min(100, Math.round(d.sent/d.total*100));
+  u.sent=d.sent; u.total=d.total; u.pct=uploadPct(d.sent, d.total);
   paintUploadProgress(printerId);
 }
 // The strip's percentage, detail and bar written in place from its entry.
 function paintUploadProgress(printerId){
   const u=UPLOADS.get(String(printerId));
-  if(!u || u.state!=="uploading") return;
+  // A confirming or verifying strip has its own detail line (uploadStripHtml), not a count.
+  if(!u || u.state!=="uploading" || u.confirming || u.verifying) return;
   const card=document.querySelector(`#fleet .pcard[data-pid="${printerId}"]`);
   if(!card) return;
   const set=(sel,txt)=>{ const el=card.querySelector(sel); if(el && el.textContent!==txt) el.textContent=txt; };
@@ -578,7 +662,12 @@ async function cancelUpload(jobId, printerId){
     const d=await r.json().catch(()=>({}));
     // Refused (already sent, or finished): say why. A success shows up
     // through pollJob(), which reports the cancelled upload.
-    if(!r.ok||d.error){ setUploadCancel(printerId, null); setCardStatus(printerId,"pstatus err",d.error||("HTTP "+r.status)); }
+    if(!r.ok||d.error){ setUploadCancel(printerId, null); setCardStatus(printerId,"pstatus err",d.error||("HTTP "+r.status)); return; }
+    // Cancelled while the printer confirms (§37 P1): the start is called off
+    // already, so the strip says so now rather than at the next poll — for an
+    // upload started in another tab that is the next fleet refresh.
+    const u=UPLOADS.get(String(printerId));
+    if(d.whileConfirming && u && u.state==="uploading" && u.jobId===jobId) setUploadState(printerId, { ...u, confirming:true, startCancelled:true, cancellable:false });
   }catch(e){ setCardStatus(printerId,"pstatus err",e.message); }
 }
 function cardStatusFor(p){
@@ -1295,6 +1384,129 @@ const CARD_LAYOUT_URL = (()=>{ try{ const v=new URLSearchParams(location.search)
 // Whether a card is built with the v2 block: Full view only. Compact, Camera
 // and List always get the classic markup.
 function cardLayoutV2(){ return (CARD_LAYOUT_URL||CARD_LAYOUT)==="v2" && VIEW_MODE==='regular'; }
+// UI-REFRESH: the design refresh preview (docs/ui-refresh-changes.md). One
+// helper gates every refresh behavior, the way cardLayoutV2() gates the v2
+// card. The class is set on <html> by index.html's first-paint script from
+// localStorage "snapcon-ui" (this browser only) or ?ui=refresh|classic (this
+// page load only), so reading it here always agrees with what was painted.
+function uiRefresh(){ return document.documentElement.classList.contains("ui-refresh"); }
+// The Settings > View switch: applies at once and is remembered in this
+// browser. A ?ui= override is for this page load only and is never saved,
+// but flipping the switch is a choice: it is saved and applied even then.
+function applyUiRefresh(on){
+  try{ localStorage.setItem("snapcon-ui", on ? "refresh" : "classic"); }catch{}
+  if(on===uiRefresh()) return;
+  document.documentElement.classList.toggle("ui-refresh", on);
+  // A saved Awareness appears or falls back to dark with the switch (Part 2).
+  let saved=null; try{ saved=localStorage.getItem("snapcon-theme"); }catch{}
+  const shown=saved==="awareness" ? shownTheme(saved) : document.documentElement.getAttribute("data-theme")==="awareness" ? "dark" : null;
+  if(shown && document.documentElement.getAttribute("data-theme")!==shown) document.documentElement.setAttribute("data-theme",shown);
+  if($("themeBtn")) syncThemeButton();
+  // Card markup may differ between the designs: rebuild, as a layout change does.
+  if(typeof FLEET!=="undefined" && FLEET.length) renderFleet();
+}
+function syncUiRefreshSwitch(){ if($("setUiRefresh")) $("setUiRefresh").checked=uiRefresh(); }
+
+// UI-REFRESH Part 4: printer cards in Error. Only a printer whose state is
+// "error" (and not shown offline) is marked: a static red outline always, and
+// a sweeping light until someone acknowledges it — by clicking its card or by
+// explicitly choosing it on the Health page (not the Health page's own
+// automatic pick). One error is the printer + errorCode + message, the only
+// identity connectors report. A different code or message re-arms it, and
+// so does the printer leaving Error and entering it again while this page
+// is open. Acknowledgements live in memory and in this browser's
+// localStorage ("snapcon-error-acks": at most one per printer, dropped when
+// the printer leaves Error); nothing is sent to the server or shared.
+const ERROR_ACKS_KEY="snapcon-error-acks";
+const ERROR_SEEN=new Map();        // printer id -> { inError, key }
+let ERROR_ACKS=(()=>{ try{ const v=JSON.parse(localStorage.getItem(ERROR_ACKS_KEY)||"{}"); return v&&typeof v==="object"&&!Array.isArray(v)?v:{}; }catch{ return {}; } })();
+function saveErrorAcks(){ try{ localStorage.setItem(ERROR_ACKS_KEY, JSON.stringify(ERROR_ACKS)); }catch{} }
+function errorInstanceKey(p){ return String(p.errorCode||"")+"\u0001"+String(p.message||""); }
+function cardInError(p){ return p.state==="error" && !printerShowsOffline(p); }
+// "active" (sweeping), "ack" (outline only) or null; records what it saw.
+function errorSweepState(p){
+  const id=String(p.id), prev=ERROR_SEEN.get(id);
+  if(!cardInError(p)){
+    ERROR_SEEN.set(id,{ inError:false, key:null });
+    if(id in ERROR_ACKS){ delete ERROR_ACKS[id]; saveErrorAcks(); }
+    return null;
+  }
+  const key=errorInstanceKey(p);
+  // Seen out of Error and now back in it: a new occurrence, even with the same message.
+  if(prev && !prev.inError && (id in ERROR_ACKS)){ delete ERROR_ACKS[id]; saveErrorAcks(); }
+  ERROR_SEEN.set(id,{ inError:true, key });
+  return ERROR_ACKS[id]===key ? "ack" : "active";
+}
+// UI-REFRESH remediation (owner, 2026-11-06): the moving light costs two
+// composited layers per card, so it runs only on unacknowledged Error cards
+// that are on screen, at most ERROR_SWEEP_MAX at a time (top of the page
+// first). Every other Error card keeps its static outline (and, while
+// unacknowledged, its glow). Visibility never acknowledges anything: it only
+// decides whether the light element exists. One IntersectionObserver for the
+// page, made on first use; it watches only cards in the "active" state and
+// is told to stop when a card leaves that state, is removed, or the switch
+// is turned off (pruneErrorSweeps(), once per renderFleet()). Reduced motion:
+// no light element at all (the CSS also hides it). Without
+// IntersectionObserver every active card counts as on screen.
+const ERROR_SWEEP_MAX=4;
+const ERROR_SWEEP_CARDS=new Set();       // cards in the "active" state, observed
+const ERROR_SWEEP_VISIBLE=new WeakSet();  // ...of those, the ones on screen
+let ERROR_SWEEP_IO=null;
+const ERROR_SWEEP_RM=typeof matchMedia==="function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+function errorSweepObserver(){
+  if(ERROR_SWEEP_IO || typeof IntersectionObserver!=="function") return ERROR_SWEEP_IO;
+  ERROR_SWEEP_IO=new IntersectionObserver(entries=>{
+    for(const e of entries){ if(e.isIntersecting) ERROR_SWEEP_VISIBLE.add(e.target); else ERROR_SWEEP_VISIBLE.delete(e.target); }
+    placeErrorSweeps();
+  });
+  if(ERROR_SWEEP_RM && ERROR_SWEEP_RM.addEventListener) ERROR_SWEEP_RM.addEventListener("change", placeErrorSweeps);
+  return ERROR_SWEEP_IO;
+}
+function setErrorSweepEl(card, on){
+  const sweep=card.querySelector(":scope > .err-sweep");
+  if(on && !sweep){ const s=document.createElement("span"); s.className="err-sweep"; s.setAttribute("aria-hidden","true"); card.prepend(s); }
+  else if(!on && sweep) sweep.remove();
+}
+function forgetErrorSweepCard(card){
+  ERROR_SWEEP_CARDS.delete(card); ERROR_SWEEP_VISIBLE.delete(card);
+  if(ERROR_SWEEP_IO) ERROR_SWEEP_IO.unobserve(card);
+  setErrorSweepEl(card, false);
+}
+// Which observed cards get the light: on screen, motion allowed, in page order, capped.
+function placeErrorSweeps(){
+  const moving=!(ERROR_SWEEP_RM && ERROR_SWEEP_RM.matches);
+  const want=[...ERROR_SWEEP_CARDS].filter(c=>moving && (!ERROR_SWEEP_IO || ERROR_SWEEP_VISIBLE.has(c)));
+  want.sort((a,b)=>a.compareDocumentPosition ? (a.compareDocumentPosition(b)&4 ? -1 : 1) : 0);
+  const keep=new Set(want.slice(0, ERROR_SWEEP_MAX));
+  for(const c of ERROR_SWEEP_CARDS) setErrorSweepEl(c, keep.has(c));
+}
+// After every render: stop watching cards that were removed or rebuilt, or
+// every card when the switch is off.
+function pruneErrorSweeps(){
+  if(!ERROR_SWEEP_CARDS.size) return;
+  const on=uiRefresh();
+  for(const c of [...ERROR_SWEEP_CARDS]) if(!on || c.isConnected===false || !c.classList.contains("is-error-active")) forgetErrorSweepCard(c);
+  placeErrorSweeps();
+}
+function syncErrorSweep(card, p){
+  const st=errorSweepState(p);
+  card.classList.toggle("is-error-active", st==="active");
+  card.classList.toggle("is-error-ack", st==="ack");
+  if(st==="active"){
+    if(!ERROR_SWEEP_CARDS.has(card)){ ERROR_SWEEP_CARDS.add(card); const io=errorSweepObserver(); if(io) io.observe(card); placeErrorSweeps(); }
+  } else if(ERROR_SWEEP_CARDS.has(card)){ forgetErrorSweepCard(card); placeErrorSweeps(); }
+  else setErrorSweepEl(card, false);
+}
+// Acknowledge the printer's current error, if it has one, and update its card now.
+function acknowledgePrinterError(printerId){
+  if(!uiRefresh()) return;
+  const id=String(printerId), seen=ERROR_SEEN.get(id);
+  if(!seen || !seen.inError || ERROR_ACKS[id]===seen.key) return;
+  ERROR_ACKS[id]=seen.key; saveErrorAcks();
+  const p=(typeof FLEET!=="undefined"?FLEET:[]).find(x=>String(x.id)===id), cached=CARD_CACHE.get(p?p.id:printerId);
+  if(p && cached && cached.el) syncErrorSweep(cached.el, p);
+}
+
 // From the config (load and after Save). A change rebuilds every card in
 // full — the layout is not part of cardSignature(), on purpose.
 function applyCardLayout(value){
@@ -1348,6 +1560,7 @@ function chooseView(mode){
   closeQueueDashboard();
   closeHealthPage();
   if(window.LibraryPage) LibraryPage.close();
+  if(window.UtilizationPage) UtilizationPage.close();
   VIEW_MODE=mode;
   applyViewMode();
   renderFleet();
@@ -1436,13 +1649,13 @@ function openSettingsUpdates(){
 // Where a click on the brand cell ("back to printers") goes. Pure.
 // - single-printer link (/orca/<name>): nowhere;
 // - already on the fleet: just scroll it to the top;
-// - from Settings, Health, Library or the Queue dashboard: back to the
+// - from Settings, Health, Library, Utilization or the Queue dashboard: back to the
 //   fleet in the current view, or, coming from Print farm, the last fleet
 //   view (Full if there was none).
 function brandTarget(s){
   if(s.deepLink) return { action:'none' };
   const fromPrintFarm = s.queueOpen || s.viewMode==='printfarm';
-  if(!fromPrintFarm && !s.settingsOpen && !s.healthOpen && !s.libraryOpen) return { action:'scrollTop' };
+  if(!fromPrintFarm && !s.settingsOpen && !s.healthOpen && !s.libraryOpen && !s.utilizationOpen) return { action:'scrollTop' };
   const fleetViews=['regular','compact','camera','list'];
   const view = fromPrintFarm ? (fleetViews.includes(s.lastFleetView) ? s.lastFleetView : 'regular')
                              : (fleetViews.includes(s.viewMode) ? s.viewMode : 'regular');
@@ -1455,6 +1668,7 @@ function fleetNavState(){
     settingsOpen: $("setup").classList.contains("show"),
     healthOpen: $("healthPage").classList.contains("show"),
     libraryOpen: !!(window.LibraryPage && LibraryPage.isOpen()),
+    utilizationOpen: !!(window.UtilizationPage && UtilizationPage.isOpen()),
     queueOpen: $("queueDashboard").classList.contains("show"),
     viewMode: VIEW_MODE, lastFleetView: LAST_FLEET_VIEW,
   };
@@ -1510,6 +1724,8 @@ function topbarVisibility(s){
     heat: fleetSide,
     queue: s.queueEnabled && fleetSide,
     library: fleetSide,
+    // Fleet-wide figures: not on a single printer's /orca/<name> link.
+    utilization: fleetSide && whole,
     search: fleetSide && whole,
     theme: whole,
     // Settings' own cell stays while Settings is open: it is the way back.
@@ -1523,7 +1739,7 @@ function topbarVisibility(s){
 const TB_CELLS = {
   files:['filesBtn','tbSheetFiles'], view:['tbViewWrap','tbSheetView'], sort:['tbSortWrap','tbSheetSort'],
   health:['healthBtn','tbSheetHealth'], heat:['bulkHeatBtn','tbSheetHeat'], queue:['queueBtn','tbSheetQueue'],
-  library:['libraryBtn','tbSheetLibrary'], search:['tbSearchCell','tbSearchBtn'], theme:['themeBtn','tbSheetTheme'],
+  library:['libraryBtn','tbSheetLibrary'], utilization:['utilizationBtn','tbSheetUtilization'], search:['tbSearchCell','tbSearchBtn'], theme:['themeBtn','tbSheetTheme'],
   gear:['gear','tbSheetSettings'], user:['userBadge','tbSheetLang','tbSheetLogout'], clock:['topbarClock'],
 };
 function applyTopbarVisibility(){
@@ -1539,26 +1755,27 @@ function applyTopbarVisibility(){
   // A menu whose cell just went away closes with it.
   if(TB_POPUP && TB_POPUP.btn.closest("[hidden]")) closeTopbarPopup(false);
 }
-// Which cells look active. Pure. Fleet, Settings, Health, Queue and Library
+// Which cells look active. Pure. Fleet, Settings, Health, Queue, Library and Utilization
 // are separate pages, so exactly one page cell is active, with View standing
 // for Fleet. Files is an overlay on Fleet and adds to it, as does the cell
 // whose menu or popover is open. While the Heat dialog is open, Heat is the
 // only highlighted cell; the page's highlight returns when it closes.
 function topbarActiveCells(s){
   if(s.heatOpen) return ['heat'];
-  const page=s.settingsOpen?'gear':s.healthOpen?'health':s.queueOpen?'queue':s.libraryOpen?'library':'view';
+  const page=s.settingsOpen?'gear':s.healthOpen?'health':s.queueOpen?'queue':s.libraryOpen?'library':s.utilizationOpen?'utilization':'view';
   const on=[page];
   if(s.filesOpen) on.push('files');
   if(s.popup && !on.includes(s.popup)) on.push(s.popup);
   return on;
 }
-const TB_ACTIVE_CELLS = { view:'viewBtn', sort:'sortBtn', files:'filesBtn', health:'healthBtn', queue:'queueBtn', library:'libraryBtn', gear:'gear', status:'tbStatusBtn', sheet:'tbMenuBtn', heat:'bulkHeatBtn' };
+const TB_ACTIVE_CELLS = { view:'viewBtn', sort:'sortBtn', files:'filesBtn', health:'healthBtn', queue:'queueBtn', library:'libraryBtn', utilization:'utilizationBtn', gear:'gear', status:'tbStatusBtn', sheet:'tbMenuBtn', heat:'bulkHeatBtn' };
 function syncTopbarActive(){
   const on=topbarActiveCells({
     settingsOpen: $("setup").classList.contains("show"),
     healthOpen: $("healthPage").classList.contains("show"),
     queueOpen: $("queueDashboard").classList.contains("show"),
     libraryOpen: !!(window.LibraryPage && LibraryPage.isOpen()),
+    utilizationOpen: !!(window.UtilizationPage && UtilizationPage.isOpen()),
     // body.showfiles, not FILES_OPEN: Settings hides the file list without
     // forgetting that it was open.
     filesOpen: document.body.classList.contains("showfiles"),
@@ -2080,6 +2297,8 @@ async function init(){
   if(healthMatch) openHealthPage(healthMatch[1]?parseInt(healthMatch[1],10):null);
   // /library, /library/m/<uuid>, /library/attention (public/library.js).
   if(window.LibraryPage) LibraryPage.openFromLocation();
+  // /utilization (public/utilization.js).
+  if(window.UtilizationPage) UtilizationPage.openFromLocation();
   // First fleet data is in (or failed) — fade the splash out and drop it.
   const splash=$("splash");
   if(splash){ splash.classList.add("hide"); setTimeout(()=>splash.remove(), 600); }
@@ -2103,7 +2322,13 @@ function wireModal(modalId, closeFn, buttonIds){
 // The glyph is the same in both themes. The title names the theme a click
 // switches TO; for assistive tech it is a "Light theme" toggle, pressed while
 // light is on, so the name and the pressed state never contradict each other.
+// UI-REFRESH: the classic button chooses here; syncThemeButtonClassic() is
+// the unchanged light/dark version, syncThemeButtonRefresh() the three-way one.
 function syncThemeButton(){
+  if(uiRefresh()) syncThemeButtonRefresh();
+  else { setThemeGlyph("#tb-theme"); syncThemeButtonClassic(); }
+}
+function syncThemeButtonClassic(){
   const light=document.documentElement.getAttribute("data-theme")==="light";
   $("themeBtn").title=t(light?"global.topbar.theme_title_to_dark":"global.topbar.theme_title_to_light");
   $("themeBtn").setAttribute("aria-label",t("global.topbar.theme_alt_light"));
@@ -2113,6 +2338,32 @@ function syncThemeButton(){
     $("tbSheetTheme").setAttribute("aria-pressed",light?"true":"false");
   }
 }
+// UI-REFRESH: three themes, cycled Day -> Night -> Awareness. A cycle is not
+// a pressed/unpressed toggle, so the refresh drops aria-pressed: the label
+// names the current theme and the next, the title the next, and the mobile
+// sheet the current one. The glyph is the current theme's: sun (Day), moon
+// (Night), ribbon (Awareness), all Lucide line icons.
+const THEME_CYCLE=["light","dark","awareness"];
+const THEME_GLYPH={ light:"#tb-sun", dark:"#tb-moon", awareness:"#tb-ribbon" };
+function nextThemeRefresh(cur){ const i=THEME_CYCLE.indexOf(cur); return THEME_CYCLE[(i<0?0:i+1)%THEME_CYCLE.length]; }
+function themeName(theme){ return t("global.topbar.theme_name_"+(THEME_CYCLE.includes(theme)?theme:"dark")); }
+function setThemeGlyph(href){ for(const id of ["themeBtn","tbSheetTheme"]){ const u=$(id)&&$(id).querySelector("use"); if(u&&u.getAttribute("href")!==href) u.setAttribute("href",href); } }
+function syncThemeButtonRefresh(){
+  const cur=document.documentElement.getAttribute("data-theme")||"dark", next=nextThemeRefresh(cur);
+  setThemeGlyph(THEME_GLYPH[cur]||THEME_GLYPH.dark);
+  $("themeBtn").title=t("global.topbar.theme_switch_to",{theme:themeName(next)});
+  $("themeBtn").setAttribute("aria-label",t("global.topbar.theme_current_next",{current:themeName(cur),next:themeName(next)}));
+  $("themeBtn").removeAttribute("aria-pressed");
+  if($("tbSheetTheme")){
+    $("tbSheetThemeLabel").textContent=themeName(cur);
+    $("tbSheetTheme").removeAttribute("aria-pressed");
+    $("tbSheetTheme").setAttribute("aria-label",t("global.topbar.theme_current_next",{current:themeName(cur),next:themeName(next)}));
+  }
+}
+// UI-REFRESH: the theme this browser shows for a saved value. Awareness only
+// while the refresh is on; otherwise dark, and the saved value is kept.
+function shownTheme(saved){ return saved==="awareness" ? (uiRefresh()?"awareness":"dark") : saved; }
+
 // A signed-in user's saved theme is authoritative over whatever this
 // particular browser guessed for first paint (local prefers-color-scheme or
 // a stale localStorage value from someone else on a shared machine) — and
@@ -2121,10 +2372,12 @@ function syncThemeButton(){
 // waiting on this request. A no-op for accounts that haven't picked a theme
 // yet (theme is null) — they keep following prefers-color-scheme as usual.
 function applyAccountTheme(user){
-  if(!user || (user.theme!=="light" && user.theme!=="dark")) return;
+  // UI-REFRESH: "awareness" is accepted; shownTheme() shows it as dark while the refresh is off.
+  if(!user || (user.theme!=="light" && user.theme!=="dark" && user.theme!=="awareness")) return;
   localStorage.setItem("snapcon-theme",user.theme);
-  if(document.documentElement.getAttribute("data-theme")===user.theme) return;
-  document.documentElement.setAttribute("data-theme",user.theme);
+  const shown=shownTheme(user.theme);
+  if(document.documentElement.getAttribute("data-theme")===shown) return;
+  document.documentElement.setAttribute("data-theme",shown);
   syncThemeButton();
 }
 // applyI18nToDom() only re-scans [data-i18n]/[data-i18n-*] attributes on
@@ -2138,6 +2391,7 @@ function applyAccountTheme(user){
 // stale-language text sitting in a control whose content depends on JS
 // state rather than markup.
 function refreshDynamicI18nText(){
+  if(window.UtilizationPage) UtilizationPage.rerender();
   renderMilestoneChips();
   updatePrintersDirtyFooter();
   if($("collapseAll")) syncCollapseAllButtonLabel();
@@ -2815,7 +3069,9 @@ function wireUI(){
     else openHealthPage();
   });
   $("themeBtn").addEventListener("click", ()=>{
-    const next=document.documentElement.getAttribute("data-theme")==="light"?"dark":"light";
+    // UI-REFRESH: the refresh cycles three themes; classic toggles light/dark.
+    const cur=document.documentElement.getAttribute("data-theme");
+    const next=uiRefresh() ? nextThemeRefresh(cur) : (cur==="light"?"dark":"light");
     document.documentElement.setAttribute("data-theme",next);
     localStorage.setItem("snapcon-theme",next);
     syncThemeButton();
@@ -2829,6 +3085,9 @@ function wireUI(){
     }
   });
   syncThemeButton();
+  // UI-REFRESH: the preview switch saves itself (not part of the View tab's Save row).
+  syncUiRefreshSwitch();
+  if($("setUiRefresh")) $("setUiRefresh").addEventListener("change", e=>applyUiRefresh(e.target.checked));
   // No stored choice yet — the page opened on whatever prefers-color-scheme
   // said at load (see the inline <head> script). Keep following the OS
   // setting live until the user makes an explicit pick via the button
@@ -2955,6 +3214,12 @@ function wireUI(){
   $("uploadFilesBtn").addEventListener("click", ()=>$("uploadFilesInput").click());
   $("uploadFilesInput").addEventListener("change", e=>{ uploadLocalFiles(e.target.files); e.target.value=""; });
   $("multiselectClear").addEventListener("click", ()=>{ SELECTED_FILES.clear(); SELECT_ANCHOR=null; updateMultiSelectUI(); renderList(); });
+  $("multiselectDelete").addEventListener("click", ()=>openDeleteDialog([...SELECTED_FILES]));
+  $("jobDelete").addEventListener("click", ()=>{ if(SELECTED&&!SEND_SOURCE) openDeleteDialog([SELECTED]); });
+  wireModal("deleteFilesModal", closeDeleteDialog, ["deleteFilesX","deleteFilesCancel"]);
+  $("deleteFilesGo").addEventListener("click", confirmDeleteDialog);
+  $("deleteModeTrash").addEventListener("change", syncDeleteDialog);
+  $("deleteModePermanent").addEventListener("change", syncDeleteDialog);
   wireFileDrag();
   wireModal("maintReportModal", closeMaintReport, ["maintReportX","maintCancel"]);
   $("maintPrinterSel").addEventListener("change", ()=>loadMaintDetail(parseInt($("maintPrinterSel").value,10)));
@@ -3018,6 +3283,8 @@ function wireUI(){
   $("elecApply").addEventListener("click", ()=>{ closeElecModal(); });
 
   wireFleetCardEvents();
+  wireCompactCardMenu();
+  wireDeferredNoticeEvents();
   wireFleetDrag();
   wirePrinterDrag();
 
@@ -3149,9 +3416,14 @@ function wireUI(){
   $("setQueueEnabled").addEventListener("change", async function(){
     const wantOn=this.checked;
     try{
-      await postJSON(wantOn?"/api/queue-management/enable":"/api/queue-management/disable",{});
+      const r=checkAuthFailure(await postJSON(wantOn?"/api/queue-management/enable":"/api/queue-management/disable",{}));
+      const d=await r.json().catch(()=>({}));
+      // A refusal (the queue store cannot save, the settings could not be saved) is said, not silently undone.
+      if(!r.ok||d.error){ await loadQueueManagementUI(); throw new Error(queueErrorText(d,d.error||("HTTP "+r.status))); }
       await loadQueueManagementUI();
-    }catch(e){ this.checked=!wantOn; alert(e.message); }
+    // Back to what the server has, which after an answer is not always the
+    // opposite of what was asked: a change can be made and only not confirmed.
+    }catch(e){ this.checked=QUEUE_MANAGEMENT_ENABLED; alert(e.message); }
   });
   $("addPrinterPoolBtn").addEventListener("click", async ()=>{
     const st=$("printerPoolStatus");
@@ -3263,9 +3535,10 @@ async function checkVersion(){
 }
 $("refresh").addEventListener("click", ()=>{ loadFiles(); loadFleet(); });
 // Empty box = browse the current folder as normal (renderList). Any text =
-// a recursive search from the gcode root, across every subfolder, replacing
-// the folder view with a flat list of matches (debounced so fast typing
-// doesn't fire a request per keystroke).
+// a recursive search of the folder being shown (CURRENT_SUB) and every folder
+// below it — the whole G-code folder only at the top — replacing the folder
+// view with a flat list of matches (debounced so fast typing doesn't fire a
+// request per keystroke).
 let SEARCH_DEBOUNCE=null;
 $("filter").addEventListener("input", ()=>{
   const q=$("filter").value.trim();
@@ -3275,9 +3548,11 @@ $("filter").addEventListener("input", ()=>{
 });
 async function runSearch(q){
   try{
-    const d=await getJSON("/api/files/search?q="+encodeURIComponent(q));
-    // The box may have changed (or been cleared) while this was in flight.
-    if($("filter").value.trim()!==q) return;
+    const sub=CURRENT_SUB;
+    const d=await getJSON("/api/files/search?q="+encodeURIComponent(q)+"&sub="+encodeURIComponent(sub));
+    // The box may have changed (or been cleared), or another folder opened,
+    // while this was in flight.
+    if($("filter").value.trim()!==q||CURRENT_SUB!==sub) return;
     SEARCH_RESULTS=d.files||[];
     renderList();
   }catch(e){ /* leave the previous view up rather than blank it on a blip */ }
@@ -3299,7 +3574,6 @@ function fmtTime(ms){ const d=new Date(ms), df=(Date.now()-ms)/1000;
   if(df<60)return t("files.time_just_now"); if(df<3600)return t("files.time_minutes_ago",{n:Math.floor(df/60)}); if(df<86400)return t("files.time_hours_ago",{n:Math.floor(df/3600)});
   return d.toLocaleDateString([],{month:"short",day:"numeric"})+" "+d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function stripExt(name){ return String(name||"").replace(/\.[^./\\]+$/,""); }
 function hexToHsl(hex){
   if(!hex||!hex.startsWith('#')) return null;
   let h=hex.replace('#',''); if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
@@ -3508,7 +3782,7 @@ function renderList(){
     b.draggable=true; b.dataset.file=filePath;
     b.tabIndex=0; b.setAttribute("role","button");
     const fsBadge=(isSelectedFile(filePath)&&MAP&&MAP.isFS)?` <img src="/fs-badge.svg" class="fs-badge" title="${esc(t("files.full_spectrum_title"))}">`:``;
-    b.innerHTML=`<div class="jn" title="${esc(f.name)}">${esc(stripExt(f.name))}${fsBadge}</div>`+
+    b.innerHTML=`<div class="jn" title="${esc(f.name)}">${esc(f.name)}${fsBadge}</div>`+
       `<div class="jm">${fileKindBadge(f)} ${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
     b.addEventListener("click",e=>fileRowClick(e,filePath,shownPaths));
     b.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); fileRowClick(e,filePath,shownPaths); } });
@@ -3528,7 +3802,7 @@ function renderSearchResults(){
     const b=document.createElement("button"); b.className="job"+(isSelectedFile(filePath)?" active":"");
     const fsBadge=(isSelectedFile(filePath)&&MAP&&MAP.isFS)?` <img src="/fs-badge.svg" class="fs-badge" title="${esc(t("files.full_spectrum_title"))}">`:``;
     const where=f.sub?`<span class="jm-path">${esc(f.sub)}/</span>`:``;
-    b.innerHTML=`<div class="jn">${where}${esc(stripExt(f.name))}${fsBadge}</div><div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
+    b.innerHTML=`<div class="jn" title="${esc(f.sub?f.sub+"/"+f.name:f.name)}">${where}${esc(f.name)}${fsBadge}</div><div class="jm">${fmtTime(f.mtime)} · ${fmtSize(f.size)}</div>`;
     b.addEventListener("click",()=>selectFile(filePath));
     list.appendChild(b);
   });
@@ -3569,6 +3843,8 @@ function updateMultiSelectUI(){
     bar.style.display="";
     $("multiselectCount").textContent=tn("files.multiselect_count",n);
     if($("sendToQueueBtn")) $("sendToQueueBtn").style.display=QUEUE_MANAGEMENT_ENABLED?"":"none";
+    const del=$("multiselectDelete");
+    if(del){ del.style.display=canAct()?"":"none"; del.textContent=tn("files.delete_n_button",n); }
     $("jobcard").classList.remove("show");
     $("jobloading").classList.remove("show");
     $("jobsechead").classList.remove("show");
@@ -3617,7 +3893,7 @@ function renderSendQueueFiles(){
     `<div style="display:flex;align-items:center;gap:8px">`+
     `<span style="flex:1;font-size:12px;font-family:var(--mono);color:var(--ink-dim);word-break:break-all">${esc(it.name)}</span>`+
     `<span class="pi-lbl">×</span>`+
-    `<input type="number" class="field sendq-qty" data-idx="${i}" min="1" max="50" value="${it.quantity}" style="max-width:90px">`+
+    `<input type="number" class="field sendq-qty" data-idx="${i}" min="1" max="50" value="${it.quantity}" style="max-width:100px">`+
     `</div>`
   ).join("");
   $("sendQueueFiles").querySelectorAll(".sendq-qty").forEach(inp=>{
@@ -3685,7 +3961,8 @@ let QUEUE_VIEW_DATA={}, QUEUE_VIEW_TIMER=null;
 const QUEUE_ACTION_LABEL_KEYS={
   resume:"queue.action_resume", retry:"queue.action_retry_job", skip:"queue.action_skip_job", stop:"queue.action_stop_queue",
   "retry-bed-clear":"queue.action_retry_bed_clear", "skip-bed-clear":"queue.action_skip_bed_clear",
-  "accept-file-change":"queue.action_use_current_file", "acknowledge":"queue.action_acknowledge_resume"
+  "accept-file-change":"queue.action_use_current_file", "acknowledge":"queue.action_acknowledge_resume",
+  "mark-completed":"queue.action_mark_completed"
 };
 function queueActionLabel(action){ return QUEUE_ACTION_LABEL_KEYS[action]?t(QUEUE_ACTION_LABEL_KEYS[action]):action; }
 const QUEUE_ATTENTION_RESOLUTIONS={
@@ -3697,7 +3974,7 @@ const QUEUE_ATTENTION_RESOLUTIONS={
   "pool-invalid": ["stop"],
   "recovery-mismatch": ["acknowledge","stop"],
   "recovery-interrupted": ["retry","skip","stop"],
-  "recovery-unknown-outcome": ["resume","retry","skip","stop"]
+  "recovery-unknown-outcome": ["mark-completed","retry","skip","stop"]
 };
 // attentionReason is always one of QueueEngine.js's frozen ATTENTION_REASONS
 // slugs (e.g. "print-failed") — previously shown to the user completely
@@ -3712,6 +3989,24 @@ const ATTENTION_REASON_LABEL_KEYS={
   "recovery-mismatch":"queue.attention_recovery_mismatch", "recovery-interrupted":"queue.attention_recovery_interrupted",
   "recovery-unknown-outcome":"queue.attention_recovery_unknown_outcome"
 };
+// A failed dispatch's detail in the reader's language, for the transfer
+// outcomes the server records with a code and their parts (docs/TODO.md §37
+// P1): the file, why, the deadline, who cancelled. Any other detail keeps the
+// server's message, as before. Pure apart from t().
+function queueAttentionDetailText(detail){
+  if(!detail) return "";
+  const file=detail.file||"", s=detail.seconds||"";
+  const ff=detail.printerPrompt ? " "+t("fleet.upload.ff_prompt") : "";
+  if(detail.code==="upload-unconfirmed") return t("queue.attention_detail_upload_unconfirmed",{file, reason:uploadFailureReason("UPLOAD_UNCONFIRMED", "", {errorReason:detail.reason, errorSeconds:s})});
+  if(detail.code==="upload-mismatch") return t("queue.attention_detail_upload_mismatch",{file});
+  if(detail.code==="upload-stalled") return t("queue.attention_detail_upload_stalled",{file, reason:t("fleet.upload.reason_stalled",{s})})+ff;
+  if(detail.code==="upload-connect-timeout") return t("queue.attention_detail_upload_connect_timeout",{file, reason:t("fleet.upload.reason_connect_timeout",{s})});
+  if(detail.code==="upload-cancelled" && (detail.uploadOutcome==="sent" || detail.uploadOutcome==="unknown")){
+    const key="queue.attention_detail_cancelled_"+detail.uploadOutcome+(detail.by?"_by":"");
+    return t(key,{file, name:detail.by||""});
+  }
+  return detail.message||"";
+}
 function attentionReasonLabel(reason){ return ATTENTION_REASON_LABEL_KEYS[reason]?t(ATTENTION_REASON_LABEL_KEYS[reason]):(reason||t("queue.attention_generic")); }
 // Fleet, Settings, Queue Management, and Health are mutually exclusive
 // full-page views (same show/hide idiom as .setup) — openQueueDashboard()/
@@ -3723,6 +4018,7 @@ function openQueueDashboard(){
   if($("queueDashboard").classList.contains("show")) return;
   closeHealthPage();
   if(window.LibraryPage) LibraryPage.close();
+  if(window.UtilizationPage) UtilizationPage.close();
   $("queueDashboard").classList.add("show");
   // Only the Fleet-specific CONTENT is swapped out for the dashboard (can't
   // show the printer grid and the dashboard at once) — every topbar
@@ -3781,11 +4077,14 @@ const HEALTH_ATTENTION_CACHE={};
 function openHealthPage(printerId){
   closeQueueDashboard();
   if(window.LibraryPage) LibraryPage.close();
+  if(window.UtilizationPage) UtilizationPage.close();
   $("healthPage").classList.add("show");
   document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display="none");
   $("healthBtn").title=t("global.topbar.back_to_fleet_title");
   syncTopbarActive();
   let id=printerId;
+  // UI-REFRESH Part 4: a printer named here (/health/<id>, back/forward) was chosen; the automatic pick below was not.
+  if(id!=null) acknowledgePrinterError(id);
   if(id==null){
     const attn=FLEET.find(p=>p.needsAttention);
     id=attn?attn.id:(FLEET[0]?FLEET[0].id:null);
@@ -3815,6 +4114,7 @@ function startHealthAutoRefresh(){
     if(healthServiceFormHasFocus()) return;
     const p=FLEET.find(f=>f.id===HEALTH_PRINTER_ID);
     if(!p||!healthAutoRefreshStates(p.state)) return;
+    if(HEALTH_INFLIGHT>0) return;   // the previous load hasn't answered yet (§50)
     loadHealthData({quiet:true});
   },ms);
 }
@@ -3847,7 +4147,7 @@ window.addEventListener("popstate",()=>{
     if(!m){ if($("healthPage").classList.contains("show")) closeHealthPage(); return; }
     const id=m[1]?parseInt(m[1],10):null;
     if(!$("healthPage").classList.contains("show")) openHealthPage(id);
-    else selectHealthPrinter(id);
+    else { selectHealthPrinter(id); if(id!=null) acknowledgePrinterError(id); }   // UI-REFRESH Part 4
   } finally { HEALTH_SYNCING_FROM_POPSTATE=false; }
 });
 
@@ -3884,7 +4184,7 @@ function renderHealthPicker(){
     `</button>`;
   }).join("");
   wrap.querySelectorAll("[data-healthchip]").forEach(b=>{
-    b.addEventListener("click",()=>selectHealthPrinter(parseInt(b.dataset.healthchip,10)));
+    b.addEventListener("click",()=>{ const id=parseInt(b.dataset.healthchip,10); selectHealthPrinter(id); acknowledgePrinterError(id); });   // UI-REFRESH Part 4
   });
 }
 
@@ -3892,6 +4192,37 @@ function renderHealthPicker(){
 // refresh updates values in place instead of flashing the whole page through
 // its loading state every interval. Only the first load of a printer (and a
 // printer switch) clears first, where there genuinely is nothing to show yet.
+// A print's energy cost in the browser (docs/TODO.md §45), the same rule as the
+// server's printEnergyEstimate(): the printer's own watts × hours × the
+// electricity rate, and 0 — no energy part — when the watts or the rate are
+// unknown. Never the old implied 1,000 W.
+function energyCostEstimate(watts, hours){
+  return (ELECTRICITY_RATE>0 && watts>0 && hours>0) ? ELECTRICITY_RATE*hours*watts/1000 : 0;
+}
+// Health loads still running (docs/TODO.md §50): the auto-refresh skips a tick
+// while any is outstanding, as the fleet poll does with FLEET_INFLIGHT, so a
+// slow printer can't stack a new request every interval. A count, not a flag:
+// an explicit load (opening the page, switching printer) never waits for an
+// older one — HEALTH_REQ_TOKEN already makes the older answer irrelevant.
+let HEALTH_INFLIGHT=0;
+// Why a printer's Health can't be shown (docs/TODO.md §50): the heading says
+// what actually happened, from the answer's reasonCode, instead of always
+// "not available for this connector". The server's reason line is shown where
+// it adds detail (offline, unreachable, anything unrecognised) and left out
+// where it only repeats the heading in English (stock firmware, 502, 504).
+// Anything without a recognised code keeps the original heading.
+const HEALTH_UNAVAILABLE={
+  offline:              { key:"health.unavailable_offline",     showReason:true },
+  unsupported_firmware: { key:"health.unavailable_firmware",    showReason:false },
+  connector_error:      { key:"health.unavailable_error",       showReason:false },
+  timeout:              { key:"health.unavailable_timeout",     showReason:false },
+  client_unreachable:   { key:"health.unavailable_unreachable", showReason:true },
+};
+function healthUnavailableHtml(d, name){
+  const code=d.reasonCode || (d.online===false ? "offline" : null);
+  const m=HEALTH_UNAVAILABLE[code] || { key:"health.unsupported", showReason:true };
+  return `<div class="health-unsupported"><h3>${esc(name)}</h3><p>${esc(t(m.key))}</p>${m.showReason&&d.reason?`<p class="settings-help">${esc(d.reason)}</p>`:""}</div>`;
+}
 async function loadHealthData(opts){
   const quiet=!!(opts&&opts.quiet);
   const pid=HEALTH_PRINTER_ID;
@@ -3899,10 +4230,17 @@ async function loadHealthData(opts){
   const token=++HEALTH_REQ_TOKEN;
   if(!quiet){ HEALTH_DATA=null; HEALTH_MAINT=null; renderHealthBody(); }
   let health, maint;
-  try{ health=await (await fetch("/api/health?printer="+pid)).json(); }
-  catch(e){ health={ skipped:true, reason:t("health.could_not_reach",{message:e.message}) }; }
-  try{ maint=await (await fetch("/api/maintenance?printer="+pid)).json(); }
-  catch(e){ maint=null; }
+  HEALTH_INFLIGHT++;
+  try{
+    // Bounded (docs/TODO.md §50): the server answers within its own 25 s
+    // deadline, 502/504 included, in the same { skipped, reason } shape; this
+    // limit only covers a server or network that does not answer at all.
+    try{ health=await (await fetch("/api/health?printer="+pid,{signal:AbortSignal.timeout(30000)})).json(); }
+    catch(e){ health={ skipped:true, reasonCode:"client_unreachable", reason:t("health.could_not_reach",{message:e.message}) }; }
+    // Bounded too, so the in-flight count always comes back down.
+    try{ maint=await (await fetch("/api/maintenance?printer="+pid,{signal:AbortSignal.timeout(30000)})).json(); }
+    catch(e){ maint=null; }
+  } finally { HEALTH_INFLIGHT--; }
 
   if(token!==HEALTH_REQ_TOKEN||pid!==HEALTH_PRINTER_ID) return; // superseded by a newer switch/refresh
   HEALTH_DATA=health; HEALTH_MAINT=maint;
@@ -4703,7 +5041,7 @@ function renderHealthBody(){
   const name=p?p.name:t("health.printer_fallback");
   if(!d){ body.innerHTML=`<div class="settings-help">${esc(t("health.loading",{name}))}</div>`; closeHealthServiceForm(); return; }
   if(d.skipped){
-    body.innerHTML=`<div class="health-unsupported"><h3>${esc(name)}</h3><p>${esc(t("health.unsupported"))}</p>${d.reason?`<p class="settings-help">${esc(d.reason)}</p>`:""}</div>`;
+    body.innerHTML=healthUnavailableHtml(d, name);
     closeHealthServiceForm();
     return;
   }
@@ -5017,7 +5355,7 @@ function fleetChipDetail(p, cat, fleetRow, qs){
     // fallback prose unpredictably (see queue/QueueEngine.js) — left as an
     // opaque raw fallback. attentionReason, by contrast, is always one of
     // the stable ATTENTION_REASONS slugs, so it goes through the label map.
-    const msg=(qs&&qs.attentionDetail&&qs.attentionDetail.message)||(qs&&qs.attentionReason&&attentionReasonLabel(qs.attentionReason))||(fleetRow&&fleetRow.error)||"";
+    const msg=queueAttentionDetailText(qs&&qs.attentionDetail)||(qs&&qs.attentionReason&&attentionReasonLabel(qs.attentionReason))||(fleetRow&&fleetRow.error)||"";
     // Only a real hardware error (the printer itself reporting state:error)
     // is something "eject the loaded file" can fix — a queue_attention_required
     // caused by e.g. a missing/changed file has nothing physically loaded to
@@ -5199,17 +5537,17 @@ function renderQueueRow(p, qs, fleetRow, cat){
 
   if(cat==="printing"){
     const full=qs&&qs.currentItem?qs.currentItem.file.name:((fleetRow&&fleetRow.filename)||"");
-    const name=stripExt(full)||"—";
+    const name=full||"—";
     fillPct=(fleetRow&&typeof fleetRow.progress==="number")?Math.round(fleetRow.progress*100):0;
     const outsideNote=(qs&&qs.currentItem)?"":` <span class="pi-lbl">${t("queue.started_outside_queue")}</span>`;
     jobHtml=`<b title="${esc(full)}">${esc(name)}</b>${outsideNote}`;
     pctHtml=`<span class="qc-pct">${fillPct}%</span>`;
     etaHtml=`<span class="qc-eta">${esc(fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress))}</span>`;
   } else if(cat==="blocked"){
-    jobHtml=`${t("queue.waiting_for_bed_clear")} <button type="button" class="btn primary qbedclear-btn queue-confirm-bedclear" data-printer="${esc(p.id)}">${t("queue.bed_clear_print_next_button")}</button>`;
+    jobHtml=`${t("queue.waiting_for_bed_clear")} <button type="button" class="btn primary qbedclear-btn queue-confirm-bedclear" data-printer="${esc(p.id)}" data-item="${esc((qs&&qs.currentItem&&qs.currentItem.id)||"")}">${t("queue.bed_clear_print_next_button")}</button>`;
   } else if(cat==="attention"){
     const reason=attentionReasonLabel(qs&&qs.attentionReason);
-    const msg=(qs&&qs.attentionDetail&&qs.attentionDetail.message)||reason;
+    const msg=queueAttentionDetailText(qs&&qs.attentionDetail)||reason;
     jobHtml=`<span title="${esc(msg)}">${esc(t("queue.needs_attention",{reason}))}</span>`;
   } else if(cat==="offline"){
     jobHtml=esc(offlineSinceLabel(p.id, false));
@@ -5240,7 +5578,7 @@ function renderQueueExpandedPanel(p, qs, cat){
     const full=qs&&qs.currentItem?qs.currentItem.file.name:"";
     const fleetRow=fleetRowForPrinterId(p.id);
     items.push({ tag:t("queue.tag_printing_now"), now:true,
-      name:full?stripExt(full):stripExt((fleetRow&&fleetRow.filename)||"")||"—", full:full||(fleetRow&&fleetRow.filename)||"",
+      name:full||(fleetRow&&fleetRow.filename)||"—", full:full||(fleetRow&&fleetRow.filename)||"",
       pct:(fleetRow&&typeof fleetRow.progress==="number")?Math.round(fleetRow.progress*100)+"%":"",
       eta:fmtRemaining(fleetRow&&fleetRow.elapsed, fleetRow&&fleetRow.progress) });
   } else if(cat==="blocked"){
@@ -5255,11 +5593,11 @@ function renderQueueExpandedPanel(p, qs, cat){
     // unpredictable raw connector text and stays an opaque fallback.
     const full=(reasonRaw==="recovery-mismatch" && qs.attentionDetail && qs.attentionDetail.filename)
       ? t("queue.attention_detail_recovery_mismatch",{filename:qs.attentionDetail.filename})
-      : (qs&&qs.attentionDetail&&qs.attentionDetail.message)||"";
+      : queueAttentionDetailText(qs&&qs.attentionDetail);
     items.push({ tag:t("queue.tag_attention"), now:true, name:reason, full });
   }
   (qs&&qs.queue||[]).forEach((it,i)=>{
-    items.push({ tag:i===0?t("queue.tag_next"):ordinalTag(i-1), name:stripExt(it.file.name), full:it.file.name, itemId:it.id });
+    items.push({ tag:i===0?t("queue.tag_next"):ordinalTag(i-1), name:it.file.name, full:it.file.name, itemId:it.id });
   });
 
   const rows=items.map(it=>
@@ -5280,7 +5618,7 @@ function renderQueueExpandedPanel(p, qs, cat){
   // attention-resolution too, as a "give up on all of it" escape hatch
   // rather than resolving one blocked item at a time.
   const hasWorkToClear=!!((qs&&qs.currentItem)||(qs&&qs.queue&&qs.queue.length));
-  const clearBtn=hasWorkToClear?`<button type="button" class="btn ghost danger queue-clear" data-printer="${esc(p.id)}">${t("queue.clear_queue_button")}</button>`:"";
+  const clearBtn=hasWorkToClear?`<button type="button" class="btn ghost danger queue-clear" data-printer="${esc(p.id)}" data-item="${esc((qs&&qs.currentItem&&qs.currentItem.id)||"")}">${t("queue.clear_queue_button")}</button>`:"";
   // The Unassigned pool (isDefault) is where printers land by default, not a
   // pool anyone opted into queue orchestration for — Pause/Resume/Stop only
   // make sense once dispatch is actually being automated.
@@ -5290,7 +5628,12 @@ function renderQueueExpandedPanel(p, qs, cat){
   let actionsHtml;
   if(cat==="attention"){
     const actions=QUEUE_ATTENTION_RESOLUTIONS[(qs&&qs.attentionReason)]||["stop"];
-    actionsHtml=actions.map(action=>`<button type="button" class="btn ghost queue-resolve" data-printer="${esc(p.id)}" data-action="${esc(action)}">${esc(queueActionLabel(action))}</button>`).join("")+clearBtn;
+    // Mark as completed asks first, naming the file, so the button carries it.
+    // Every decision names the item it is about, so one that arrives after the
+    // queue has moved on is refused instead of landing on the next item.
+    const file=qs&&qs.currentItem&&qs.currentItem.file?qs.currentItem.file.name:"";
+    const itemId=qs&&qs.currentItem?qs.currentItem.id:"";
+    actionsHtml=actions.map(action=>`<button type="button" class="btn ghost queue-resolve" data-printer="${esc(p.id)}" data-action="${esc(action)}" data-item="${esc(itemId)}"${action==="mark-completed"?` data-file="${esc(file)}"`:""}>${esc(queueActionLabel(action))}</button>`).join("")+clearBtn;
   } else {
     // Cancel Print is deliberately separate from Stop Queue — Stop only
     // prevents the NEXT item from auto-dispatching (the current print, if
@@ -5356,6 +5699,15 @@ function wireQueueRows(root){
     refreshQueueDashboard();
   }));
   const simple=async(printerId,action)=>{ try{ await postJSON("/api/queue/"+printerId+"/"+action,{}); refreshQueueDashboard(); }catch(e){ alert(e.message); } };
+  // Clear and bed-clear name the job this page showed; the server refuses
+  // either once the queue has moved past it, and the refusal is shown.
+  const aboutItem=async(b,action)=>{
+    try{
+      const r=checkAuthFailure(await postJSON("/api/queue/"+b.dataset.printer+"/"+action,{itemId:b.dataset.item||null}));
+      const d=await r.json(); if(!r.ok||d.error) throw new Error(queueErrorText(d,d.error||("HTTP "+r.status)));
+    }catch(e){ alert(e.message); }
+    refreshQueueDashboard();
+  };
   root.querySelectorAll(".qchip-actionable").forEach(b=>b.addEventListener("click", async e=>{
     e.stopPropagation();
     const cat=b.dataset.cat;
@@ -5382,9 +5734,9 @@ function wireQueueRows(root){
   }));
   root.querySelectorAll(".queue-clear").forEach(b=>b.addEventListener("click", e=>{
     e.stopPropagation();
-    if(confirm(t("queue.clear_queue_confirm"))) simple(b.dataset.printer,"clear");
+    if(confirm(t("queue.clear_queue_confirm"))) aboutItem(b,"clear");
   }));
-  root.querySelectorAll(".queue-confirm-bedclear").forEach(b=>b.addEventListener("click", e=>{ e.stopPropagation(); simple(b.dataset.printer,"confirm-bed-clear"); }));
+  root.querySelectorAll(".queue-confirm-bedclear").forEach(b=>b.addEventListener("click", e=>{ e.stopPropagation(); aboutItem(b,"confirm-bed-clear"); }));
   root.querySelectorAll(".queue-cancel-print").forEach(b=>b.addEventListener("click", async e=>{
     e.stopPropagation();
     if(!confirm(t("queue.cancel_print_confirm"))) return;
@@ -5406,11 +5758,14 @@ function wireQueueRows(root){
   }));
   root.querySelectorAll(".queue-resolve").forEach(b=>b.addEventListener("click", async e=>{
     e.stopPropagation();
+    const action=b.dataset.action;
+    // A person's word replaces the printer's here: ask, naming the file.
+    if(action==="mark-completed"&&!confirm(t("queue.mark_completed_confirm",{file:b.dataset.file||t("queue.mark_completed_this_print")}))) return;
     try{
-      const action=b.dataset.action;
+      const itemId=b.dataset.item||null;
       const r=checkAuthFailure(action==="accept-file-change"
-        ? await fetch("/api/queue/"+b.dataset.printer+"/accept-file-change",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"})
-        : await postJSON("/api/queue/"+b.dataset.printer+"/resolve",{action}));
+        ? await postJSON("/api/queue/"+b.dataset.printer+"/accept-file-change",{itemId})
+        : await postJSON("/api/queue/"+b.dataset.printer+"/resolve",{action,itemId}));
       const d=await r.json(); if(!r.ok||d.error) throw new Error(queueErrorText(d,d.error||("HTTP "+r.status)));
       refreshQueueDashboard();
     }catch(e){ alert(e.message); }
@@ -5475,6 +5830,80 @@ async function moveFilesTo(filePaths, targetSub){
       setTimeout(()=>{ if(st.dataset.moveSuccess==="1"){ st.textContent=""; delete st.dataset.moveSuccess; } },3000);
     }
   }catch(e){ st.className="pstatus err"; st.textContent=t("files.move_failed",{message:e.message}); }
+  SELECTED_FILES.clear(); SELECT_ANCHOR=null;
+  updateMultiSelectUI();
+  loadFiles(CURRENT_SUB);
+}
+
+// ---- Delete: Move to Trash (default) or Delete permanently ----
+// The server moves each file into the G-code folder's .snapcon-trash and keeps
+// it there FILE_TRASH_DAYS days (fileTrash.js), or, for a signed-in Admin with
+// accounts on, removes it for good. A file an upload, a waiting send or a
+// queue item still needs is refused with why. filePaths are full relative
+// paths, as SELECTED_FILES holds them. The method is chosen in the dialog and
+// is Move to Trash every time it opens: never remembered.
+const FILE_TRASH_DAYS=30;
+let DELETE_PATHS=[];
+// Mirrors the server's rule (permanentDeleteAllowed): the server refuses anyone else.
+function canDeletePermanently(){ return !!(USERS_ENABLED && CURRENT_USER && CURRENT_USER.role==='admin'); }
+function deleteDialogMode(){ return ($("deleteModePermanent").checked && canDeletePermanently()) ? "permanent" : "trash"; }
+function syncDeleteDialog(){
+  const n=DELETE_PATHS.length, go=$("deleteFilesGo"), permanent=deleteDialogMode()==="permanent";
+  go.textContent=permanent ? tn("files.delete_go_permanent",n) : tn("files.delete_go_trash",n);
+  go.className="btn "+(permanent?"danger-filled":"danger");
+}
+function openDeleteDialog(filePaths){
+  if(!filePaths.length) return;
+  DELETE_PATHS=filePaths.slice();
+  const n=DELETE_PATHS.length;
+  $("deleteFilesTitle").textContent = n===1 ? t("files.delete_dialog_title_one",{name:splitFilePath(DELETE_PATHS[0]).name}) : t("files.delete_dialog_title_other",{count:n});
+  const shown=DELETE_PATHS.slice(0,10).map(p=>`<li title="${esc(p)}">${esc(p)}</li>`);
+  if(n>10) shown.push(`<li>${esc(t("files.delete_confirm_more",{count:n-10}))}</li>`);
+  $("deleteFilesList").innerHTML=shown.join("");
+  $("deleteModeTrashHelp").textContent=t("files.delete_mode_trash_help",{days:FILE_TRASH_DAYS});
+  $("deleteModePermanentBlock").hidden=!canDeletePermanently();
+  $("deleteModeTrash").checked=true; $("deleteModePermanent").checked=false;
+  syncDeleteDialog();
+  $("deleteFilesModal").classList.add("show");
+  setTimeout(()=>$("deleteModeTrash").focus(),50);
+}
+function closeDeleteDialog(){ $("deleteFilesModal").classList.remove("show"); DELETE_PATHS=[]; }
+async function confirmDeleteDialog(){
+  const filePaths=DELETE_PATHS.slice(), mode=deleteDialogMode(), n=filePaths.length;
+  if(!n) return;
+  // Permanent asks once more, naming what goes.
+  if(mode==="permanent"){
+    const msg = n===1 ? t("files.delete_permanent_confirm_one",{path:filePaths[0]}) : t("files.delete_permanent_confirm_other",{count:n});
+    if(!confirm(msg)) return;
+  }
+  closeDeleteDialog();
+  await deleteGcodeFiles(filePaths, mode);
+}
+async function deleteGcodeFiles(filePaths, mode){
+  const n=filePaths.length;
+  const st=$("fileOpStatus");
+  delete st.dataset.moveSuccess;
+  st.className="pstatus work"; st.textContent=t("files.deleting");
+  const files=filePaths.map(splitFilePath);
+  try{
+    const r=await postJSON("/api/files/delete",{files,mode});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
+    const results=d.results||[];
+    const done=results.filter(x=>x.ok);
+    const failed=results.filter(x=>!x.ok);
+    if(failed.length){
+      st.className="pstatus err";
+      st.textContent=t(mode==="permanent"?"files.delete_partial_permanent":"files.delete_partial",{done:done.length,total:n,names:failed.map(x=>(x.sub?x.sub+"/":"")+x.name+" ("+x.error+")").join(", ")});
+    } else {
+      st.className="pstatus ok";
+      st.textContent=tn(mode==="permanent"?"files.delete_success_permanent":"files.delete_success",done.length);
+      st.dataset.moveSuccess="1";
+      setTimeout(()=>{ if(st.dataset.moveSuccess==="1"){ st.textContent=""; delete st.dataset.moveSuccess; } },3000);
+    }
+    // The open file card is closed only when its own file was deleted.
+    if(SELECTED&&!SEND_SOURCE&&done.some(x=>x.path===SELECTED)) clearJobSelection();
+  }catch(e){ st.className="pstatus err"; st.textContent=t("files.delete_failed",{message:e.message}); }
   SELECTED_FILES.clear(); SELECT_ANCHOR=null;
   updateMultiSelectUI();
   loadFiles(CURRENT_SUB);
@@ -5648,14 +6077,20 @@ function materialMatches(a,b){
 
 function renderJob(){
   $("jobcard").classList.add("show");
+  // Delete is for the G-code folder's own files (SEND_SOURCE null), not one
+  // opened from the Library.
+  const jd=$("jobDelete");
+  if(jd){ jd.style.display=(canAct()&&!SEND_SOURCE)?"":"none"; jd.title=t("files.delete_title",{days:FILE_TRASH_DAYS}); }
   const fsFork=MAP.fsFork||t("fleet.job.fs_fork_fallback");
-  $("jt").innerHTML=esc(stripExt(SELECTED))+(MAP.isFS?` <img src="/fs-badge.svg" class="fs-badge" title="${esc(t("fleet.job.full_spectrum_title",{fork:fsFork}))}">`:``);
+  $("jt").title=SELECTED;
+  $("jt").innerHTML=esc(SELECTED)+(MAP.isFS?` <img src="/fs-badge.svg" class="fs-badge" title="${esc(t("fleet.job.full_spectrum_title",{fork:fsFork}))}">`:``);
   // meta line: time · weight · cost
   const totalGrams=MAP.palette.reduce((sum,s)=>sum+(parseFloat(s.wt)||0),0);
   const timeHours=parseTimeToHours((MAP.meta||[])[0]);
   const fCost=(FILAMENT_COST>0&&totalGrams>0)?(FILAMENT_COST/1000)*totalGrams:0;
-  const eCost=(ELECTRICITY_RATE>0&&timeHours>0)?ELECTRICITY_RATE*timeHours:0;
-  const totalCost=fCost+eCost;
+  // Filament only (docs/TODO.md §45): a file in the G-code folder isn't tied to a
+  // printer, so there are no watts to estimate its energy from.
+  const totalCost=fCost;
   const metaParts=[...(MAP.meta||[])];
   if(totalCost>0) metaParts.push("$"+totalCost.toFixed(2));
   $("jmeta").textContent=metaParts.join("  ·  ");
@@ -5862,6 +6297,8 @@ async function loadFleet(){
     setTopbarConnection("reconnecting");
   }
   finally{ FLEET_INFLIGHT=false; }
+  // Admins: sends for removed printers, a list that could not be restored (§37 P3).
+  loadDeferredNotice(false);
 }
 
 // Advisory match only. "redmean" is a cheap perceptual distance — it treats
@@ -6104,9 +6541,9 @@ function thumbGiveUp(img){
 // /orca/<printer> mode: narrow any printer list down to just that one printer.
 const urlFilterFleet = arr => URL_PRINTER_FILTER ? arr.filter(p=>(p.name||'').trim().toLowerCase()===URL_PRINTER_FILTER) : arr;
 
-// ---- Fleet card cache + diffing (see the reviewed plan: per-card diffing
-// for the fleet grid — C:\Users\ebz\.claude\plans\harmonic-mapping-treehouse.md
-// at time of writing) ----
+// ---- Fleet card cache + diffing (per-card diffing for the fleet grid; the
+// plan it follows was reviewed before the code was written and is not part
+// of this repository) ----
 // printer id -> { sig, el }. Always represents the currently-mounted card
 // set, regardless of whether the last pass was incremental or a forced full
 // rebuild — reconcileFleetCards() refreshes an entry for every card it
@@ -6197,6 +6634,8 @@ function updateFleetCardLiveValues(card, p){
   // every poll by itself, so it is patched here rather than rebuilding the
   // card. lastSeenAt itself is in the signature.
   setText('[data-live="seen"]', offlineSeenText(p.lastSeenAt, Date.now()));
+  // The compact card leaves out a line's part whose value is missing.
+  if(card.classList && card.classList.contains("cc-card")) syncCompactParts(card);
 }
 // Which protocol a printer is being driven over, for the tag beside its
 // brand. Only the two transports SnapCon actually detects are ever rendered —
@@ -6219,7 +6658,9 @@ function transportLabel(p){
 // appended for display only and never written back into it.
 function brandHtml(p){
   const brand=esc((p&&p.brand)||"SnapMaker");
-  const label=transportLabel(p);
+  // A virtual printer (Simulator, Virtual U1) says so, so it is never taken
+  // for a real machine.
+  const label=(p&&p.virtual)?t("fleet.card.virtual"):transportLabel(p);
   return label?`${brand} <span class="hdr-transport">(${esc(label)})</span>`:brand;
 }
 
@@ -6278,6 +6719,8 @@ function cardSignature(p){
     activeExt:p.activeExt, forceDefaults:p.forceDefaults,
     heads:p.heads, capabilities:p.capabilities, tags:p.tags,
     queuedFile:p.queuedFile, stem,
+    // Sends waiting for this printer (§37 P3): a state change redraws the card.
+    pendingSends:p.pendingSends||null,
     // Temperatures used to live here for a real reason: a printer sitting
     // idle/"Loaded" with nothing else in this signature changing can still
     // have its bed/hotend genuinely drifting, and with them omitted and
@@ -6383,6 +6826,9 @@ function buildCardStatsV2(p){
 // `dragEnabled` are per-render-pass context, not per-card state — see
 // reconcileFleetCards(), which computes them once and passes them down.
 function buildCardHtml(p, need, dragEnabled){
+    // Compact view has its own card (buildCompactCardHtml); everything below
+    // is Full and Camera view, unchanged by it.
+    if(VIEW_MODE==='compact') return buildCompactCardHtml(p, dragEnabled);
     const card=document.createElement("div");
     // The reduced layouts are for the card grid (Full and Compact); Camera
     // view keeps its own offline placeholder.
@@ -6475,7 +6921,7 @@ function buildCardHtml(p, need, dragEnabled){
             : `<div class="cam-shot-placeholder"><img class="cam-shot-placeholder-icon" src="/camera-disabled.svg" alt=""><span>${esc(t("fleet.camera.disabled_label"))}</span></div>`
         ):''}
       ${p.queuedFile?queuedFileBannerHtml(p,{readyToo:mode==="offline"}):''}
-      ${uploadStripHtml(p)}
+      ${uploadStripHtml(p)}${pendingSendsHtml(p)}
       ${mode==="offline"?`<div class="offline-info">${WIFI_OFF_ICON}<span class="offline-info-seen" data-live="seen">${esc(offlineSeenText(p.lastSeenAt, Date.now()))}</span></div>`:''}
       ${p.online&&(p.errorCode||p.message)?(()=>{
         const e=lookupKlipperError(p.errorCode, p.message);
@@ -6548,10 +6994,10 @@ function buildCardHtml(p, need, dragEnabled){
           : camView
             ? `<div class="cam-prog-file">`+
                 `<div class="prog-file-thumb"${stem?` data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}"`:''}>${stem?`${thumbImgHtml(p,stem,"stats-thumb")}`:''}</div>`+
-                `<span class="prog-file-name">${esc(stem||'—')}</span>`+
+                `<span class="prog-file-name"${stem?` title="${esc(stem)}"`:''}>${esc(stem||'—')}</span>`+
                 progRowHtml+
               `</div>`
-            : `<div class="prog-file">${esc(stem||'—')}</div>`+progRowHtml;
+            : `<div class="prog-file"${stem?` title="${esc(stem)}"`:''}>${esc(stem||'—')}</div>`+progRowHtml;
         return `<div class="progress-section">`+
           fileSection+
           (p.errorCode||p.message?'':`<div class="prog-times">`+
@@ -6564,7 +7010,7 @@ function buildCardHtml(p, need, dragEnabled){
             : `<div class="prog-time-cell end"><span class="prog-time-label">${esc(t("fleet.progress.remaining_label"))}</span><span class="prog-time-val" data-live="remaining">${fmtRemaining(p.elapsed,p.progress)}</span></div>`)+
           `</div>`)+`</div>`;
       })():""}
-      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete'):''}
+      ${p.online&&!(p.errorCode||p.message)&&p.capabilities?.filamentHeads?(/* UI-REFRESH Part 5 */uiRefresh()?afcLanesHtmlRefresh(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete',p.printerFamily):afcLanesHtml(heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.state==='complete')):''}
       ${mapHtml}
       ${printerNoteHtml(p)}
       ${mode?'':`<div class="foot${busy?'':' foot-idle'}">
@@ -6587,6 +7033,415 @@ function buildCardHtml(p, need, dragEnabled){
       </div>`}
       ${cardStatusHtml(p)}`;
     return card;
+}
+// ---- Compact view's card ----
+// Its own markup; the full card's (buildCardHtml) is untouched by it. A
+// one-line header with a square status badge, one headline per state, spool
+// tiles, and the state's two main actions with the rest in a "···" menu.
+//
+// Two contracts it keeps with the full card:
+//  - live values use the same data-live hooks (pct, bar, elapsed, remaining,
+//    center-val, seen), so updateFleetCardLiveValues() patches them without
+//    knowing which card it is looking at;
+//  - every button and menu item carries the full card's own data-* and
+//    disabled/title attributes for that action, so the delegated handler in
+//    wireFleetCardEvents() runs the same action, permission check and
+//    confirmation.
+
+// A translated line with HTML in its {placeholders}: the text is escaped,
+// each {name} is replaced by parts[name] as given (already-built HTML).
+function compactLineHtml(key, parts){
+  return esc(t(key)).replace(/\{(\w+)\}/g, (m,name)=>name in parts ? parts[name] : m);
+}
+
+// The state's actions: `main` are the card's two buttons (and the top of the
+// menu), `more` only in the menu, `danger` at the menu's foot. Offline and
+// updating/rebooting cards have none, as today. Upload stays off this card,
+// as it always was in Compact.
+function compactCardActions(p){
+  const none={ main:[], more:[], danger:[] };
+  if(cardMode(p)) return none;
+  const busy=p.online&&(p.state==="printing"||p.state==="paused");
+  const maintMode=p.state==="maintenance";
+  const act=canAct()?"":"disabled";
+  if(busy){
+    const main=[p.state==="paused"
+      ? { label:t("printer.action_resume"), icon:"/print-icon.svg", attrs:`${act} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"` }
+      : { label:t("printer.action_pause"), icon:"/pause-icon.svg", attrs:`${act} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"` }];
+    if(p.capabilities?.excludeObject&&p.plate&&p.plate.total>1){
+      main.push({ label:t("printer.action_plate"), icon:"/plate-icon.svg", attrs:`${act} data-plate="${p.id}" title="${esc(t("printer.action_plate_title",{done:p.plate.total-p.plate.excluded,total:p.plate.total}))}"` });
+    }
+    const danger=[
+      { label:t("fleet.compact.cancel_print"), attrs:`${act} data-ctl="${p.id}" data-act="cancel" title="${esc(t("fleet.compact.cancel_print"))}"` },
+      { label:t("printer.action_estop"), attrs:`${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"` },
+    ];
+    return { main, more:[], danger };
+  }
+  const printTitle=sendInFlight(p)?t("fleet.upload.waiting_title"):maintMode?t("printer.action_maintenance_mode_title"):SELECTED?t("printer.action_print_title_selected"):t("printer.action_print_title_pick");
+  const print={ label:t("printer.action_print"), icon:"/print-icon.svg", attrs:sendBtnAttrs(p,true,p.online&&!maintMode&&canAct(),{card:true})+` data-id="${p.id}" data-start="1" title="${esc(printTitle)}"` };
+  const preheat={ label:t("printer.action_preheat"), icon:"/preheat-icon.svg", attrs:preheatAttrs(p) };
+  if(p.state==="complete"&&p.filename){
+    const reprint={ label:t("printer.action_reprint"), icon:"/reprint-icon.svg", attrs:`${act} data-reprint="${p.id}" title="${esc(t("printer.action_reprint_title",{filename:p.filename}))}"` };
+    return { main:[print, reprint], more:[preheat], danger:[] };
+  }
+  return { main:[print, preheat], more:[], danger:[] };
+}
+
+// One square tile per lane: the lanes, data and click (unload) of
+// afcLanesHtml(), the lane's own label ("1", "T0", Bambu's "A2"). The text is
+// near-black on a light fill and near-white on a dark one (needsDarkText).
+function compactSpoolTilesHtml(heads, activeExt, printerId, canUnload){
+  const lanes=heads||[];
+  if(!lanes.length) return "";
+  const tiles=lanes.map((h,i)=>{
+    const label=(h&&h.label)||headLabel(i);
+    if(!(h&&h.loaded)) return `<span class="cc-tile empty" title="${esc(t("fleet.compact.slot_empty_title",{slot:label}))}">${esc(label)}</span>`;
+    const hex=h.hex||"#383a4a", material=h.material||"";
+    const title=material?t("fleet.compact.slot_title",{slot:label, material}):t("fleet.compact.slot_title_bare",{slot:label});
+    const cls=`cc-tile${activeExt===i?" active":""}${needsDarkText(hex)?" on-light":""}`;
+    const text=esc(label)+(material?" "+esc(material):"");
+    return canUnload
+      ? `<button type="button" class="${cls} spool-click${canAct()?"":" inert-action"}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="background:${esc(hex)}" title="${esc(title)}">${text}</button>`
+      : `<span class="${cls}" style="background:${esc(hex)}" title="${esc(title)}">${text}</span>`;
+  }).join("");
+  return `<div class="cc-tiles" style="grid-template-columns:repeat(${lanes.length},minmax(0,1fr))">${tiles}</div>`;
+}
+
+// UI-REFRESH Part 5: the spool lanes (Full view) and tiles (Compact) in a
+// 2-column grid, beside the classic afcLanesHtml() / compactSpoolTilesHtml().
+// Snapmaker U1, up to 4 lanes: column-first, as on the machine (T1 and T2 on
+// the left, T3 and T4 on the right; owner, 2026-11-06). Every other connector,
+// and anything over 4 lanes (Bambu AMS): row-first, as many rows as needed.
+// One lane: full width. Labels stay headLabel() / the connector's own;
+// materials wrap inside the chip, never an ellipsis.
+// "A Snapmaker U1" is the fleet row's printerFamily (the server's identity
+// for the machine, printerFamilyFields() in server.js), not the connector,
+// which fleet rows do not carry.
+function laneGridAttrs(n, family){
+  if(n<=1) return 'class="rf-lanes single"';
+  const colFirst=String(family||"")==="snapmaker-u1" && n<=4;
+  return `class="rf-lanes${colFirst?" col-first":""}" style="--rf-rows:${Math.ceil(n/2)}"`;
+}
+function laneStateText(loaded, active, finished){
+  return !loaded ? t("fleet.card.lane_empty") : active ? (finished?t("fleet.card.lane_last_used"):t("fleet.card.lane_active")) : t("fleet.card.lane_loaded");
+}
+function afcLanesHtmlRefresh(heads,activeExt,printerId,canUnload,finished,family){
+  const lanes=heads||[];
+  const cards=lanes.map((h,i)=>{
+    const loaded=h&&h.loaded, active=loaded&&activeExt===i;
+    const color=esc((h&&h.hex)||'#383a4a');
+    const material=(h&&h.material)||"";
+    const label=(h&&h.label)||headLabel(i);
+    const uid=`${printerId}-${i}`;
+    // The classic active lane's coloured border and inner glow, unchanged.
+    const cardStyle=active?`style="border:2px solid ${color}bb;box-shadow:inset 0 0 20px ${color}28,inset 0 0 6px ${color}18;background:${color}14"`:'';
+    const spoolInner=loaded?spoolSvg(color,active,uid):emptySpoolSvg();
+    const title=loaded?(material?t("fleet.compact.slot_title",{slot:label,material}):t("fleet.compact.slot_title_bare",{slot:label})):t("fleet.compact.slot_empty_title",{slot:label});
+    const spool=(canUnload&&loaded)
+      ? `<span class="rf-lane-spool spool-click${canAct()?'':' inert-action'}" data-unload-printer="${printerId}" data-unload-ext="${i}" style="cursor:pointer" title="${esc(title)}">${spoolInner}</span>`
+      : `<span class="rf-lane-spool" title="${esc(title)}">${spoolInner}</span>`;
+    return `<div class="afc-lane-card rf-lane ${active?'active':loaded?'idle':'empty'}" ${cardStyle}>
+      ${spool}
+      <div class="rf-lane-text">
+        <div class="rf-lane-name"><b>${esc(label)}</b>${material?' '+esc(material):''}</div>
+        <div class="rf-lane-state">${esc(laneStateText(loaded,active,finished))}</div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="afc-section"><div ${laneGridAttrs(lanes.length,family)}>${cards}</div></div>`;
+}
+// Compact: a chip per lane, the colour as a swatch on the left, then the
+// label and material on one line, wrapping inside the chip. Click to unload
+// as in the classic tile.
+function compactSpoolTilesHtmlRefresh(heads, activeExt, printerId, canUnload, family){
+  const lanes=heads||[];
+  if(!lanes.length) return "";
+  const tiles=lanes.map((h,i)=>{
+    const label=(h&&h.label)||headLabel(i);
+    if(!(h&&h.loaded)) return `<span class="cc-tile rf-chip empty" title="${esc(t("fleet.compact.slot_empty_title",{slot:label}))}"><span class="rf-swatch empty"></span><span class="rf-chip-text"><b>${esc(label)}</b> ${esc(t("fleet.card.lane_empty"))}</span></span>`;
+    const hex=h.hex||"#383a4a", material=h.material||"";
+    const title=material?t("fleet.compact.slot_title",{slot:label, material}):t("fleet.compact.slot_title_bare",{slot:label});
+    const cls=`cc-tile rf-chip${activeExt===i?" active":""}`;
+    const inner=`<span class="rf-swatch" style="background:${esc(hex)}"></span><span class="rf-chip-text"><b>${esc(label)}</b>${material?" "+esc(material):""}</span>`;
+    return canUnload
+      ? `<button type="button" class="${cls} spool-click${canAct()?"":" inert-action"}" data-unload-printer="${printerId}" data-unload-ext="${i}" title="${esc(title)}">${inner}</button>`
+      : `<span class="${cls}" title="${esc(title)}">${inner}</span>`;
+  }).join("");
+  return `<div ${laneGridAttrs(lanes.length,family).replace('class="rf-lanes','class="cc-tiles rf-lanes')}>${tiles}</div>`;
+}
+
+function buildCompactCardHtml(p, dragEnabled){
+  const card=document.createElement("div");
+  const mode=cardMode(p);
+  card.className="pcard cc-card"+(mode==="offline"?" offline":mode==="firmware"?" fw-busy":"");
+  card.dataset.pid=p.id;
+  const tagColor=parseColorTag(p.tags);
+  if(tagColor){ card.classList.add("tag-tinted"); card.style.setProperty("--tag-color",tagColor); }
+  // The badge, the line under the header and the state's numbers all take
+  // the badge's colour.
+  const {statusColor, statusTxt}=statusColorText(p);
+  card.style.setProperty("--status-color",statusColor);
+  // A card rebuilt while its menu is open loses that menu; focus that was in
+  // it goes to the new card's "···" button. Focus on <body> counts too: a
+  // full render removes the old card before this runs, taking focus with it.
+  if(CARD_MENU && CARD_MENU.pid===p.id){
+    const a=document.activeElement;
+    const hadFocus=!a||a===document.body||CARD_MENU.panel.contains(a)||CARD_MENU.btn===a;
+    closeCompactCardMenu(false);
+    if(hadFocus) queueMicrotask(()=>{ const b=document.querySelector(`#fleet .pcard[data-pid="${p.id}"] button[data-card-menu]`); if(b) b.focus(); });
+  }
+
+  // Header: brand and name on one line each. A virtual printer says so on
+  // the line ("SnapMaker · Virtual"), so it is never taken for a real
+  // machine; the transport ("Moonraker") goes in the tooltip only.
+  const brandLine=(p.brand||"SnapMaker")+(p.virtual?" · "+t("fleet.card.virtual"):"");
+  const transport=transportLabel(p);
+  const brandTitle=transport?`${brandLine} (${transport})`:brandLine;
+  const webUiPill=p.capabilities?.webUi?`<a class="pill-btn pill-btn-sm" href="${esc(p.url||'#')}" target="_blank" rel="noopener" title="${esc(t("printer.action_web_interface_title",{host:printerHost(p.url)}))}"><img src="/fluidd-pill.svg" alt="${esc(t("printer.action_web_interface_alt"))}"></a>`:'';
+  const pills=mode ? webUiPill : p.online
+    ? (canEject(p)?`<button class="pill-btn pill-btn-sm" ${canAct()?"":"disabled"} data-eject="${p.id}" title="${esc(t("printer.action_eject"))}"><img src="/eject-pill.svg" alt="${esc(t("printer.action_eject"))}"></button>`:'')
+      +(p.capabilities?.camera?`<button class="pill-btn pill-btn-sm" data-snap="${p.id}" title="${esc(t("printer.action_camera"))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:'')
+      +webUiPill
+    : '';
+  const pulse=!mode&&p.online&&p.state==="printing"&&!STATUS_OVERRIDE.get(String(p.id));
+  // Two lines: checkbox, brand, icons and badge on the first; the name gets
+  // the whole second line, so it is cut only when it really is that long.
+  const header=`<div class="top cc-top"><div class="cc-head">${gridToolbarActive()?`<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input on-surface" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label>`:''}`+
+    `<div class="hdr-brand" title="${esc(brandTitle)}">${esc(brandLine)}</div>`+
+    `<div class="card-right">${pills?`<div class="card-pills">${pills}</div>`:''}`+
+    `<span class="status-badge cc-badge${pulse?' cc-pulse':''}${dragEnabled?' drag-handle':''}"${dragEnabled?` draggable="true" title="${esc(t("fleet.card.drag_title"))}"`:''}><span class="cc-dot" aria-hidden="true"></span>${esc(statusTxt)}</span></div></div>`+
+    `<div class="hdr-name" title="${esc(p.name)}">${esc(p.name)}</div></div>`;
+
+  // Body, by state. Each line is made of parts; a part whose value is
+  // missing ("—") is left out, and CSS puts " · " between the parts that
+  // show. A part is hidden rather than not built, so a live value arriving
+  // later brings it back (syncCompactParts).
+  const stem=cardFileStem(p);
+  const fileLine=stem?`<div class="cc-file" title="${esc(stem)}">${esc(stem)}</div>`:'';
+  const pct=(p.progress*100).toFixed(1);
+  const missing=txt=>txt==null||txt===""||txt==="—";
+  const val=(hook,txt)=>`<span class="cc-val"${hook?` data-live="${hook}"`:''}>${esc(txt)}</span>`;
+  const part=(html,isMissing,cls)=>`<span class="cc-part${cls?" "+cls:""}"${isMissing?" hidden":""}>${html}</span>`;
+  const elapsed=fmtDuration(p.elapsed), filament=cardFilamentText(p);
+  const filamentPart=part(val("center-val",filament),missing(filament));
+  // Where an error or a cancel stopped the print: the percentage when it is
+  // above 0, else the layer, then how long it had run.
+  const layer=layerDisplay(p);
+  const position=p.progress>0 ? val("pct",pct+"%")
+    : layer ? compactLineHtml("fleet.compact.layer",{layer:`<span class="cc-val"><span data-live="layer-current">${esc(String(layer.current))}</span><span data-live="layer-target">/${esc(String(layer.total))}</span></span>`})
+    : null;
+  const stopped=(position||!missing(elapsed))
+    ? `<div class="cc-quiet">${part(compactLineHtml("fleet.compact.stopped_at",{position:position||""}),!position)}${part(compactLineHtml("fleet.compact.time_in",{time:val("elapsed",elapsed)}),missing(elapsed))}</div>`
+    : '';
+  const hasError=p.online&&!!(p.errorCode||p.message);
+  const busy=p.online&&(p.state==="printing"||p.state==="paused");
+  // A staged file ("Loaded") outranks Complete and Cancelled, as it does on
+  // the badge: the card is about the next job, not the last one.
+  const staged=!!(p.queuedFile&&p.queuedFile.status==="ready");
+  let body="";
+  if(mode==="offline"){
+    body=`<div class="offline-info cc-offline">${WIFI_OFF_ICON}<span class="offline-info-seen" data-live="seen">${esc(offlineSeenText(p.lastSeenAt, Date.now()))}</span></div>`;
+  } else if(mode==="firmware"){
+    body="";
+  } else if(hasError){
+    // What the error panel would title it: the catalog's name for a known
+    // code, else the printer's own message (the panel's title for an unknown
+    // one is only "Unknown error"). The code itself goes in the tooltip.
+    const e=lookupKlipperError(p.errorCode, p.message);
+    const known=!!(p.errorCode&&ERROR_CODES[p.errorCode]&&ERROR_CODES[p.errorCode].t);
+    const codeTitle=e.code?t("fleet.error_panel.code_prefix",{code:e.code}):'';
+    body=fileLine+`<div class="cc-error"${codeTitle?` title="${esc(codeTitle)}"`:''}>${esc(known?e.title:(e.description||e.title))}</div>`+stopped;
+  } else if(busy){
+    const paused=p.state==="paused";
+    const remaining=fmtRemaining(p.elapsed,p.progress);
+    body=fileLine+
+      `<div class="cc-headline${paused?' cc-paused':''}">${part(compactLineHtml("fleet.compact.left",{time:`<span class="cc-big" data-live="remaining">${esc(remaining)}</span>`}),missing(remaining),"cc-lead")}<span class="cc-big cc-pct" data-live="pct">${pct}%</span></div>`+
+      `<div class="prog-track cc-track${paused?' amber':''}"><div class="prog-fill ${paused?'amber':'cyan'}" data-live="bar" style="width:${pct}%;animation-delay:-${(Date.now()/1000%8).toFixed(2)}s"></div></div>`+
+      `<div class="cc-quiet">${part(compactLineHtml("fleet.compact.elapsed",{time:val("elapsed",elapsed)}),missing(elapsed))}${filamentPart}</div>`;
+  } else if(p.state==="complete"&&!staged){
+    const finished=fmtFinishedTime(p.completedAt);
+    body=fileLine+
+      `<div class="cc-headline">${part(compactLineHtml("fleet.compact.done_at",{time:`<span class="cc-big cc-state">${esc(finished)}</span>`}),missing(finished),"cc-lead")}</div>`+
+      `<div class="prog-track cc-track"><div class="prog-fill cc-fill-done" style="width:100%"></div></div>`+
+      `<div class="cc-quiet">${part(compactLineHtml("fleet.compact.took",{time:val("elapsed",elapsed)}),missing(elapsed))}${filamentPart}</div>`;
+  } else if(p.state==="cancelled"&&!staged){
+    body=fileLine+stopped;
+  } else {
+    // Idle, standby, Loaded and Maintenance. A staged file ("Loaded") is
+    // named and ready to print; a Maintenance card isn't "Ready", its badge
+    // says what it is.
+    body=(staged?fileLine:'')+(p.state==="maintenance"?'':`<div class="cc-ready">${esc(t(staged?"fleet.compact.ready_to_print":"fleet.compact.ready"))}</div>`);
+  }
+  const tiles=!mode&&p.online&&!hasError&&p.capabilities?.filamentHeads
+    // UI-REFRESH Part 5: the refresh's 2-column chips, or the classic tiles.
+    ? (uiRefresh() ? compactSpoolTilesHtmlRefresh(p.heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament,p.printerFamily) : compactSpoolTilesHtml(p.heads,p.activeExt,p.id,!!p.capabilities?.unloadFilament)) : '';
+
+  // Buttons: the main two, then "···" with every action again and Cancel
+  // print / E-Stop at its foot.
+  const acts=compactCardActions(p);
+  let foot="";
+  if(acts.main.length){
+    const menuLabel=t("fleet.compact.menu_label",{name:p.name});
+    const pill=a=>`<button type="button" class="btn-chip cc-pill" ${a.attrs}><img src="${a.icon}" alt=""><span>${esc(a.label)}</span></button>`;
+    const item=(a,cls)=>`<button type="button" class="cc-menu-item${cls}" role="menuitem" tabindex="-1" ${a.attrs}>${esc(a.label)}</button>`;
+    foot=`<div class="cc-foot"><div class="cc-actions">${acts.main.map(pill).join("")}</div>`+
+      `<div class="cc-menu-wrap"><button type="button" class="cc-more" data-card-menu="${p.id}" aria-haspopup="menu" aria-expanded="false" aria-controls="ccm-${p.id}" aria-label="${esc(menuLabel)}" title="${esc(menuLabel)}"><span aria-hidden="true">···</span></button>`+
+      `<div class="cc-menu" id="ccm-${p.id}" role="menu" aria-label="${esc(menuLabel)}" hidden>`+
+        acts.main.concat(acts.more).map(a=>item(a,"")).join("")+
+        (acts.danger.length?`<div class="cc-menu-sep" role="separator"></div>`+acts.danger.map(a=>item(a," danger")).join(""):"")+
+      `</div></div></div>`;
+  }
+
+  // The spools and the buttons sit together at the bottom of the card, so
+  // they line up across a row; any spare height goes above them. An
+  // action's status message ("Pausing…") goes above the group too, so it
+  // never pushes one card's buttons out of line.
+  card.innerHTML=header+
+    (mode==="offline"?'':`<div class="cc-line"></div>`)+
+    (p.queuedFile?queuedFileBannerHtml(p,{readyToo:mode==="offline"}):'')+pendingSendsHtml(p)+
+    compactUploadStripHtml(p)+
+    body+printerNoteHtml(p)+compactCardStatusHtml(p)+
+    `<div class="cc-bottom">${tiles}${foot}</div>`;
+  return card;
+}
+
+// The card's status message, minus one that only restates what the card
+// already shows: "Printing on Dummy#1" once the badge says Printing or
+// Paused, "Uploaded" once it says Loaded. Action feedback ("Pausing…") and
+// errors always show. Matched against the current language's own templates
+// for those messages, so it works in every language. The empty status
+// element stays, as ctl() writes its feedback straight into it.
+const COMPACT_RESTATING_STATUS = {
+  printing:["fleet.print.status_printing_on","fleet.print.status_printing_on_mapped","fleet.queued.printing_status"],
+  staged:["fleet.print.status_uploaded","fleet.print.status_uploaded_mapped"],
+};
+function compactStatusRestatesState(p, s){
+  if(!s || !/(^| )ok( |$)/.test(s.cls)) return false;
+  const which=(p.online&&(p.state==="printing"||p.state==="paused")) ? "printing"
+    : (p.queuedFile&&p.queuedFile.status==="ready") ? "staged" : null;
+  if(!which) return false;
+  return COMPACT_RESTATING_STATUS[which].some(key=>{
+    const re=new RegExp("^"+t(key).split(/\{\w+\}/).map(x=>x.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join(".*")+"$");
+    return re.test(s.txt);
+  });
+}
+function compactCardStatusHtml(p){
+  return compactStatusRestatesState(p, cardStatusFor(p)) ? `<div class="pstatus" id="pst-${esc(p.id)}"></div>` : cardStatusHtml(p);
+}
+
+// The compact card's upload strip, on one line: an arrow, the file name, its
+// percentage and a small ✕ to cancel, over the same progress bar. Same
+// live hooks as uploadStripHtml() (upload-pct, upload-bar), so
+// paintUploadProgress() moves it. A failed upload keeps the shared strip,
+// with its Retry and Dismiss.
+function compactUploadStripHtml(p){
+  const u=UPLOADS.get(String(p.id));
+  if(!u) return "";
+  if(u.state!=="uploading") return uploadStripHtml(p);
+  // Whether it can be cancelled yet, and why not: as in uploadStripHtml().
+  const job=u.origin==="fleet" ? (u.cancellable ? u.jobId : null) : UPLOAD_CANCEL.get(String(p.id));
+  const why=!canAct() ? t("fleet.upload.cancel_view_only_title") : u.startCancelled ? t("fleet.upload.cancelled_waiting_detail") : u.verifying ? t("fleet.upload.verifying_cancel_title") : !job ? t("fleet.upload.cancel_not_yet_title") : null;
+  const cancelTitle=why||t("fleet.print.cancel_upload");
+  return `<div class="upload-strip cc-upload">`+
+    `<svg class="cc-upload-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>`+
+    `<span class="cc-upload-name" title="${esc(u.name)}">${esc(u.name)}</span>`+
+    `<span class="cc-upload-pct" data-live="upload-pct">${u.pct}%</span>`+
+    `<button type="button" class="cc-upload-cancel" data-cancel-upload="${esc(job||"")}" data-printer="${esc(p.id)}" aria-label="${esc(cancelTitle)}" title="${esc(cancelTitle)}"${why?" disabled":""}>`+
+      `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>`+
+    `<div class="upload-strip-bar"><div class="upload-strip-fill" data-live="upload-bar" style="width:${u.pct}%"></div></div></div>`;
+}
+
+// Shows or hides each part of a compact card's lines by whether its live
+// value is missing ("—" or empty), once updateFleetCardLiveValues() has
+// written the values. A part with no live value keeps how it was built.
+function syncCompactParts(card){
+  card.querySelectorAll(".cc-part").forEach(el=>{
+    const v=el.querySelector("[data-live]");
+    if(!v) return;
+    const txt=v.textContent.trim();
+    el.hidden=txt===""||txt==="—";
+  });
+}
+
+// The compact card's "···" menu. One open at a time; it closes on a click
+// outside, Esc (focus back on its button), Tab, choosing an item, and when
+// its card is rebuilt (buildCompactCardHtml). Arrow keys, Home and End move
+// between the enabled items. The top bar's menus behave the same way
+// (wireTopbarPopups); this one lives inside a card the fleet poll can
+// replace, so it is kept separate from theirs.
+let CARD_MENU=null; // { pid, btn, panel } while one is open
+function compactMenuItems(panel){ return [...panel.querySelectorAll('[role="menuitem"]')].filter(b=>!b.disabled); }
+function openCompactCardMenu(btn){
+  closeCompactCardMenu(false);
+  const panel=document.getElementById(btn.getAttribute("aria-controls"));
+  if(!panel) return;
+  panel.hidden=false;
+  panel.classList.remove("up");
+  btn.setAttribute("aria-expanded","true");
+  const card=btn.closest(".pcard");
+  if(card) card.classList.add("cc-menu-open");
+  CARD_MENU={ pid:parseInt(btn.dataset.cardMenu,10), btn, panel };
+  // Above the button when there's no room under it.
+  const r=panel.getBoundingClientRect();
+  if(r.bottom>window.innerHeight && btn.getBoundingClientRect().top>r.height+8) panel.classList.add("up");
+  const first=compactMenuItems(panel)[0];
+  if(first) first.focus();
+}
+function closeCompactCardMenu(returnFocus){
+  if(!CARD_MENU) return;
+  const { btn, panel }=CARD_MENU;
+  CARD_MENU=null;
+  panel.hidden=true;
+  btn.setAttribute("aria-expanded","false");
+  const card=btn.closest(".pcard");
+  if(card) card.classList.remove("cc-menu-open");
+  if(returnFocus && btn.isConnected) btn.focus();
+}
+function wireCompactCardMenu(){
+  // Registered after wireFleetCardEvents(), so an item's action has already
+  // run when this closes the menu.
+  $("fleet").addEventListener("click", e=>{
+    // UI-REFRESH Part 4: any click on a card acknowledges its error (then the click goes on as usual).
+    { const c=e.target.closest && e.target.closest(".pcard[data-pid]"); if(c) acknowledgePrinterError(c.dataset.pid); }
+    const btn=e.target.closest("button[data-card-menu]");
+    if(btn){
+      if(CARD_MENU && CARD_MENU.btn===btn) closeCompactCardMenu(true); else openCompactCardMenu(btn);
+      return;
+    }
+    if(CARD_MENU && e.target.closest('.cc-menu [role="menuitem"]')){
+      const { pid, panel }=CARD_MENU;
+      closeCompactCardMenu(false);
+      // Back on "···" unless the action took focus somewhere (a dialog). The
+      // browser drops focus from the now-hidden item only at its next
+      // render, so focus still in the menu counts as nowhere. The card may
+      // have been rebuilt by then, so the button is looked up again.
+      setTimeout(()=>{
+        const a=document.activeElement;
+        if(a && a!==document.body && !panel.contains(a)) return;
+        const btn=document.querySelector(`#fleet .pcard[data-pid="${pid}"] button[data-card-menu]`);
+        if(btn) btn.focus();
+      }, 0);
+    }
+  });
+  document.addEventListener("pointerdown", e=>{
+    if(CARD_MENU && !CARD_MENU.btn.contains(e.target) && !CARD_MENU.panel.contains(e.target)) closeCompactCardMenu(false);
+  });
+  document.addEventListener("keydown", e=>{
+    if(!CARD_MENU) return;
+    // Its card went away (another view, a filter): nothing left to close.
+    if(!CARD_MENU.btn.isConnected){ CARD_MENU=null; return; }
+    if(e.key==="Escape"){ e.preventDefault(); closeCompactCardMenu(true); return; }
+    if(e.key==="Tab"){ closeCompactCardMenu(false); return; }
+    const items=compactMenuItems(CARD_MENU.panel);
+    if(!items.length) return;
+    const i=items.indexOf(document.activeElement), n=items.length;
+    let next=null;
+    if(e.key==="ArrowDown") next=items[i<0 ? 0 : (i+1)%n];
+    else if(e.key==="ArrowUp") next=items[i<0 ? n-1 : (i-1+n)%n];
+    else if(e.key==="Home") next=items[0];
+    else if(e.key==="End") next=items[n-1];
+    if(next){ e.preventDefault(); next.focus(); }
+  });
 }
 // Replaces the old wrap.innerHTML=""+forEach full rebuild for the card-grid
 // path. When `incremental` is false (every renderFleet() call except the
@@ -6660,6 +7515,7 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
         else mountCamShot(slot, p.id, camRefreshMs, CAM_STAGGER);
       }
     }
+    if(uiRefresh()) syncErrorSweep(el, p);   // UI-REFRESH Part 4: the Error outline and sweep
     // insertBefore(el, null) is appendChild(el), so a new card at the end
     // of the fleet still lands correctly.
     if(el===cursor) cursor=cursor.nextSibling;
@@ -6672,6 +7528,33 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
     if(!seen.has(id)){ closeCamRtc(id); entry.el.remove(); CARD_CACHE.delete(id); }
   }
 }
+// Keyboard focus across a fleet render (docs/TODO.md §31). A rebuilt card,
+// or a rewritten List cell, takes the focused control with it. Before the
+// render the control is noted as what it does for which printer (its data-*
+// attributes), and afterwards the control with the same identity gets focus
+// back. Pause and Resume are one control, so focus moves from Pause to the
+// Resume that replaces it. data-cancel-upload's value is the upload's job,
+// which arrives after the strip is drawn, so only its presence counts.
+function fleetFocusKey(el){
+  const wrap=$("fleet");
+  if(!el || el===document.body || !wrap || !wrap.contains(el) || !el.attributes) return null;
+  const attrs=[...el.attributes].filter(a=>a.name.startsWith("data-")).map(a=>
+    a.name==="data-cancel-upload" ? a.name
+    : a.name==="data-act" && (a.value==="pause"||a.value==="resume") ? a.name+"=pause|resume"
+    : a.name+"="+a.value).sort();
+  return attrs.length ? el.tagName+" "+attrs.join(" ") : null;
+}
+// Only when focus went with the render; a control left in place keeps it.
+// A match inside something hidden (a closed "···" menu) or disabled can't
+// take focus and is passed over.
+function restoreFleetFocus(key, el){
+  if(!key || (el.isConnected && document.activeElement===el)) return;
+  const a=document.activeElement;
+  if(a && a!==document.body && a!==el) return;
+  const wrap=$("fleet");
+  const match=[...wrap.querySelectorAll(el.tagName)].find(c=>!c.disabled && !c.closest("[hidden]") && fleetFocusKey(c)===key);
+  if(match) match.focus({preventScroll:true});
+}
 // `incremental` is only ever true from loadFleet()'s own render call — every
 // other call site (view mode change, sort change, search keystroke, camera
 // tab/tag filter, file selection change, camera retry click, login/role
@@ -6679,6 +7562,7 @@ function reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, incremen
 // arguments and gets today's full-rebuild behavior, unchanged.
 function renderFleet({incremental}={}){
   const wrap=$("fleet");
+  const focused=document.activeElement, focusKey=fleetFocusKey(focused);
   const q=($("fleetSearch")||{value:""}).value.trim().toLowerCase();
   const all=sortedFleet();
   const fleet=URL_PRINTER_FILTER ? urlFilterFleet(all)
@@ -6707,8 +7591,10 @@ function renderFleet({incremental}={}){
     // grab a frame from a WebRTC-only camera. A routine fleet refresh was
     // killing that mid-capture, so the modal timed out on "Live view is
     // still connecting" every time.
-    wrap.innerHTML=""; CARD_CACHE.clear();
-    renderFleetListRows(camFleet, wrap, camRefreshMs);
+    // A poll keeps the table and rewrites only changed cells (see LIST_VIEW).
+    if(!incremental) wrap.innerHTML="";
+    CARD_CACHE.clear();
+    renderFleetListRows(camFleet, wrap, camRefreshMs, !!incremental);
   } else {
   // Reordering persists via applyPrinterOrder() -> saveConfig() -> POST
   // /api/config, which is admin-only server-side — gate on isAdmin(), not
@@ -6720,6 +7606,8 @@ function renderFleet({incremental}={}){
   if(!incremental){ wrap.innerHTML=""; CARD_CACHE.clear(); closeAllCamRtc(); }
   reconcileFleetCards(camFleet, wrap, camRefreshMs, dragEnabled, !!incremental);
   }
+  restoreFleetFocus(focusKey, focused);
+  pruneErrorSweeps();   // UI-REFRESH: release removed cards' observers and lights
   updateHealthBadge();
   renderTopbarStatus(fleetStatusSummary(FLEET));
   if(gridToolbarActive()) updateCamToolbar();
@@ -6876,139 +7764,354 @@ async function saveTagsEditor(){
 // [data-snap]. null = not sorted by name (whatever order camFleet arrived
 // in); toggles asc/desc thereafter, same as any single-column table sort.
 let LIST_SORT_NAME_DIR = null; // null | 'asc' | 'desc'
-function renderFleetListRows(camFleet, wrap, camRefreshMs){
+// List View keeps its table between polls. A poll (renderFleet({incremental:
+// true})) rewrites only the cells whose HTML changed since they were last
+// written, so a row's buttons, checkbox and thumbnail stay the same elements
+// and keep keyboard focus; while a printer prints, only its Progress and
+// Layers cells change. The comparison is against each cell's own output, so
+// unlike cardSignature() there is no separate list of fields to keep in step
+// with the markup. Every other renderFleet() call (view change, search, sort,
+// file selection...) clears #fleet first and builds the table afresh.
+// null, or { table, head, rows: Map(printer id -> { tr, cls, cells }) }.
+let LIST_VIEW = null;
+// The <td> class of each column, in order; listRowCellsHtml() returns what
+// goes inside them.
+const LIST_TD_CLASS = ["list-th-chk","list-printer-cell","","","","list-th-cam","","list-layers-cell","",""];
+function listTdHtml(html, i){ const c=LIST_TD_CLASS[i]; return `<td${c?` class="${c}"`:""}>${html}</td>`; }
+// The header row's cells (inside <thead><tr>).
+function listHeadHtml(){
+  const sortArrow = LIST_SORT_NAME_DIR==='asc' ? '▲' : LIST_SORT_NAME_DIR==='desc' ? '▼' : '⇅';
+  return `<th class="list-th-chk"></th>`+
+    `<th class="list-th-sort" data-listsort="name">${esc(t("settings.logs.col_printer"))} <span class="list-sort-arrow">${sortArrow}</span></th>`+
+    `<th>${esc(t("settings.printers.field_tags"))}</th><th>${esc(t("fleet.list.col_file"))}</th><th>${esc(t("fleet.list.col_status"))}</th><th class="list-th-cam"></th><th>${esc(t("fleet.list.col_progress"))}</th><th>${esc(t("fleet.list.col_layers"))}</th><th>${esc(t("fleet.progress.filament_label"))}</th><th>${esc(t("fleet.list.col_actions"))}</th>`;
+}
+// One printer's row: the inner HTML of each of its cells. The checkbox is
+// written unchecked and its state set on the element (see
+// renderFleetListRows), so ticking it does not make the next poll rewrite
+// the cell and drop focus off it.
+function listRowCellsHtml(p){
+  const {statusColor, statusTxt}=statusColorText(p);
+  const busy=p.online&&(p.state==="printing"||p.state==="paused");
+  const maintMode=p.state==="maintenance";
+  const canSend=p.online&&SELECTED&&!busy&&!maintMode;
+  // Same "Loaded" precedence as the card grid (see statusColorText and the
+  // progress-section's own `stem`) — otherwise this column would keep
+  // showing the last-printed file while the status badge next to it
+  // already says "Loaded" for a different one.
+  const stem=cardFileStem(p);
+  const fileCell=stem
+    ? `<div class="list-file-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"list-thumb")}<span class="list-file-name" title="${esc(stem)}">${esc(stem)}</span></div>`
+    : `<span class="list-file-empty">—</span>`;
+  const pct=p.online&&p.progress!=null?p.progress*100:null;
+  const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
+  const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
+  const listLayer=layerDisplay(p);
+  // Second line only means something while there's an active countdown or a
+  // finish time to report — idle/error/cancelled rows already say so via
+  // the 0% (or frozen %) above; a "—" placeholder there just adds noise.
+  const progressMeta = p.state==='complete' ? fmtFinishedTime(p.completedAt)
+    : (p.state==='printing'||p.state==='paused') ? fmtRemaining(p.elapsed,p.progress)
+    : '';
+  const progressCell=pct!=null
+    ? `<div class="list-progress">`+
+        `<div class="list-progress-row"><span class="list-progress-pct ${pctCls}">${pct.toFixed(0)}%</span>`+
+        `<div class="prog-track list-progress-track ${trackCls}"><div class="prog-fill list-progress-fill ${pctCls}" style="width:${pct}%"></div></div></div>`+
+        (progressMeta?`<div class="list-progress-meta">${progressMeta}</div>`:'')+
+      `</div>`
+    : `<span class="list-file-empty">—</span>`;
+  const layersCell = pct!=null && listLayer ? `${listLayer.current} / ${listLayer.total}` : '—';
+  // Bambu-style [PLA] chip: material name on a background of its own
+  // color, one per toolhead — empty heads render as a hollow chip (same
+  // fixed box as a loaded one) rather than being skipped, so the row's
+  // chips stay aligned against neighboring rows regardless of which heads
+  // are actually loaded.
+  const filamentCell=p.capabilities?.filamentHeads
+    ? ((p.heads||[]).slice(0,4).map(h=>{
+        if(!h||!h.loaded) return `<span class="list-filament-chip empty" title="${esc(t("fleet.list.empty_chip_title"))}"></span>`;
+        const hex=h.hex||'#3a3f49';
+        const dark=needsDarkText(hex);
+        return `<span class="list-filament-chip" style="background:${esc(hex)};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,4))}</span>`;
+      }).join("")) || `<span class="list-file-empty">—</span>`
+    : `<span class="list-file-empty">—</span>`;
+  const actionsCell=busy
+    ? (p.state==="paused"
+          ? `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""></button>`
+          : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""></button>`)
+      + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""></button>`
+      + `<button class="btn-chip icon-only danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
+    : `<button class="btn-chip icon-only" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
+      + `<button class="btn-chip icon-only" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
+      + `<button class="btn-chip icon-only" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""></button>`;
+  return [
+    `<label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input" data-camsel="${p.id}"></label>`,
+    `<div class="hdr-brand">${brandHtml(p)}</div><div class="hdr-name" title="${esc(p.name)}">${esc(p.name)}</div>`,
+    (p.tags||[]).filter(t=>!isColorTag(t)).map(t=>`<span class="list-tag">${esc(t)}</span>`).join("")||'<span class="list-file-empty">—</span>',
+    fileCell,
+    // Action feedback ("Pausing…", "Bed set to 60°", an error) under the
+    // badge, filtered as on the compact card so "Printing on …" doesn't
+    // repeat the badge. ctl() and the E-Stop/Cancel dialogs write into this
+    // element directly (#pst-<id>); it stays while the cell's HTML doesn't
+    // change, as a reused card's does.
+    `<span class="status-badge" style="--status-color:${statusColor}">${statusTxt}</span>`+compactCardStatusHtml(p),
+    p.capabilities?.camera?`<button class="pill-btn pill-btn-sm list-status-cam" data-snap="${p.id}" title="${esc(t("fleet.list.view_camera_title",{name:p.name}))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:'',
+    progressCell,
+    layersCell,
+    `<div class="list-filament-cell">${filamentCell}</div>`,
+    `<div class="list-actions-cell">${actionsCell}</div>`,
+  ];
+}
+// incremental: reuse the table already in `wrap` (see LIST_VIEW above).
+function renderFleetListRows(camFleet, wrap, camRefreshMs, incremental){
   const rows = LIST_SORT_NAME_DIR
     ? [...camFleet].sort((a,b)=>{
         const c=(a.name||"").localeCompare(b.name||"");
         return LIST_SORT_NAME_DIR==='asc' ? c : -c;
       })
     : camFleet;
-  const sortArrow = LIST_SORT_NAME_DIR==='asc' ? '▲' : LIST_SORT_NAME_DIR==='desc' ? '▼' : '⇅';
-  const table=document.createElement("table");
-  table.className="fleet-list";
-  // Percentage widths (rather than px) so the columns always sum to the
-  // table's own width and can never overflow into — or get squeezed by —
-  // one another regardless of screen size; that's what let Actions visually
-  // crowd into Filament's space before. Progress is 8% here (was ~16%),
-  // halved per feedback; the rest of that share went to Actions/Filament.
-  // Printer's <col> is calc(25ch + cell padding) instead of a % — 25ch
-  // matches the name field's own maxlength (Settings > Printers), and ch
-  // resolves against the table's own inherited font (13px, --sans — the
-  // same font .hdr-name renders in), so it tracks that rule instead of a
-  // hardcoded px guess. The 20px is this table's actual td padding
-  // (8px 10px, i.e. 10px each side) — without it, real text would truncate
-  // a few characters short of the full 25 the column is sized for. Freed
-  // from the % pool entirely, its old 19% share goes to File below.
-  table.innerHTML=`<colgroup>`+
-      `<col style="width:32px"><col style="width:calc(25ch + 20px)"><col style="width:9%">`+
-      `<col style="width:34%"><col style="width:13%"><col style="width:36px">`+
-      `<col style="width:8%"><col style="width:76px"><col style="width:14%"><col style="width:13%">`+
-    `</colgroup>`+
-    `<thead><tr>`+
-    `<th class="list-th-chk"></th>`+
-    `<th class="list-th-sort" data-listsort="name">${esc(t("settings.logs.col_printer"))} <span class="list-sort-arrow">${sortArrow}</span></th>`+
-    `<th>${esc(t("settings.printers.field_tags"))}</th><th>${esc(t("fleet.list.col_file"))}</th><th>${esc(t("fleet.list.col_status"))}</th><th class="list-th-cam"></th><th>${esc(t("fleet.list.col_progress"))}</th><th>${esc(t("fleet.list.col_layers"))}</th><th>${esc(t("fleet.progress.filament_label"))}</th><th>${esc(t("fleet.list.col_actions"))}</th>`+
-    `</tr></thead><tbody></tbody>`;
-  const tbody=table.querySelector("tbody");
+  const head=listHeadHtml();
+  let lv=incremental && LIST_VIEW && LIST_VIEW.table.parentNode===wrap ? LIST_VIEW : null;
+  if(lv){
+    if(lv.head!==head){ lv.table.tHead.rows[0].innerHTML=head; lv.head=head; }
+  } else {
+    wrap.innerHTML="";
+    const table=document.createElement("table");
+    table.className="fleet-list";
+    // Percentage widths (rather than px) so the columns always sum to the
+    // table's own width and can never overflow into — or get squeezed by —
+    // one another regardless of screen size; that's what let Actions visually
+    // crowd into Filament's space before. Progress is 8% here (was ~16%),
+    // halved per feedback; the rest of that share went to Actions/Filament.
+    // Printer's <col> is calc(25ch + cell padding) instead of a % — 25ch
+    // matches the name field's own maxlength (Settings > Printers), and ch
+    // resolves against the table's own inherited font (13px, --sans — the
+    // same font .hdr-name renders in), so it tracks that rule instead of a
+    // hardcoded px guess. The 20px is this table's actual td padding
+    // (8px 10px, i.e. 10px each side) — without it, real text would truncate
+    // a few characters short of the full 25 the column is sized for. Freed
+    // from the % pool entirely, its old 19% share goes to File below.
+    table.innerHTML=`<colgroup>`+
+        `<col style="width:32px"><col style="width:calc(25ch + 20px)"><col style="width:9%">`+
+        `<col style="width:34%"><col style="width:13%"><col style="width:36px">`+
+        `<col style="width:8%"><col style="width:76px"><col style="width:14%"><col style="width:13%">`+
+      `</colgroup>`+
+      `<thead><tr>`+head+`</tr></thead><tbody></tbody>`;
+    // On the table, not the <th>: a header rewritten above replaces the <th>.
+    table.addEventListener("click",e=>{
+      if(!e.target.closest('[data-listsort="name"]')) return;
+      LIST_SORT_NAME_DIR = LIST_SORT_NAME_DIR==='asc' ? 'desc' : 'asc';
+      renderFleet();
+    });
+    lv=LIST_VIEW={ table, head, rows:new Map() };
+  }
+  const tbody=lv.table.querySelector("tbody");
+  const seen=new Set();
+  // Same placement as reconcileFleetCards(): a row already where it belongs
+  // is left alone (moving a node drops focus inside it), anything else goes
+  // before the cursor, so rows end up in `rows` order.
+  let cursor=tbody.firstChild||null;
   rows.forEach(p=>{
-    const {statusColor, statusTxt}=statusColorText(p);
-    const busy=p.online&&(p.state==="printing"||p.state==="paused");
-    const maintMode=p.state==="maintenance";
-    const canSend=p.online&&SELECTED&&!busy&&!maintMode;
-    // Same "Loaded" precedence as the card grid (see statusColorText and the
-    // progress-section's own `stem`) — otherwise this column would keep
-    // showing the last-printed file while the status badge next to it
-    // already says "Loaded" for a different one.
-    const stem=cardFileStem(p);
-    const fileCell=stem
-      ? `<div class="list-file-cell" data-thumb="${p.id}" tabindex="0" role="button" title="${esc(t("fleet.card.thumb_enlarge_title"))}">${thumbImgHtml(p,stem,"list-thumb")}<span class="list-file-name">${esc(stem)}</span></div>`
-      : `<span class="list-file-empty">—</span>`;
-    const pct=p.online&&p.progress!=null?p.progress*100:null;
-    const pctCls=p.state==='error'?'red':p.state==='paused'?'amber':p.state==='complete'?'green':'cyan';
-    const trackCls=p.state==='error'?'red':p.state==='paused'?'amber':'';
-    const listLayer=layerDisplay(p);
-    // Second line only means something while there's an active countdown or a
-    // finish time to report — idle/error/cancelled rows already say so via
-    // the 0% (or frozen %) above; a "—" placeholder there just adds noise.
-    const progressMeta = p.state==='complete' ? fmtFinishedTime(p.completedAt)
-      : (p.state==='printing'||p.state==='paused') ? fmtRemaining(p.elapsed,p.progress)
-      : '';
-    const progressCell=pct!=null
-      ? `<div class="list-progress">`+
-          `<div class="list-progress-row"><span class="list-progress-pct ${pctCls}">${pct.toFixed(0)}%</span>`+
-          `<div class="prog-track list-progress-track ${trackCls}"><div class="prog-fill list-progress-fill ${pctCls}" style="width:${pct}%"></div></div></div>`+
-          (progressMeta?`<div class="list-progress-meta">${progressMeta}</div>`:'')+
-        `</div>`
-      : `<span class="list-file-empty">—</span>`;
-    const layersCell = pct!=null && listLayer ? `${listLayer.current} / ${listLayer.total}` : '—';
-    // Bambu-style [PLA] chip: material name on a background of its own
-    // color, one per toolhead — empty heads render as a hollow chip (same
-    // fixed box as a loaded one) rather than being skipped, so the row's
-    // chips stay aligned against neighboring rows regardless of which heads
-    // are actually loaded.
-    const filamentCell=p.capabilities?.filamentHeads
-      ? ((p.heads||[]).slice(0,4).map(h=>{
-          if(!h||!h.loaded) return `<span class="list-filament-chip empty" title="${esc(t("fleet.list.empty_chip_title"))}"></span>`;
-          const hex=h.hex||'#3a3f49';
-          const dark=needsDarkText(hex);
-          return `<span class="list-filament-chip" style="background:${esc(hex)};color:${dark?'#111':'#fff'}" title="${esc(h.material||'')}">${esc((h.material||'?').toUpperCase().slice(0,4))}</span>`;
-        }).join("")) || `<span class="list-file-empty">—</span>`
-      : `<span class="list-file-empty">—</span>`;
-    const actionsCell=busy
-      ? (p.state==="paused"
-            ? `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="resume" title="${esc(t("printer.action_resume"))}"><img src="/print-icon.svg" alt=""></button>`
-            : `<button class="btn-chip icon-only" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="pause" title="${esc(t("printer.action_pause"))}"><img src="/pause-icon.svg" alt=""></button>`)
-        + `<button class="btn-chip icon-only danger" ${canAct()?"":"disabled"} data-ctl="${p.id}" data-act="cancel" title="${esc(t("common.cancel"))}"><img src="/stop-icon.svg" alt=""></button>`
-        + `<button class="btn-chip icon-only danger" ${canAct()&&!estopUnsupported(p)?"":"disabled"} data-estop="${p.id}" title="${esc(estopUnsupported(p)?t("printer.action_estop_unsupported_title"):t("printer.action_estop_title"))}"><img src="/estop-icon.svg" alt=""></button>`
-      : `<button class="btn-chip icon-only" ${sendBtnAttrs(p,false,canSend&&canAct())} data-id="${p.id}" data-start="0" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):esc(t("printer.action_upload_title"))}"><img src="/upload-file.svg" alt=""></button>`
-        + `<button class="btn-chip icon-only" ${sendBtnAttrs(p,true,p.online&&!busy&&!maintMode&&canAct())} data-id="${p.id}" data-start="1" title="${maintMode?esc(t("printer.action_maintenance_mode_title")):SELECTED?esc(t("printer.action_print_title_selected")):esc(t("printer.action_print_title_pick"))}"><img src="/print-icon.svg" alt=""></button>`
-        + `<button class="btn-chip icon-only" ${preheatAttrs(p)}><img src="/preheat-icon.svg" alt=""></button>`;
-    const tr=document.createElement("tr");
-    tr.className="list-row"+(p.online?"":" offline");
-    tr.innerHTML=`<td class="list-th-chk"><label class="cam-select"><input type="checkbox" class="cam-chk checkbox-input" data-camsel="${p.id}"${CAM_SELECTED.has(p.id)?' checked':''}></label></td>`+
-      `<td class="list-printer-cell"><div class="hdr-brand">${brandHtml(p)}</div><div class="hdr-name" title="${esc(p.name)}">${esc(p.name)}</div></td>`+
-      `<td>${(p.tags||[]).filter(t=>!isColorTag(t)).map(t=>`<span class="list-tag">${esc(t)}</span>`).join("")||'<span class="list-file-empty">—</span>'}</td>`+
-      `<td>${fileCell}</td>`+
-      `<td><span class="status-badge" style="--status-color:${statusColor}">${statusTxt}</span></td>`+
-      `<td class="list-th-cam">${p.capabilities?.camera?`<button class="pill-btn pill-btn-sm list-status-cam" data-snap="${p.id}" title="${esc(t("fleet.list.view_camera_title",{name:p.name}))}"><img src="/camera-pill.svg" alt="${esc(t("printer.action_camera"))}"></button>`:''}</td>`+
-      `<td>${progressCell}</td>`+
-      `<td class="list-layers-cell">${layersCell}</td>`+
-      `<td><div class="list-filament-cell">${filamentCell}</div></td>`+
-      `<td><div class="list-actions-cell">${actionsCell}</div></td>`;
-    tbody.appendChild(tr);
+    seen.add(p.id);
+    const cells=listRowCellsHtml(p);
+    const cls="list-row"+(p.online?"":" offline");
+    let r=lv.rows.get(p.id);
+    if(!r){
+      const tr=document.createElement("tr");
+      tr.className=cls;
+      tr.innerHTML=cells.map(listTdHtml).join("");
+      r={ tr, cls, cells }; lv.rows.set(p.id, r);
+    } else {
+      if(r.cls!==cls){ r.tr.className=cls; r.cls=cls; }
+      cells.forEach((html,i)=>{ if(html!==r.cells[i]) r.tr.cells[i].innerHTML=html; });
+      r.cells=cells;
+    }
+    const chk=r.tr.querySelector(".cam-chk");
+    if(chk) chk.checked=CAM_SELECTED.has(p.id);
+    if(r.tr===cursor) cursor=cursor.nextSibling;
+    else if(cursor) tbody.insertBefore(r.tr, cursor);
+    else tbody.appendChild(r.tr);
   });
-  wrap.appendChild(table);
-  table.querySelector('[data-listsort="name"]').addEventListener("click",()=>{
-    LIST_SORT_NAME_DIR = LIST_SORT_NAME_DIR==='asc' ? 'desc' : 'asc';
-    renderFleet();
-  });
+  for(const [id, r] of [...lv.rows]) if(!seen.has(id)){ r.tr.remove(); lv.rows.delete(id); }
+  // A new table goes in once its rows are built.
+  if(lv.table.parentNode!==wrap) wrap.appendChild(lv.table);
+}
+
+// Sends waiting for this printer (§37 P3), oldest first, each with what can be
+// done about it in its state. One being sent shows as the upload strip, not
+// here. Nothing here starts a print or sends anything by itself: Send again is
+// the person's explicit authorisation, confirmed first.
+const PENDING_ATTENTION_KEYS={
+  "unknown-after-upload":"attention_unknown", "interrupted-not-on-printer":"attention_not_on_printer",
+  "interrupted-different-on-printer":"attention_different", "interrupted-listed-by-name":"attention_listed_by_name",
+  "restored-from-backup":"attention_restored", "source-changed":"attention_local_changed",
+};
+function pendingSince(ts){
+  const d=new Date(ts), now=new Date();
+  const time=d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+  return d.toDateString()===now.toDateString() ? time : d.toLocaleDateString([], {month:"short", day:"numeric"})+" "+time;
+}
+// opts.removed: its printer is no longer configured (the admin notice): it can
+// only be cancelled or dismissed — nothing is sent to a printer that is gone.
+function pendingSendRowHtml(p, s, {removed=false}={}){
+  const name=s.name, since=pendingSince(s.createdAt);
+  // The upload strip shows a send going out; until it does (its source is being
+  // checked, or the printer is being set up after it) the row says so.
+  if(s.state==="uploading" && p.upload) return "";
+  let cls="work", text, actions=[];
+  if(s.state==="queued"){ text=t(removed?"fleet.pending.queued_removed":s.waitingFor==="source"?"fleet.pending.queued_source":s.waitingFor==="printer"?"fleet.pending.queued_printer_check":"fleet.pending.queued",{name, since}); actions=["cancel"]; }
+  else if(s.state==="uploading"){ text=t("fleet.pending.sending",{name}); actions=["cancel"]; }
+  else if(s.state==="interrupted"){ cls="warn"; text=t("fleet.pending.interrupted",{name}); actions=["cancel"]; }
+  // Restored from a backup, but its transfer had already finished, or a later
+  // attempt delivered it (§37 P4): it must not go twice — dismiss only.
+  else if(s.finished && ["attention","failed","cancelled"].includes(s.state)){ cls="work"; text=t(s.finishedLater?"fleet.pending.already_delivered_later":"fleet.pending.already_finished",{name, result:t("fleet.pending.result_"+(["verified","acknowledged","failed","cancelled"].includes(s.finished)?s.finished:"other"))}); actions=["dismiss"]; }
+  else if(s.state==="attention"){
+    cls="warn";
+    // The printer accepted it but the read-back did not confirm it, versus no
+    // answer at all (§37 P1/P2), as the Loaded-file banner tells them apart.
+    // The file on this computer changed, or could not be checked again (§37 A4):
+    // said as such, never as a problem with the printer's copy.
+    const key=s.reason==="unknown-after-upload" && s.errorReason==="local-changed" ? "attention_local_changed"
+      : s.reason==="unknown-after-upload" && s.errorReason==="local-unreadable" ? "attention_local_unreadable"
+      : s.reason==="unknown-after-upload" && ["not-on-printer","verify-unreadable"].includes(s.errorReason) ? "attention_unchecked" : (PENDING_ATTENTION_KEYS[s.reason]||"attention_generic");
+    text=t("fleet.pending."+key,{name}); actions=["send-again","check","cancel"];
+  }
+  else if(s.state==="failed"){
+    cls="err"; text=t("fleet.pending.failed",{name, error:s.error||""});
+    // A changed source fails again every time: a new version is a new send.
+    actions=s.code==="DEFERRED_SOURCE_CHANGED" ? ["dismiss"] : ["send-again","dismiss"];
+  }
+  else if(s.state==="cancelled"){ text=t("fleet.pending.cancelled_"+(s.outcome==="sent"?"sent":s.outcome==="unknown"?"unknown":"not_sent"),{name}); actions=["dismiss"]; }
+  else return "";
+  if(removed){ actions=actions.filter(a=>a==="cancel"||a==="dismiss"); text=t("fleet.pending.removed_printer",{printer:p.name})+" "+text; }
+  const off=!canAct(), why=off?` disabled title="${esc(t("fleet.queued.staged_view_only_title"))}"`:"";
+  const label={"cancel":"fleet.pending.cancel_btn","dismiss":"library.dismiss_btn","send-again":"fleet.pending.send_again_btn","check":"fleet.queued.staged_check_btn"};
+  return `<div class="queued-banner ${cls}" title="${esc(name)}"><span class="queued-banner-text">${esc(text)}</span><span class="queued-banner-actions">`+
+    actions.map(a=>`<button type="button" class="upload-strip-btn${a==="dismiss"||a==="cancel"?" quiet":""}" data-deferred-action="${a}" data-deferred-id="${esc(s.id)}" data-deferred-name="${esc(name)}" data-printer-name="${esc(p.name||"")}" data-printer="${esc(p.id)}"${why}>${esc(t(label[a]))}</button>`).join("")+
+    `</span></div>`;
+}
+function pendingSendsHtml(p){
+  const list=(p.pendingSends||[]).filter(s=>s.state!=="completed");
+  const rows=list.map(s=>pendingSendRowHtml(p,s)).join("");
+  return rows ? `<div class="pending-sends">${rows}</div>` : "";
+}
+// Cancel and Send again name what they affect and are confirmed; Check again
+// and Dismiss are not destructive. Errors go to the card, or (no card: a
+// removed printer's send) to the notice.
+async function deferredAction(action, id, name, printerName, printerId, btn){
+  if(action==="send-again" && !confirm(t("fleet.pending.send_again_confirm",{name, printer:printerName}))) return;
+  if(action==="cancel" && !confirm(t("fleet.pending.cancel_confirm",{name, printer:printerName}))) return;
+  const say=(cls,txt)=>{ if(printerId!=null) setCardStatus(printerId,cls,txt); else deferredNoticeSay(cls,txt); };
+  btn.disabled=true;
+  if(action==="check") say("pstatus work", t("printer.note_checking"));
+  let ok=false;
+  try{
+    const r=await postJSON("/api/deferred/"+encodeURIComponent(id)+"/"+action,{});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) say("pstatus err",d.error||("HTTP "+r.status));
+    else { ok=true; if(action==="check") say(d.state==="completed"?"pstatus ok":"pstatus warn", t("fleet.pending.check_"+(d.state==="completed"?"found":"still"),{name})); }
+  }catch(e){ say("pstatus err",e.message); }
+  if(!ok && btn.isConnected) btn.disabled=false;
+  loadFleet(); if(isAdmin()) loadDeferredNotice(true);
+}
+
+// For admins: sends whose printer was removed (kept, never redirected), and a
+// send list that could not be read, was restored from its backup or set
+// records aside, or cannot be saved right now (§37 P3).
+let DEFERRED_NOTICE_AT=0, DEFERRED_NOTICE_HTML="", DEFERRED_NOTICE_MSG=null;
+function deferredNoticeSay(cls,txt){ DEFERRED_NOTICE_MSG={cls,txt}; DEFERRED_NOTICE_HTML=""; loadDeferredNotice(true); }
+async function loadDeferredNotice(force){
+  const el=$("deferredNotice"); if(!el) return;
+  if(!isAdmin()){ if(el.innerHTML) el.innerHTML=""; DEFERRED_NOTICE_HTML=""; return; }
+  if(!force && Date.now()-DEFERRED_NOTICE_AT<30000) return;
+  DEFERRED_NOTICE_AT=Date.now();
+  let d;
+  try{ const r=await fetch("/api/deferred/orphans"); if(!r.ok) return; d=await r.json(); }catch{ return; }
+  const st=d.status||{}, parts=[];
+  const ack=`<span class="queued-banner-actions"><button type="button" class="upload-strip-btn" data-deferred-ack="1">${esc(t("fleet.pending.acknowledge_btn"))}</button></span>`;
+  if(st.readOnly) parts.push(`<div class="queued-banner err"><span class="queued-banner-text">${esc(t("fleet.pending.store_read_only"))}</span></div>`);
+  else if(st.recoveryRequired) parts.push(`<div class="queued-banner err"><span class="queued-banner-text">${esc(t("fleet.pending.recovery_required"))}</span>${ack}</div>`);
+  else if(st.hold) parts.push(`<div class="queued-banner warn"><span class="queued-banner-text">${esc(t(st.hold.reason==="records-set-aside"?"fleet.pending.hold_set_aside":"fleet.pending.hold_restored"))}</span>${ack}</div>`);
+  if(st.degraded && !st.readOnly) parts.push(`<div class="queued-banner err"><span class="queued-banner-text">${esc(t("fleet.pending.store_degraded"))}</span></div>`);
+  // The results the command line's --wait reads (§37 P4).
+  const rs=d.results||{};
+  if(rs.readOnly||rs.degraded) parts.push(`<div class="queued-banner err"><span class="queued-banner-text">${esc(t(rs.readOnly?"fleet.pending.results_read_only":"fleet.pending.results_degraded"))}</span></div>`);
+  for(const s of d.sends||[]){ const row=pendingSendRowHtml({id:null, name:s.printerName||s.printerId}, s, {removed:true}); if(row) parts.push(row); }
+  // Files no send refers to, set aside at startup: deleted only by this button.
+  const of=d.orphanedFiles||{};
+  if(of.count) parts.push(`<div class="queued-banner warn"><span class="queued-banner-text">${esc(t("fleet.pending.orphaned_files",{count:of.count, mb:Math.max(1,Math.round(of.bytes/1048576))}))}</span><span class="queued-banner-actions"><button type="button" class="upload-strip-btn quiet danger" data-deferred-orphans-delete="${esc(String(of.count))}" data-mb="${esc(String(Math.max(1,Math.round(of.bytes/1048576))))}">${esc(t("fleet.pending.orphaned_delete_btn",{count:of.count}))}</button></span></div>`);
+  if(DEFERRED_NOTICE_MSG) parts.push(`<p class="${esc(DEFERRED_NOTICE_MSG.cls)}">${esc(DEFERRED_NOTICE_MSG.txt)}</p>`);
+  const html=parts.length?`<div class="pending-sends">${parts.join("")}</div>`:"";
+  // Unchanged: left alone, so focus and the live region are not disturbed.
+  if(html!==DEFERRED_NOTICE_HTML){ el.innerHTML=html; DEFERRED_NOTICE_HTML=html; }
+}
+
+// Dismiss / Check again on a Loaded-file banner (§37 P5). View-only users see
+// why they can't; the server checks the role again.
+function stagedBannerActions(p,{check=false, dismiss=false}={}){
+  const off=!canAct(), why=off?` disabled title="${esc(t("fleet.queued.staged_view_only_title"))}"`:"";
+  return `<span class="queued-banner-actions">`+
+    (check?`<button type="button" class="upload-strip-btn" data-staged-check="${esc(p.id)}"${why}>${esc(t("fleet.queued.staged_check_btn"))}</button>`:"")+
+    (dismiss?`<button type="button" class="upload-strip-btn quiet" data-staged-dismiss="${esc(p.id)}" data-staged-name="${esc(p.queuedFile.name)}"${why}>${esc(t("library.dismiss_btn"))}</button>`:"")+
+  `</span>`;
+}
+async function stagedFileAction(kind, printerId, name, btn){
+  btn.disabled=true;
+  if(kind==="check") setCardStatus(printerId, "pstatus work", t("printer.note_checking"));
+  let ok=false;
+  try{
+    const r=await postJSON("/api/staged-file/"+kind, kind==="dismiss" ? {printer:printerId, name} : {printer:printerId});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok) setCardStatus(printerId, "pstatus err", d.error||("HTTP "+r.status));
+    else { ok=true; if(kind==="check") setCardStatus(printerId, d.check&&d.check.state==="present" ? "pstatus ok" : "pstatus warn", t("fleet.queued.staged_check_"+(d.check&&d.check.state||"unverifiable"))); }
+  }catch(e){ setCardStatus(printerId, "pstatus err", e.message); }
+  // A refusal that repeats the last message does not rebuild the card, so the
+  // button is given back here rather than left disabled.
+  if(!ok && btn.isConnected) btn.disabled=false;
+  loadFleet();
 }
 
 // A file staged by --load while nobody was watching (queuedFile, set server-side
 // by /api/notify-load), or just uploaded to an idle printer via the plain
-// Upload button. Only "queued"/"uploading"/"error" get this bordered banner —
-// real, rare in-progress states with nothing else on the card showing them.
-// "ready" gets no banner at all: the status badge already says "Loaded" (see
-// statusColorText) and the filename itself shows in the same slot a printing
-// job's filename would (see the progress-section's `stem`), so a second,
-// separate notice here would just be redundant extra card height.
+// Upload button. "queued"/"uploading"/"error" get this bordered banner —
+// real, rare in-progress states with nothing else on the card showing them —
+// and so do a Loaded file found gone ("missing") or changed, or one the
+// printer could not be asked about (§37 P5). A plain "ready" file gets no
+// banner: the status badge already says "Loaded" (see statusColorText) and the
+// filename itself shows in the same slot a printing job's filename would (see
+// the progress-section's `stem`), so a second notice would be redundant.
 // {readyToo}: also show a file that is ready to print. The normal card says
 // that with its "Loaded" badge; an offline card's badge says "Offline", so
 // without this a waiting job would look lost.
 function queuedFileBannerHtml(p, {readyToo=false}={}){
   const qf=p.queuedFile;
   if(!qf) return '';
-  if(qf.status==='ready' && readyToo) return `<div class="queued-banner ready" title="${esc(qf.name)}"><span class="queued-banner-text">${t("fleet.queued.ready_banner",{name:stripExt(qf.name)},{html:true})}</span></div>`;
-  if(qf.status==='queued') return `<div class="queued-banner work">${t("fleet.queued.queued_banner",{name:qf.name},{html:true})}</div>`;
-  if(qf.status==='uploading') return `<div class="queued-banner work">${t("fleet.queued.staging_banner",{name:qf.name},{html:true})}</div>`;
-  if(qf.status==='error') return `<div class="queued-banner err">${esc(t("fleet.queued.stage_failed_banner",{name:qf.name,error:qf.error||''}))}</div>`;
+  // Before the plain ready banner: an offline card must not read as ready when
+  // the printer could not be asked (§37 P5).
+  if(qf.status==='ready' && qf.check && qf.check.state==='unverifiable') return `<div class="queued-banner warn" title="${esc(qf.name)}"><span class="queued-banner-text">${esc(t("fleet.queued.staged_unverifiable_banner",{name:qf.name}))}</span>${stagedBannerActions(p,{check:true, dismiss:true})}</div>`;
+  if(qf.status==='ready' && readyToo) return `<div class="queued-banner ready" title="${esc(qf.name)}"><span class="queued-banner-text">${t("fleet.queued.ready_banner",{name:qf.name},{html:true})}</span></div>`;
+  // The waiting sends have their own rows (pendingSendsHtml, §37 P3).
+  if(qf.status==='queued') return p.pendingSends&&p.pendingSends.length ? '' : `<div class="queued-banner work" title="${esc(qf.name)}">${t("fleet.queued.queued_banner",{name:qf.name},{html:true})}</div>`;
+  if(qf.status==='uploading') return `<div class="queued-banner work" title="${esc(qf.name)}">${t("fleet.queued.staging_banner",{name:qf.name},{html:true})}</div>`;
+  // Every byte went and the printer never confirmed it: not a failure, and
+  // not sent either (§37 P1).
+  // The printer accepted it but reading its copy back did not confirm it (§37 P2).
+  if(qf.status==='error' && qf.outcome==='unknown' && (qf.reason==='not-on-printer' || qf.reason==='verify-unreadable' || qf.reason==='local-changed')) return `<div class="queued-banner warn" title="${esc(qf.name)}"><span class="queued-banner-text">${esc(t("fleet.queued.stage_unchecked_banner",{name:qf.name}))}</span>${stagedBannerActions(p,{dismiss:true})}</div>`;
+  if(qf.status==='error' && qf.outcome==='unknown') return `<div class="queued-banner warn" title="${esc(qf.name)}"><span class="queued-banner-text">${esc(t("fleet.queued.stage_unconfirmed_banner",{name:qf.name}))}</span>${stagedBannerActions(p,{dismiss:true})}</div>`;
+  if(qf.status==='error') return `<div class="queued-banner err" title="${esc(qf.name)}"><span class="queued-banner-text">${esc(t("fleet.queued.stage_failed_banner",{name:qf.name,error:qf.error||''}))}</span>${stagedBannerActions(p,{dismiss:true})}</div>`;
+  // The Loaded file checked on the printer (§37 P5): gone, changed, or the
+  // printer could not be asked. The first two are not Loaded any more (no
+  // badge, no Print); the third keeps its badge, and Print is refused until a
+  // check succeeds. Never re-sent by itself.
+  if(qf.status==='missing') return `<div class="queued-banner err" title="${esc(qf.name)}"><span class="queued-banner-text">${esc(t("fleet.queued.staged_missing_banner",{name:qf.name}))}</span>${stagedBannerActions(p,{dismiss:true})}</div>`;
+  if(qf.status==='changed') return `<div class="queued-banner warn" title="${esc(qf.name)}"><span class="queued-banner-text">${esc(t("fleet.queued.staged_changed_banner",{name:qf.name}))}</span>${stagedBannerActions(p,{dismiss:true})}</div>`;
   return '';
 }
 // /api/printfile is job-based (docs/TODO.md item 9a): the HTTP response means
 // "start job accepted", NOT "printing". Head mapping and G29 happen after it
 // returns, so the outcome only arrives via pollJob -- treating the 200 as
 // success would report a print started that may still fail minutes later.
-async function printQueuedFile(printerId, filename, prefs){
+// {loaded}: printing the card's Loaded file (the default), which the server
+// checks first (§37 P5); a Reprint of the job that just finished is not.
+async function printQueuedFile(printerId, filename, prefs, {loaded=true}={}){
   // Reports through the card-status store, never a captured element: this
   // line lives inside a card that is rebuilt when the job's phase badge
   // clears, which is exactly when the final message is written.
@@ -7016,13 +8119,15 @@ async function printQueuedFile(printerId, filename, prefs){
   st("pstatus work", t("fleet.queued.starting_print_status"));
   let ok=false;
   try{
-    const r=await postJSON("/api/printfile",{printer:printerId,filename,map:{},prefs});
+    // loaded: this is the card's Loaded file; the server refuses it unless the
+    // printer still has it (§37 P5).
+    const r=await postJSON("/api/printfile",{printer:printerId,filename,map:{},prefs,loaded});
     const d=await r.json(); if(!r.ok||d.error) throw new Error(d.error||("HTTP "+r.status));
     ok=await pollJob(d.jobId, st, true, d.mapped||0, null, null, prefs, printerId);
     // pollJob writes its own generic completion text. This path had its own
     // wording before 9a and keeps it: the conversion is synchronous -> async,
     // not a change to what the operator reads.
-    if(ok) st("pstatus ok", t("fleet.queued.printing_status",{filename}));
+    if(ok===true) st("pstatus ok", t("fleet.queued.printing_status",{filename}));
   }catch(e){ st("pstatus err", e.message); }
   loadFleet();
   return ok;
@@ -7035,8 +8140,8 @@ async function printQueuedFile(printerId, filename, prefs){
 function doReprint(printerId){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p||!p.filename) return;
-  if(p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)) openQuickPrintModal(printerId,'queued',p.filename);
-  else printQueuedFile(printerId,p.filename);
+  if(p.forceDefaults===false&&printerSupportsAnyPrintOpt(p)) openQuickPrintModal(printerId,'queued',p.filename,{loaded:false});
+  else printQueuedFile(printerId,p.filename,undefined,{loaded:false});
 }
 
 // ---- Quick print options popup ("Force default behavior" off) ----
@@ -7055,17 +8160,21 @@ const QP_OPT_DEFS=[
   { key:"timelapse", cap:"timelapse", labelKey:"fleet.modal.quickprint.opt_timelapse_label", descKey:"fleet.modal.quickprint.opt_timelapse_desc" },
   { key:"autoLevel", cap:"autoLevel", labelKey:"fleet.modal.quickprint.opt_autolevel_label", descKey:"fleet.modal.quickprint.opt_autolevel_desc" }
 ];
-let QP_PRINTER=null, QP_MODE=null, QP_QUEUED_NAME=null, QP_PREFS={}, QP_EXT_SELECTED=new Set();
+// QP_LOADED: the 'queued' file is the card's Loaded file, not a Reprint (§37 P5).
+let QP_PRINTER=null, QP_MODE=null, QP_QUEUED_NAME=null, QP_LOADED=true, QP_PREFS={}, QP_EXT_SELECTED=new Set();
 
 function printerSupportsAnyPrintOpt(p){
   return !!(p && p.capabilities && QP_OPT_DEFS.some(o=>p.capabilities[o.cap]));
 }
 
-function openQuickPrintModal(printerId, mode, queuedName){
+function openQuickPrintModal(printerId, mode, queuedName, {loaded=true}={}){
   const p=FLEET.find(f=>f.id===printerId);
   if(!p) return;
-  QP_PRINTER=printerId; QP_MODE=mode; QP_QUEUED_NAME=queuedName||null;
+  QP_PRINTER=printerId; QP_MODE=mode; QP_QUEUED_NAME=queuedName||null; QP_LOADED=loaded;
   QP_PREFS={autoLevel:!!p.autoLevel, flowCalibrate:!!p.flowCalibrate, timelapse:!!p.timelapse};
+  // The options ticked when this Loaded file was uploaded show as ticked (TODO §38).
+  const qf=p.queuedFile;
+  if(mode==="queued"&&loaded&&qf&&qf.name===queuedName&&qf.prefs) Object.assign(QP_PREFS,qf.prefs);
   // Default to whichever toolheads are actually loaded right now — a much
   // more useful starting point for "only one filament was just swapped"
   // than the firmware's own blanket default of calibrating all four.
@@ -7096,10 +8205,25 @@ function qpFooter(state){
 function qpUploadTick(d, jobId){
   if(d.phase==="upload"){
     QP_UPLOAD_JOB=d.cancellable ? jobId : null;
-    const pct=d.total ? Math.min(100, Math.round(d.sent/d.total*100)) : 0;
+    const pct=uploadPct(d.sent, d.total);
     $("qpUploadDetail").textContent=uploadDetailText(pct, d.sent, d.total);
     $("qpUploadFill").style.width=pct+"%";
     qpFooter("uploading");
+  } else if(d.phase==="confirming"){
+    // Every byte out, the printer has not answered: Cancel upload still calls
+    // off the start (§37 P1); once it has, the dialog says so and waits.
+    QP_UPLOAD_JOB=d.cancellable ? jobId : null;
+    const name=(FLEET.find(f=>f.id===QP_PRINTER)||{}).name||"";
+    $("qpUploadDetail").textContent=d.startCancelled ? t("fleet.print.status_start_cancelled_waiting",{printer:name}) : t("fleet.print.status_confirming",{printer:name});
+    $("qpUploadFill").style.width="99%";
+    qpFooter("uploading");
+    if(!d.cancellable){ $("qpCancelUpload").disabled=true; $("qpCancelUpload").title=t("fleet.upload.cancelled_waiting_detail"); }
+  } else if(d.phase==="verifying"){
+    QP_UPLOAD_JOB=null;
+    const name=(FLEET.find(f=>f.id===QP_PRINTER)||{}).name||"";
+    $("qpUploadDetail").textContent=t("fleet.print.status_verifying",{printer:name});
+    $("qpUploadFill").style.width="100%";
+    qpFooter("starting");
   } else if(!d.error && !d.done){
     $("qpUploadFill").style.width="100%";
     qpFooter("starting");
@@ -7185,7 +8309,7 @@ function syncQuickPrintButton(){
 async function doQuickPrint(){
   const prefs={...QP_PREFS};
   if(prefs.flowCalibrate) prefs.flowCalibrateExtruders=[...QP_EXT_SELECTED];
-  const printer=QP_PRINTER, mode=QP_MODE, name=QP_QUEUED_NAME;
+  const printer=QP_PRINTER, mode=QP_MODE, name=QP_QUEUED_NAME, loaded=QP_LOADED;
   const btn=$("qpPrint");
   btn.disabled=true;
   let ok=false;
@@ -7195,15 +8319,17 @@ async function doQuickPrint(){
       // Moonraker call, no upload bytes to track, so "Starting…" is the
       // whole story here (unlike the push path below).
       $("qpStatus").className="pstatus work"; $("qpStatus").textContent=t("fleet.queued.starting_print_status");
-      ok=await printQueuedFile(printer, name, prefs);
-      if(!ok){ $("qpStatus").className="pstatus err"; $("qpStatus").textContent=t("fleet.modal.quickprint.status_start_failed"); }
+      ok=await printQueuedFile(printer, name, prefs, {loaded});
+      // The reason (a Loaded file gone, changed or not checkable, §37 P5) is on
+      // the card's line; the dialog says it too, as the upload branch does.
+      if(!ok){ $("qpStatus").className="pstatus err"; $("qpStatus").textContent=(cardStatusFor({id:printer})||{}).txt || t("fleet.modal.quickprint.status_start_failed"); }
     } else {
       // Real upload ahead — same {fillEl,statusEl} progress hookup
       // pushTo/pollJob already drive for the send-modal's per-printer rows,
       // reused here instead of a static "Starting…" label.
       $("qpStatus").className="pstatus"; $("qpStatus").textContent="";
       const name=String(SELECTED||"").split("/").pop();
-      $("qpUploadTitle").textContent=t("fleet.upload.dialog_title",{file:stripExt(name)}); $("qpUploadTitle").title=name;
+      $("qpUploadTitle").textContent=t("fleet.upload.dialog_title",{file:name}); $("qpUploadTitle").title=name;
       $("qpUploadDetail").textContent=uploadDetailText(0,0,0); $("qpUploadFill").style.width="0%";
       $("qpProgress").style.display="";
       qpFooter("uploading");
@@ -7211,16 +8337,19 @@ async function doQuickPrint(){
       // takes over) or reopened for another one, it is left alone.
       const mine=()=>QP_PRINTER===printer && $("quickPrintModal").classList.contains("show");
       ok=await pushTo(printer, true, { noRowCancel:true, onJob:(d,job)=>{ if(mine()) qpUploadTick(d,job); } }, prefs);
-      if(!ok && mine()){
-        // Failed: say why here too (the card's strip has Retry); back to Cancel + Start print.
+      if(ok!==true && mine()){
+        // Failed, or not confirmed: say why here too (the card's strip has
+        // Retry, or Dismiss only when unconfirmed); back to Cancel + Start print.
         const u=UPLOADS.get(String(printer));
-        $("qpStatus").className="pstatus err";
-        $("qpStatus").textContent=u && u.state==="failed" ? t("fleet.upload.failed_title",{pct:u.pct, file:stripExt(u.name)})+" — "+u.reason : t("fleet.modal.quickprint.status_start_failed");
+        $("qpStatus").className=ok==="unconfirmed" ? "pstatus warn" : "pstatus err";
+        $("qpStatus").textContent=u && u.state==="failed" ? (u.mismatch ? t("fleet.upload.mismatch_title",{file:u.name}) : t("fleet.upload.failed_title",{pct:u.pct, file:u.name}))+" — "+u.reason
+          : u && u.state==="unconfirmed" ? t("fleet.upload.unconfirmed_title",{file:u.name})+" — "+u.reason
+          : (cardStatusFor({id:printer})||{}).txt || t("fleet.modal.quickprint.status_start_failed");
         $("qpProgress").style.display="none";
         qpFooter("idle");
       }
     }
-    if(ok && QP_PRINTER===printer) closeQuickPrintModal();
+    if(ok===true && QP_PRINTER===printer) closeQuickPrintModal();
   } finally {
     btn.disabled=false;
   }
@@ -7233,6 +8362,28 @@ async function doQuickPrint(){
 // per-card diffing in reconcileFleetCards() safe — a card's DOM node can now
 // persist unchanged across many renders without needing to track, per node,
 // whether it already has listeners attached.
+function wireDeferredNoticeEvents(){
+  const el=$("deferredNotice"); if(!el) return;
+  el.addEventListener("click", async e=>{
+    const ack=e.target.closest("button[data-deferred-ack]");
+    if(ack){
+      ack.disabled=true;
+      try{ const r=await postJSON("/api/deferred/acknowledge-recovery",{}); if(!r.ok){ const d=await r.json().catch(()=>({})); deferredNoticeSay("pstatus err", d.error||("HTTP "+r.status)); return; } DEFERRED_NOTICE_MSG=null; }
+      catch(err){ deferredNoticeSay("pstatus err", err.message); return; }
+      loadDeferredNotice(true); return;
+    }
+    const del=e.target.closest("button[data-deferred-orphans-delete]");
+    if(del){
+      if(!confirm(t("fleet.pending.orphaned_delete_confirm",{count:del.dataset.deferredOrphansDelete, mb:del.dataset.mb}))) return;
+      del.disabled=true;
+      try{ const r=await postJSON("/api/deferred/orphaned-files/delete",{}); if(!r.ok){ const d=await r.json().catch(()=>({})); deferredNoticeSay("pstatus err", d.error||("HTTP "+r.status)); return; } }
+      catch(err){ deferredNoticeSay("pstatus err", err.message); return; }
+      loadDeferredNotice(true); return;
+    }
+    const b=e.target.closest("button[data-deferred-action]");
+    if(b) deferredAction(b.dataset.deferredAction, b.dataset.deferredId, b.dataset.deferredName, b.dataset.printerName, null, b);
+  });
+}
 function wireFleetCardEvents(){
   const wrap=$("fleet");
   wrap.addEventListener("click", e=>{
@@ -7244,6 +8395,18 @@ function wireFleetCardEvents(){
     }
     const dismissBtn=e.target.closest("button[data-upload-dismiss]");
     if(dismissBtn){ setUploadState(parseInt(dismissBtn.dataset.uploadDismiss,10), null); return; }
+    const defBtn=e.target.closest("button[data-deferred-action]");
+    if(defBtn){
+      const pid=defBtn.dataset.printer; const printerId=pid===""||pid==="null"?null:parseInt(pid,10);
+      deferredAction(defBtn.dataset.deferredAction, defBtn.dataset.deferredId, defBtn.dataset.deferredName, defBtn.dataset.printerName, printerId, defBtn);
+      return;
+    }
+    const stagedBtn=e.target.closest("button[data-staged-dismiss],button[data-staged-check]");
+    if(stagedBtn){
+      const dismiss=stagedBtn.hasAttribute("data-staged-dismiss");
+      stagedFileAction(dismiss?"dismiss":"check", parseInt(dismiss?stagedBtn.dataset.stagedDismiss:stagedBtn.dataset.stagedCheck,10), stagedBtn.dataset.stagedName||"", stagedBtn);
+      return;
+    }
     const cancelBtn=e.target.closest("button[data-cancel-upload]");
     if(cancelBtn){ cancelBtn.disabled=true; cancelUpload(cancelBtn.dataset.cancelUpload, parseInt(cancelBtn.dataset.printer,10)); return; }
     const idBtn=e.target.closest("button[data-id]");
@@ -7419,6 +8582,12 @@ let PUSHES=0;
 // other file has exactly one, and the server ignores it.
 // resend: Retry from a failed upload strip — the original file, mapping,
 // source and plate, instead of whatever is selected now.
+// Returns true when the upload (and start) reported success, "waiting" when
+// SnapCon accepted the file but has not sent it yet (held until the printer is
+// free, or added to its queue), "unconfirmed" when every byte went and the
+// printer never confirmed it (it may or may not have the file), false when it
+// failed. Only true is success: "waiting" and "unconfirmed" are never counted
+// as sent (docs/TODO.md §37 P0, P1).
 async function pushTo(printer, start, extraUI, prefs, onProgress, plate, resend){
   if(!SELECTED && !resend){ return false; }
   const file=resend ? resend.file : SELECTED;
@@ -7443,19 +8612,21 @@ async function pushTo(printer, start, extraUI, prefs, onProgress, plate, resend)
       if(plate==null&&MAP&&MAP.plate) plate=MAP.plate;
     }
     const r=await postJSON("/api/print",{file,printer,start,map,prefs,plate,...src});
-    const d=await r.json(); if(!r.ok||d.error||(!d.jobId&&d.mode!=="pending")) throw new Error(d.error||("HTTP "+r.status));
-    if(d.mode==="pending"){
-      // Printer's busy — server queued the file instead of racing an upload
-      // against the active print; loadFleet() below picks up p.queuedFile
-      // and renders the existing "ready to print" banner once it lands.
-      st("pstatus ok", t("fleet.print.status_queued_will_upload"));
-      if(extraUI) setRowUI(extraUI, 100, "ok", t("fleet.print.status_queued_short"));
-      ok=true;
+    const d=await r.json(); if(!r.ok||d.error||(!d.jobId&&d.mode!=="pending"&&d.mode!=="queued")) throw new Error(d.error||("HTTP "+r.status));
+    if(d.mode==="pending"||d.mode==="queued"){
+      // Accepted, not sent: "pending" holds the file until the printer is
+      // free (loadFleet() below picks up p.queuedFile and its banner), and
+      // "queued" made a queue item that uploads when the queue dispatches it.
+      // Neutral, not green: nothing has reached the printer yet.
+      st("pstatus", d.mode==="queued" ? t("fleet.print.status_added_to_queue",{printer:d.printer||""}) : t("fleet.print.status_queued_will_upload"));
+      if(extraUI) setRowUI(extraUI, 0, "", d.mode==="queued" ? t("fleet.print.status_in_queue_short") : t("fleet.print.status_queued_short"));
+      ok="waiting";
     } else {
       // The card's upload strip, with what Retry needs to send it again.
       setUploadState(printer, { state:"uploading", origin:"local", jobId:d.jobId, name:String(file).split("/").pop(), pct:0, sent:0, total:0,
         retry:{ file, start, map:{ ...map }, prefs, plate, src } });
-      ok=await pollJob(d.jobId, st, start, mapped, pct=>setSendFill(printer, start, pct), extraUI, prefs, printer, onProgress);
+      // An upload maps nothing on the printer: the Loaded file's Print does (TODO §38).
+      ok=await pollJob(d.jobId, st, start, start?mapped:0, pct=>setSendFill(printer, start, pct), extraUI, prefs, printer, onProgress);
     }
   }catch(e){
     st("pstatus err", e.message);
@@ -7550,12 +8721,46 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
   const setStatus=typeof st==="function"
     ? st
     : (cls,txt)=>{ if(st){ st.className=cls; st.textContent=txt; } };
+  // The Send dialog passes ids as strings; fleet rows carry numbers.
+  const printerName=()=>{ const f=FLEET.find(x=>String(x.id)===String(printerId)); return (f&&f.name)||""; };
+  // SnapCon itself out of reach (its own restart, the network between):
+  // the job carries on on the server, so nothing here is failed for it. Said
+  // after 10 s, polled every 2 s meanwhile, and cleared on the first answer.
+  const startedAt=Date.now();
+  let lastAnswer=Date.now(), unreachable=false, missing=0, lastPct=0;
   try{
     for(;;){
-      await new Promise(r=>setTimeout(r,400));
+      await new Promise(r=>setTimeout(r, unreachable ? 2000 : 400));
       let d;
-      try{ d=await getJSON("/api/print-status?job="+encodeURIComponent(jobId)); }catch(e){ continue; }
-      // Cancel is offered only while the server says the bytes are still going out.
+      try{ d=await getJSON("/api/print-status?job="+encodeURIComponent(jobId)); }
+      catch(e){
+        if(!unreachable && Date.now()-lastAnswer>=10000){
+          unreachable=true;
+          setStatus("pstatus warn", t("fleet.upload.server_unreachable"));
+          if(extraUI) setRowUI(extraUI, lastPct, "warn", t("fleet.upload.server_unreachable"));
+        }
+        continue;
+      }
+      lastAnswer=Date.now();
+      if(unreachable){ unreachable=false; setStatus("pstatus",""); }
+      // A job the server does not know (it restarted, or the result is older
+      // than it keeps): not evidence about the printer. Asked once more, then
+      // reported as undetermined — never as a failure (§37 P1).
+      if(d && d.code==="job_unknown"){
+        if(++missing<2) continue;
+        const restarted=!!(d.serverStartedAt && d.serverStartedAt>startedAt);
+        const msg=t(restarted ? "fleet.upload.lost_track_restarted" : "fleet.upload.lost_track");
+        clearOverride();
+        const strip=printerId!=null ? UPLOADS.get(String(printerId)) : null;
+        // The strip carries it where there is one, as for a failed upload.
+        if(strip && strip.state==="uploading") setUploadState(printerId, { ...strip, state:"unconfirmed", reason:msg });
+        else setStatus("pstatus warn", msg);
+        if(extraUI) setRowUI(extraUI, lastPct, "warn", t("fleet.print.status_unconfirmed_short"));
+        fill(null);
+        return "unconfirmed";
+      }
+      missing=0;
+      // Cancel is offered until the printer has answered for the file.
       const cancellable=!!d.cancellable && !d.done && printerId!=null;
       setUploadCancel(printerId, cancellable ? jobId : null);
       if(extraUI && !extraUI.noRowCancel) setRowCancel(extraUI, cancellable ? jobId : null, printerId);
@@ -7567,22 +8772,52 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
         // message has to be written AFTER the card it belongs on has been
         // rebuilt, not before.
         clearOverride();
+        // Every byte went and nothing definite came back: the printer may or
+        // may not have the file. Neither sent nor failed, never retried here.
+        if(d.outcome==="unknown"){
+          const reason=uploadFailureReason(d.errorCode, d.error, d);
+          const umsg=d.cancelled
+            ? t(start?"fleet.print.status_start_cancelled_unknown":"fleet.print.status_upload_cancelled_unknown",{printer:printerName()})
+            : t(start?"fleet.print.status_unconfirmed_start":"fleet.print.status_unconfirmed",{reason, printer:printerName()});
+          // The strip carries it where there is one, as for a failed upload.
+          if(strip) setUploadState(printerId, { ...strip, state:"unconfirmed", reason:umsg });
+          else setStatus("pstatus warn", umsg);
+          if(extraUI) setRowUI(extraUI, 99, "warn", t("fleet.print.status_unconfirmed_short"));
+          fill(null);
+          return "unconfirmed";
+        }
+        // Cancelled while the printer confirmed, and it did: the file is
+        // there, nothing was done with it.
+        if(d.cancelled && d.outcome==="sent"){
+          const smsg=t(start?"fleet.print.status_start_cancelled_sent":"fleet.print.status_upload_cancelled_sent",{printer:printerName()});
+          setUploadState(printerId, null);
+          setStatus("pstatus", smsg);
+          if(extraUI) setRowUI(extraUI, 100, "", smsg);
+          fill(null);
+          return false;
+        }
+        // A failed transfer reads the same in the row as on the strip: in plain
+        // words, in the reader's language, from its code (the server's
+        // message only when the code says nothing).
+        const transferPhase=d.failedPhase==="upload" || d.failedPhase==="verifying";
+        const reason=!d.cancelled && transferPhase ? uploadFailureReason(d.errorCode, d.error, d) : null;
         if(d.cancelled){
           // Cancelled by the user: the strip just goes away, no message.
           setUploadState(printerId, null);
-        } else if(strip && d.failedPhase==="upload"){
+        } else if(strip && transferPhase){
           // The strip says what happened, with Retry and Dismiss.
-          setUploadState(printerId, { ...strip, state:"failed", reason:uploadFailureReason(d.errorCode, d.error) });
+          // A read-back that found other content is not a transfer that stopped (§37 P2).
+          setUploadState(printerId, { ...strip, state:"failed", reason, ...(d.errorCode==="UPLOAD_MISMATCH" ? { mismatch:true } : {}) });
         } else {
           setUploadState(printerId, null);
-          setStatus("pstatus err", msg);
+          setStatus("pstatus err", reason || msg);
         }
-        if(extraUI) setRowUI(extraUI, 100, "err", msg);
+        if(extraUI) setRowUI(extraUI, 100, "err", reason || msg);
         fill(null);
         return false;
       }
       // Past the upload (mapping, starting, done): the strip's job is over.
-      if(strip && strip.state==="uploading" && d.phase!=="upload") setUploadState(printerId, null);
+      if(strip && strip.state==="uploading" && d.phase!=="upload" && d.phase!=="confirming" && d.phase!=="verifying") setUploadState(printerId, null);
       // The button itself fills as the upload progress bar — no bar below.
       // The card reads "Idle" while a file is being pushed to the printer --
       // nothing in Klipper's own state changes during an upload. Same
@@ -7590,13 +8825,41 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
       // A printing printer keeps its own badge: the strip carries the upload.
       const host=FLEET.find(f=>f.id===printerId);
       const printingNow=!!(host && (host.state==="printing" || host.state==="paused"));
-      if(d.phase==="upload" && !printingNow) setOverride("upload",{statusColor:"var(--busy)",statusTxt:t("printer_status.uploading")});
+      const sending=d.phase==="upload" || d.phase==="confirming";
+      if(sending && !printingNow) setOverride("upload",{statusColor:"var(--busy)",statusTxt:t("printer_status.uploading")});
       if(d.phase==="upload") patchUploadProgress(printerId, d);
       if(d.phase==="upload" && d.total){
-        const pct=Math.min(100,Math.round(d.sent/d.total*100));
+        const pct=uploadPct(d.sent, d.total);
+        lastPct=pct;
         fill(pct);
         if(onProgress) onProgress(pct);
         if(extraUI) setRowUI(extraUI, pct, "work", t("fleet.print.status_uploading_pct",{pct}));
+      }
+      else if(d.phase==="confirming"){
+        // Every byte is out; the printer has not answered. Held at 99%: only
+        // its answer makes this a sent file. A cancel now calls off the start
+        // at once, and says so while the answer is awaited.
+        lastPct=99;
+        if(strip && strip.state==="uploading" && (!strip.confirming || !!strip.startCancelled!==!!d.startCancelled)){
+          setUploadState(printerId, { ...strip, confirming:true, startCancelled:!!d.startCancelled, startsPrint:!!start, sent:d.sent, total:d.total, pct:99 });
+        }
+        const ctxt=d.startCancelled
+          ? t(start?"fleet.print.status_start_cancelled_waiting":"fleet.print.status_upload_cancelled_waiting",{printer:printerName()})
+          : t("fleet.print.status_confirming",{printer:printerName()});
+        if(!strip) setStatus(d.startCancelled ? "pstatus" : "pstatus work", ctxt);
+        fill(99);
+        if(onProgress) onProgress(99);
+        if(extraUI) setRowUI(extraUI, 99, d.startCancelled ? "" : "work", d.startCancelled ? ctxt : t("fleet.print.status_confirming_short"));
+      }
+      else if(d.phase==="verifying"){
+        // The printer accepted it; its copy is read back before anything may
+        // start it (§37 P2). The strip stays, saying so, until that settles.
+        if(strip && strip.state==="uploading" && !strip.verifying) setUploadState(printerId, { ...strip, verifying:true, confirming:false, cancellable:false, sent:d.sent, total:d.total, pct:99 });
+        // Like confirming: the card's own line says it only when there is no
+        // strip, so nothing stale is left on it if the check then fails.
+        if(!strip) setStatus("pstatus work", t("fleet.print.status_verifying",{printer:printerName()}));
+        fill(100);
+        if(extraUI) setRowUI(extraUI, 100, "work", t("fleet.print.status_verifying_short"));
       }
       else if(d.phase==="mapping"){
         const mapTxt=mappingPhaseText(mapped, prefs);
@@ -7624,15 +8887,9 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
       }
       if(d.done){
         clearOverride();
-        // A skipped transfer finishes suspiciously fast — say why, or an
-        // instant "Uploaded" reads as something having gone wrong.
-        const doneTxt=d.skippedUpload
-          ? (start
-              ? t("fleet.print.status_printing_on_existing", {printer:(d.result&&d.result.printer)||""})
-              : t("fleet.print.status_already_on_printer"))
-          : (start
-              ? t(mapped?"fleet.print.status_printing_on_mapped":"fleet.print.status_printing_on", {printer:(d.result&&d.result.printer)||""})
-              : t(mapped?"fleet.print.status_uploaded_mapped":"fleet.print.status_uploaded"));
+        const doneTxt=start
+          ? t(mapped?"fleet.print.status_printing_on_mapped":"fleet.print.status_printing_on", {printer:(d.result&&d.result.printer)||""})
+          : uploadedText(d.result, mapped);
         setStatus("pstatus ok", doneTxt);
         if(extraUI) setRowUI(extraUI, 100, "ok", doneTxt);
         fill(null);
@@ -7643,11 +8900,21 @@ async function pollJob(jobId, st, start, mapped, onFill, extraUI, prefs, printer
     clearOverride(); if(printerId!=null) setUploadCancel(printerId, null); if(extraUI) setRowCancel(extraUI, null);
     // However the job ended, an upload still showing as running is over: a
     // finished one leaves the card to its Loaded / printing state, and a
-    // failed one has already turned its strip red (that one stays).
+    // failed or unconfirmed one has already changed its strip (that one stays).
     UPLOAD_ENDED.set(jobId, Date.now());
     const left=printerId!=null ? UPLOADS.get(String(printerId)) : null;
     if(left && left.state==="uploading") setUploadState(printerId, null);
   }
+}
+
+// An upload-only job's end, by what reading the printer's copy back found
+// (§37 P2): checked by content, or only listed by the printer. A result from
+// before the read-back (none recorded) keeps the old wording. Pure apart from t().
+function uploadedText(result, mapped){
+  const v=result&&result.verification, printer=(result&&result.printer)||"";
+  if(v==="verified") return t(mapped?"fleet.print.status_uploaded_verified_mapped":"fleet.print.status_uploaded_verified",{printer});
+  if(v==="acknowledged") return t(mapped?"fleet.print.status_uploaded_acknowledged_mapped":"fleet.print.status_uploaded_acknowledged",{printer});
+  return t(mapped?"fleet.print.status_uploaded_mapped":"fleet.print.status_uploaded");
 }
 
 // A row's "Cancel upload" (Send dialog, Quick Print): one button created when
@@ -7818,6 +9085,24 @@ function renderSendList(){
   syncSendSelectAll();
 }
 
+// "Done — 3 sent." only when every file was sent. A file SnapCon only accepted
+// (held for a busy printer, or put in its queue) is "waiting to be sent",
+// never sent, and a batch with one in it does not say Done: "3 sent, 2 waiting
+// to be sent." / "2 waiting to be sent." Counts of zero are left out.
+function sendSummaryText(results){
+  const sent=results.filter(r=>r===true).length;
+  const waiting=results.filter(r=>r==="waiting").length;
+  const unconfirmed=results.filter(r=>r==="unconfirmed").length;
+  const failed=results.length-sent-waiting-unconfirmed;
+  const parts=[];
+  if(sent) parts.push(tn("fleet.modal.send.summary_sent",sent,{count:sent}));
+  if(waiting) parts.push(tn("fleet.modal.send.summary_waiting",waiting,{count:waiting}));
+  if(unconfirmed) parts.push(tn("fleet.modal.send.summary_unconfirmed",unconfirmed,{count:unconfirmed}));
+  if(failed) parts.push(tn("fleet.modal.send.summary_failed",failed,{count:failed}));
+  const key=failed ? "fleet.modal.send.summary_with_errors" : (waiting||unconfirmed) ? "fleet.modal.send.summary_not_all_sent" : "fleet.modal.send.summary_done";
+  return t(key,{parts:parts.join(", ")});
+}
+
 function setSendBtnsDisabled(dis){
   ['doUpload','doUploadPrint','sendSelectAll','sendSelectIdle','sendSelectCompatible'].forEach(id=>{ const b=$(id); if(b) b.disabled=dis; });
 }
@@ -7859,11 +9144,10 @@ async function doSendUpload(start){
   // SEND_PREFS's own comment for why this never falls back to a per-printer
   // default the way pfilemodal does.
   const results=await Promise.all(checked.map(id=>pushTo(id,start,sendRowUI(id),SEND_PREFS,pct=>report(id,pct),SEND_PLATE)));
-  const ok=results.filter(Boolean).length;
   // Cleared however it ended: a button left holding a half-drawn gradient reads
   // as an upload still in flight.
   if(fillBtn) fillBtn.style.background='';
-  $('sendFooterStatus').textContent=t(ok===checked.length ? "fleet.modal.send.done_summary" : "fleet.modal.send.error_summary", {ok, total:checked.length});
+  $('sendFooterStatus').textContent=sendSummaryText(results);
   setSendBtnsDisabled(false);
 }
 
@@ -8010,7 +9294,7 @@ async function doEstop(printerId){
   if(busy){
     const pct=((p.progress||0)*100).toFixed(1);
     panelHtml=
-      `<div class="hc-panel-file" title="${esc(p.filename||"")}">${esc(stripExt(p.filename||""))}</div>`+
+      `<div class="hc-panel-file" title="${esc(p.filename||"")}">${esc(p.filename||"")}</div>`+
       `<div class="hc-panel-pct">${pct}%</div>`+
       `<div class="prog-track red"><div class="prog-fill red" style="width:${pct}%"></div></div>`+
       `<div class="hc-panel-times">${esc(t("fleet.estop.progress_line",{elapsed:fmtDuration(p.elapsed),remaining:fmtRemaining(p.elapsed,p.progress)}))}</div>`;
@@ -8069,7 +9353,7 @@ async function doCancelPrint(printerId){
   const pct=((p&&p.progress||0)*100).toFixed(1);
   const filM=p&&p.filamentUsed!=null?(p.filamentUsed/1000).toFixed(1)+"m":"—";
   const panelHtml=
-    `<div class="hc-panel-file" title="${esc((p&&p.filename)||"")}">${esc(stripExt((p&&p.filename)||""))}</div>`+
+    `<div class="hc-panel-file" title="${esc((p&&p.filename)||"")}">${esc((p&&p.filename)||"")}</div>`+
     `<div class="hc-panel-pct">${pct}%</div>`+
     `<div class="prog-track red"><div class="prog-fill red" style="width:${pct}%"></div></div>`+
     `<div class="hc-stats">`+
@@ -8156,7 +9440,7 @@ function renderPfileInfo(){
   const totalGrams=PFILE_META.palette.reduce((sum,s)=>sum+(parseFloat(s.wt)||0),0);
   const timeSec=PFILE_META.estimatedTime||0;
   const fCost=(FILAMENT_COST>0&&totalGrams>0)?(FILAMENT_COST/1000)*totalGrams:0;
-  const eCost=(ELECTRICITY_RATE>0&&timeSec>0)?ELECTRICITY_RATE*(timeSec/3600):0;
+  const eCost=energyCostEstimate((FLEET.find(p=>p.id===PFILE_PRINTER)||{}).powerDrawW, timeSec/3600);
   const totalCost=fCost+eCost;
   wrap.innerHTML=`<div class="pfi-card">`+
     `<img class="pfi-thumb" src="${thumb}" onerror="this.style.display='none'" alt="">`+
@@ -8207,8 +9491,7 @@ function renderPfileList(){
   const shown=PFILE_FILES.filter(f=>!q||f.path.toLowerCase().includes(q));
   if(!shown.length){ $("pfilelist").innerHTML=`<div class="browse-empty">${esc(t("fleet.modal.pfile.no_matches"))}</div>`; return; }
   $("pfilelist").innerHTML=shown.map(f=>{
-    const bare=stripExt(f.path);
-    const disp=bare.length>40?bare.slice(0,37)+"…":bare;
+    const disp=f.path.length>40?f.path.slice(0,37)+"…":f.path;
     const isSel=PFILE_SELECTED===f.path;
     const fsBadge=isSel&&PFILE_META&&PFILE_META.isFS?`<img src="/fs-badge.svg" class="fs-badge" title="${esc(t("files.full_spectrum_title"))}">`:``;
     return `<button class="plate-item${isSel?" sel":""}" data-f="${esc(f.path)}" title="${esc(f.path)}">`+
@@ -8328,7 +9611,7 @@ async function doPrintFile(){
     // minutes later. btn is deliberately null -- pollJob's button fill would
     // fight this modal's own disabled-button handling.
     const ok=await pollJob(d.jobId, st, true, d.mapped||0, null, null, PFILE_PREFS, PFILE_PRINTER);
-    if(ok) setTimeout(()=>{ closePrinterFiles(); loadFleet(); },900);
+    if(ok===true) setTimeout(()=>{ closePrinterFiles(); loadFleet(); },900);
     else $("pfilego").disabled=false;
   }catch(e){ st.textContent=e.message; $("pfilego").disabled=false; }
 }
@@ -9747,6 +11030,7 @@ $("gear").addEventListener("click",()=>{
   closeQueueDashboard();
   closeHealthPage();
   if(window.LibraryPage) LibraryPage.close();
+  if(window.UtilizationPage) UtilizationPage.close();
   const open=$("setup").classList.toggle("show");
   document.querySelectorAll(".main > .sechead, .main > .jobcard, .main > .jobloading, #fleet-wrap").forEach(el=>el.style.display=open?"none":"");
   // Settings' cell shows the active state (syncTopbar()) and reads "Back";
@@ -9919,12 +11203,7 @@ function applyNtfEnabled(){
   const on=$("ntfEnabled").checked;
   $("ntfBody").classList.toggle("disabled", !on);
   $("ntfBody").querySelectorAll("input,button").forEach(i=>i.disabled=!on);
-  if(on){
-    syncMilestoneNesting();
-    syncProviderCard("ntfyEnabled","ntfyBody");
-    syncProviderCard("telegramEnabled","telegramBody");
-    syncProviderCard("webhookEnabled","webhookBody");
-  }
+  if(on) syncNtfNestedControls();
 }
 function syncMilestoneNesting(){
   const on=$("ntfMilestones").checked;
@@ -9935,6 +11214,12 @@ function syncProviderCard(switchId,bodyId){
   const on=$(switchId).checked;
   $(bodyId).classList.toggle("disabled", !on);
   $(bodyId).querySelectorAll("input,button").forEach(el=>el.disabled=!on);
+}
+function syncNtfNestedControls(){
+  syncMilestoneNesting();
+  syncProviderCard("ntfyEnabled","ntfyBody");
+  syncProviderCard("telegramEnabled","telegramBody");
+  syncProviderCard("webhookEnabled","webhookBody");
 }
 // Selected milestone percentages — a Set so toggling a chip is O(1) and
 // order in the underlying array never matters for equality checks.
@@ -9986,8 +11271,10 @@ async function sendProviderTest(provider,btnId,statusId){
       else if(d.code && NOTIF_TEST_ERROR_KEYS[d.code]) msg=t(NOTIF_TEST_ERROR_KEYS[d.code]);
       throw new Error(msg);
     }
-    st.className="pstatus ok"; st.textContent=provider==="telegram"?t("settings.notif.sent_telegram")
-      :provider==="webhook"?t("settings.notif.sent_webhook"):t("settings.notif.sent_ntfy");
+    st.className="pstatus ok";
+    if(provider==="telegram") st.textContent=t("settings.notif.sent_telegram");
+    else if(provider==="webhook") st.textContent=t("settings.notif.sent_webhook");
+    else st.textContent=t("settings.notif.sent_ntfy");
   }catch(e){ st.className="pstatus err"; st.textContent=e.message; }
   finally{ btn.disabled=false; }
 }
@@ -10000,7 +11287,9 @@ function genRandomTopic(){
   return [...buf].map(n=>letters[n%letters.length]).join("");
 }
 function otpServiceValue(){
-  return $("otpSvcNtfy").checked ? "ntfy" : $("otpSvcTelegram").checked ? "telegram" : "resend";
+  if($("otpSvcNtfy").checked) return "ntfy";
+  if($("otpSvcTelegram").checked) return "telegram";
+  return "resend";
 }
 function applyOtpServiceUI(){
   const svc=otpServiceValue();
@@ -11700,9 +12989,7 @@ function updateRefreshHelper(){
 // label in sync with whatever's actually selected.
 function updateCurrencyLabels(){
   const sym=$("setCurrency").value||"$";
-  if($("filamentCostCurrency")) $("filamentCostCurrency").textContent=sym;
-  if($("elecRateCurrency")) $("elecRateCurrency").textContent=sym;
-  if($("maintCostCurrency")) $("maintCostCurrency").textContent=sym;
+  ["filamentCostCurrency","elecRateCurrency","maintCostCurrency"].forEach(id=>{ if($(id)) $(id).textContent=sym; });
 }
 function syncAutoMatchNesting(){
   const on=$("setAllowMapping").checked;
@@ -11714,8 +13001,8 @@ function generalTabValues(){
     folder:$("setFolder").value.trim(), refresh:$("setRefresh").value, currency:$("setCurrency").value,
     filamentCost:$("setFilamentCost").value, electricityRate:$("setElectricityRate").value,
     allowMapping:$("setAllowMapping").checked, suggestMatching:$("setSuggestMatching").checked,
-    skipIdenticalUploads:$("setSkipIdenticalUploads").checked,
     checkForUpdates:$("setCheckForUpdates").checked,
+    virtualPrintersEnabled:$("setVirtualPrinters").checked,
     allowUploadWhilePrinting:$("setAllowUploadWhilePrinting").checked, uploadIntoQueue:$("setUploadIntoQueue").checked,
     overwriteDifferentFiles:$("setOverwriteDifferent").checked,
     logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(),
@@ -11733,8 +13020,8 @@ function setGeneralTabValues(v){
   $("setElectricityRate").value=v.electricityRate;
   $("setAllowMapping").checked=v.allowMapping;
   $("setSuggestMatching").checked=v.suggestMatching;
-  $("setSkipIdenticalUploads").checked=v.skipIdenticalUploads;
   $("setCheckForUpdates").checked=v.checkForUpdates;
+  $("setVirtualPrinters").checked=v.virtualPrintersEnabled;
   $("setAllowUploadWhilePrinting").checked=v.allowUploadWhilePrinting;
   $("setUploadIntoQueue").checked=v.uploadIntoQueue;
   $("setOverwriteDifferent").checked=v.overwriteDifferentFiles;
@@ -11778,10 +13065,7 @@ function setNotifTabValues(v){
   $("ntfWebhookFormat").value=v.webhookFormat||"discord";
   setSecretFieldState($("ntfWebhookUrlField"),NTF_HAS_WEBHOOK_URL);
   applyNtfEnabled();
-  syncMilestoneNesting();
-  syncProviderCard("ntfyEnabled","ntfyBody");
-  syncProviderCard("telegramEnabled","telegramBody");
-  syncProviderCard("webhookEnabled","webhookBody");
+  syncNtfNestedControls();
 }
 registerSettingsTab("notif",notifTabValues,setNotifTabValues);
 
@@ -11858,8 +13142,10 @@ async function loadConfigUI(){
     ALLOW_MAPPING=c.allowMapping!==false; $("setAllowMapping").checked=ALLOW_MAPPING;
     SUGGEST_MATCHING=c.suggestMatching!==false; $("setSuggestMatching").checked=SUGGEST_MATCHING;
     // Absent means on, matching the server's own default.
-    $("setSkipIdenticalUploads").checked=c.skipIdenticalUploads!==false;
     $("setCheckForUpdates").checked=c.checkForUpdates!==false;
+    // Off unless explicitly turned on, matching the server.
+    VIRTUAL_PRINTERS_ON=c.virtualPrintersEnabled===true;
+    $("setVirtualPrinters").checked=VIRTUAL_PRINTERS_ON;
     $("setAllowUploadWhilePrinting").checked=c.allowUploadWhilePrinting!==false;
     // Off unless explicitly turned on — Upload stages a file, it does not schedule a print.
     $("setUploadIntoQueue").checked=c.uploadIntoQueue===true;
@@ -11917,13 +13203,12 @@ async function loadConfigUI(){
     $("ntfWebhookFormat").value=nf.webhookFormat==="json"?"json":"discord";
     setSecretFieldState($("ntfWebhookUrlField"), NTF_HAS_WEBHOOK_URL);
     applyNtfEnabled();
-    syncMilestoneNesting();
-    syncProviderCard("ntfyEnabled","ntfyBody");
-    syncProviderCard("telegramEnabled","telegramBody");
-    syncProviderCard("webhookEnabled","webhookBody");
+    syncNtfNestedControls();
     baselineSettingsTab("notif");
     PRINTERS_CFG=c.printers||[];
     renderPrinterRowsFromConfig();
+    // Only a server that has Rediscover's routes says so (see publicCfg).
+    $("rediscover").style.display=c.rediscover===true?"flex":"none";
     updateRefreshHelper(); // depends on PRINTERS_CFG.length, so runs after the printer rows above
     syncAutoMatchNesting();
     baselineSettingsTab("general");
@@ -12089,19 +13374,12 @@ function updateAllPrinterRowStatuses(){
     const url=rowAddressUrl(row).replace(/\/+$/,"");
     const f=url && FLEET.find(p=>(p.url||"").replace(/\/+$/,"")===url);
     const dot=row.querySelector(".prow-status-dot"), stateEl=row.querySelector(".prow-conn-state");
-    if(!f){
-      dot.style.setProperty("--status-color","var(--ink-faint)"); dot.title=t("settings.printers.status_unknown");
-      stateEl.textContent="—"; stateEl.classList.remove("danger");
-      return;
-    }
-    if(!f.online){
-      dot.style.setProperty("--status-color","var(--bad)"); dot.title=t("printer_status.offline");
-      stateEl.textContent=t("settings.printers.status_no_response"); stateEl.classList.add("danger");
-      return;
-    }
-    const st=statusColorText(f);
-    dot.style.setProperty("--status-color",st.statusColor); dot.title=st.statusTxt;
-    stateEl.textContent=st.statusTxt; stateEl.classList.remove("danger");
+    let color, title, text, danger=false;
+    if(!f){ color="var(--ink-faint)"; title=t("settings.printers.status_unknown"); text="—"; }
+    else if(!f.online){ color="var(--bad)"; title=t("printer_status.offline"); text=t("settings.printers.status_no_response"); danger=true; }
+    else { const st=statusColorText(f); color=st.statusColor; title=text=st.statusTxt; }
+    dot.style.setProperty("--status-color",color); dot.title=title;
+    stateEl.textContent=text; stateEl.classList.toggle("danger",danger);
   });
 }
 
@@ -12133,6 +13411,8 @@ function serializeRowForDiff(row){
     externalSpool:row.querySelector('[id^="pextspool-"]').checked,
     filamentMode:row.querySelector(".pfilmode").value,
     transport:row.querySelector(".ptransport").value,
+    virtualFirmware:row.querySelector(".pvfirmware").value,
+    virtualTiming:row.querySelector(".pvtiming").value,
     allowMoonrakerPrintStart:!!(row.querySelector('[id^="pzmodstart-"]')||{}).checked,
     tags:row.querySelector(".ptags").value.trim(),
     allowedGroups:[...row.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value).sort().join(",")
@@ -12146,7 +13426,7 @@ function serializeRowForDiff(row){
 // load.
 function renderPrinterRowsFromConfig(){
   $("setPrinters").innerHTML="";
-  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,transport:p.transport,serial:p.serial,hasVerificationCode:p.hasVerificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
+  PRINTERS_CFG.forEach(p=>addPrinterRow(p.name,p.url,{id:p.id,ip:p.ip,port:p.port,scheme:p.scheme,location:p.location,costKwh:p.costKwh,purchaseDate:p.purchaseDate,autoLevel:p.autoLevel,flowCalibrate:p.flowCalibrate,timelapse:p.timelapse,pushNotify:p.pushNotify,forceDefaults:p.forceDefaults,connector:p.connector,brand:p.brand,filamentMode:p.filamentMode,transport:p.transport,virtualFirmware:p.virtualFirmware,virtualTiming:p.virtualTiming,serial:p.serial,hasVerificationCode:p.hasVerificationCode,hasToken:p.hasToken,tags:p.tags,allowedGroups:p.allowedGroups,printerPoolId:p.printerPoolId}));
   baselinePrintersDirty();
 }
 // Settings > Printers shows at most one expanded row: opening one collapses
@@ -12193,15 +13473,13 @@ function baselinePrintersDirty(){
 function computePrintersDirty(){
   const rows=[...$("setPrinters").querySelectorAll(".prow")];
   const names=[];
-  let changed=0;
   rows.forEach(row=>{
     const snap=PRINTER_SNAPSHOTS.get(row);
     if(snap===undefined||serializeRowForDiff(row)!==snap){
       names.push(row.querySelector(".pname").value.trim()||t("settings.printers.new_printer_default"));
-      changed++;
     }
   });
-  let total=changed+PRINTER_REMOVED.length;
+  let total=names.length+PRINTER_REMOVED.length;
   const orderChanged=PRINTER_ORIGINAL_ORDER.length===rows.length&&PRINTER_ORIGINAL_ORDER.some((r,i)=>r!==rows[i]);
   const allNames=[...names,...PRINTER_REMOVED];
   if(orderChanged){ if(!allNames.length) allNames.push(t("settings.printers.reorder_fallback_label")); total++; }
@@ -12278,6 +13556,17 @@ function rowAddressUrl(row){
   const port=(row.querySelector(".pport").value||"").trim();
   return (row.dataset.scheme||spec.scheme||"http")+"://"+ip+(port?":"+port:"");
 }
+// Two printers on one fixed host (Virtual U1s, all on this machine) need
+// different ports: a new one is offered the connector's default port, or the
+// next one up that no other such row uses.
+function nextFreeFixedHostPort(row,type,defaultPort){
+  const used=new Set([...document.querySelectorAll("#setPrinters .prow")]
+    .filter(r=>r!==row&&r.querySelector(".pconnector").value===type)
+    .map(r=>parseInt(r.querySelector(".pport").value,10)||defaultPort));
+  let port=defaultPort||1;
+  while(used.has(port)&&port<65535) port++;
+  return port;
+}
 function addPrinterRow(name,url,opts,autoOpen){
   opts=opts||{};
   const uid=++PROW_UID;
@@ -12348,7 +13637,7 @@ function addPrinterRow(name,url,opts,autoOpen){
 
     `<div class="prow-section"><div class="prow-section-title" data-i18n="settings.printers.section_connection">${t("settings.printers.section_connection")}</div>`+
     `<div class="maint-row2 paddr-row">`+
-    `<div class="maint-field"><label class="fl" for="pip-${uid}" data-i18n="settings.printers.field_ip">${t("settings.printers.field_ip")}</label><input id="pip-${uid}" class="field pip" placeholder="${esc(t("settings.printers.ip_placeholder"))}" data-i18n-placeholder="settings.printers.ip_placeholder" value="${esc(addrIp)}"></div>`+
+    `<div class="maint-field pip-field"><label class="fl" for="pip-${uid}" data-i18n="settings.printers.field_ip">${t("settings.printers.field_ip")}</label><input id="pip-${uid}" class="field pip" placeholder="${esc(t("settings.printers.ip_placeholder"))}" data-i18n-placeholder="settings.printers.ip_placeholder" value="${esc(addrIp)}"></div>`+
     `<div class="maint-field pport-field"><label class="fl" for="pport-${uid}" data-i18n="settings.printers.field_port">${t("settings.printers.field_port")}</label><input id="pport-${uid}" class="field pport" type="number" min="1" max="65535" value="${esc(addrPort)}"></div>`+
     `</div>`+
     `<div class="settings-help err paddr-err" style="display:none" data-i18n="settings.printers.ip_invalid">${t("settings.printers.ip_invalid")}</div>`+
@@ -12358,6 +13647,14 @@ function addPrinterRow(name,url,opts,autoOpen){
     `</select></div>`+
     `<div class="maint-field ptoken-field"><label class="fl">${t("settings.printers.field_api_token")} <span class="hint" data-i18n="settings.printers.field_api_token_hint">${t("settings.printers.field_api_token_hint")}</span></label>${secretFieldHtml("ptoken",!!opts.hasToken,t("settings.printers.secret_optional_placeholder"),"settings.printers.secret_optional_placeholder")}</div>`+
     `</div>`+
+    `<div class="virtual-wrap maint-row2" style="display:none;margin-top:10px">`+
+    `<div class="maint-field"><label class="fl" for="pvfirmware-${uid}" data-i18n="settings.printers.field_virtual_firmware">${t("settings.printers.field_virtual_firmware")}</label><select id="pvfirmware-${uid}" class="field pvfirmware"></select></div>`+
+    `<div class="maint-field"><label class="fl" for="pvtiming-${uid}" data-i18n="settings.printers.field_virtual_timing">${t("settings.printers.field_virtual_timing")}</label><select id="pvtiming-${uid}" class="field pvtiming">`+
+    `<option value="fast" data-i18n="settings.printers.virtual_timing_fast">${t("settings.printers.virtual_timing_fast")}</option>`+
+    `<option value="real" data-i18n="settings.printers.virtual_timing_real">${t("settings.printers.virtual_timing_real")}</option>`+
+    `</select></div>`+
+    `</div>`+
+    `<div class="hint virtual-hint" style="display:none;margin-top:6px" data-i18n="settings.printers.virtual_hint">${t("settings.printers.virtual_hint")}</div>`+
     `<div class="prow-test-row">`+
     `<button type="button" class="btn ghost ptest" data-i18n="settings.printers.test_connection_button">${t("settings.printers.test_connection_button")}</button>`+
     `<span class="pstatus ptest-status"></span>`+
@@ -12451,6 +13748,22 @@ function addPrinterRow(name,url,opts,autoOpen){
   const zmodStartWrap=row.querySelector(".zmodstart-wrap"), zmodStartEl=row.querySelector('[id^="pzmodstart-"]');
   const tokenField=row.querySelector(".ptoken-field");
   transportEl.value=(opts.transport==="native"||opts.transport==="moonraker")?opts.transport:"auto";
+  // A virtual printer's simulator settings — offered by the connector itself
+  // (virtualOptions, the Virtual U1's), so the choices are never a list kept
+  // here. The newest firmware and Fast when the printer has none saved.
+  const virtualWrap=row.querySelector(".virtual-wrap"), virtualHint=row.querySelector(".virtual-hint");
+  const vFirmwareEl=row.querySelector(".pvfirmware"), vTimingEl=row.querySelector(".pvtiming");
+  const syncVirtualFields=()=>{
+    const vo=(CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{}).virtualOptions;
+    virtualWrap.style.display=vo?"":"none";
+    virtualHint.style.display=vo?"":"none";
+    if(!vo) return;
+    const fw=vo.firmware||[];
+    const keep=vFirmwareEl.value||opts.virtualFirmware;
+    vFirmwareEl.innerHTML=fw.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    vFirmwareEl.value=fw.includes(keep)?keep:(fw[fw.length-1]||"");
+  };
+  vTimingEl.value=opts.virtualTiming==="real"?"real":"fast";
   const syncPrintPrefVisibility=()=>{
     const caps=connectorCaps(connectorEl.value);
     PRINTER_PREF_SWITCHES.forEach(({cap,wrapEl,inputEl})=>{
@@ -12508,18 +13821,18 @@ function addPrinterRow(name,url,opts,autoOpen){
   // "Klipper" on every render, since that string is also a connector brand.)
   const syncBrandField=(reDerive)=>{
     const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
+    const derived=ct.brand||ct.label||connectorEl.value;
     const editable=connectorEl.value===BRAND_EDITABLE_CONNECTOR;
     brandEl.disabled=!editable;
     // Disabled controls say why they're disabled rather than leaving the
     // user to guess (a SnapCon-wide rule).
     if(editable) brandEl.removeAttribute("title");
     else brandEl.title=t("settings.printers.field_brand_locked_title");
-    if(!editable){ brandEl.value=ct.brand||ct.label||connectorEl.value; return; }
+    if(!editable){ brandEl.value=derived; return; }
     // Editable: fill in the derived brand as a starting point, but only when
     // the field is empty or still holds a derived value — switching
     // Snapmaker -> Klipper must not leave "Snapmaker" behind.
-    if(reDerive&&(!brandEl.value.trim()||isKnownConnectorBrand(brandEl.value))) brandEl.value=ct.brand||ct.label||connectorEl.value;
-    else if(!brandEl.value.trim()) brandEl.value=ct.brand||ct.label||connectorEl.value;
+    if(!brandEl.value.trim()||(reDerive&&isKnownConnectorBrand(brandEl.value))) brandEl.value=derived;
   };
   // Which address fields this row shows is the connector's call, not this
   // row's (see connectorAddress()). Three shapes exist today: an editable
@@ -12528,6 +13841,7 @@ function addPrinterRow(name,url,opts,autoOpen){
   // hardware to reach — it persists under a synthetic sim:// url generated
   // here rather than asking the user to invent something meaningless).
   const addrRow=row.querySelector(".paddr-row"), addrErr=row.querySelector(".paddr-err");
+  let prevConnector=connType;
   const ipEl=row.querySelector(".pip"), portEl=row.querySelector(".pport"), portField=row.querySelector(".pport-field");
   const syncAddressFields=(connectorChanged)=>{
     const spec=connectorAddress(connectorEl.value);
@@ -12539,6 +13853,12 @@ function addPrinterRow(name,url,opts,autoOpen){
     }
     portField.style.display=spec.portEditable?"":"none";
     portEl.placeholder=spec.defaultPort?String(spec.defaultPort):"";
+    // A connector that always runs on one host (the Virtual U1, on this
+    // machine) has no IP for the user to set: the field is hidden and holds
+    // that host, so the row composes its URL like any other.
+    ipEl.closest(".pip-field").style.display=spec.fixedHost?"none":"";
+    if(spec.fixedHost) ipEl.value=spec.fixedHost;
+    else if(connectorChanged&&ipEl.value===connectorAddress(prevConnector).fixedHost) ipEl.value="";
     // Only on a deliberate connector change, never on load: switching to a
     // connector with a fixed port drops the previous brand's port (it would
     // otherwise keep being composed into the URL from a field nobody can
@@ -12547,17 +13867,21 @@ function addPrinterRow(name,url,opts,autoOpen){
     // somewhere non-standard — is left exactly as it is.
     if(connectorChanged){
       if(!spec.portEditable) portEl.value="";
+      else if(spec.fixedHost) portEl.value=String(nextFreeFixedHostPort(row,connectorEl.value,spec.defaultPort));
       else if(!portEl.value.trim()&&spec.defaultPort) portEl.value=String(spec.defaultPort);
     }
+    prevConnector=connectorEl.value;
   };
   connectorEl.addEventListener("change", ()=>{
     syncPrintPrefVisibility();
+    syncVirtualFields();
     const ct=CONNECTOR_TYPES.find(c=>c.type===connectorEl.value)||{};
     modelBadgeEl.textContent=ct.label||connectorEl.value;
     syncBrandField(true);
     syncAddressFields(true);
   });
   syncPrintPrefVisibility();
+  syncVirtualFields();
   syncBrandField(false);
   // A brand-new row (no saved printer behind it, nothing typed yet) starts
   // on its connector's default port; an existing one keeps whatever it has.
@@ -12663,6 +13987,8 @@ function addPrinterRow(name,url,opts,autoOpen){
       connector:connectorEl.value,
       brand:brandEl.value.trim(),
       filamentMode:filModeEl.value,
+      virtualFirmware:vFirmwareEl.value,
+      virtualTiming:vTimingEl.value,
       tags:row.querySelector(".ptags").value.split(",").map(s=>s.trim()).filter(Boolean),
       allowedGroups:[...row.querySelectorAll(".pgroups-chk:checked")].map(c=>c.value)
     },true);
@@ -12751,6 +14077,8 @@ function addPrinterRow(name,url,opts,autoOpen){
       try{
         const r=checkAuthFailure(await postJSON("/api/printer-pool",{printerId:row.dataset.printerId,printerPoolId:printerPoolEl.value||null}));
         const d=await r.json();
+        // "Changed, but the save could not be confirmed": the server HAS the new pool, so this page must too.
+        if(d.code==="config_save_not_durable"){ const applied=PRINTERS_CFG.find(p=>p.id===row.dataset.printerId); if(applied) applied.printerPoolId=printerPoolEl.value||undefined; }
         if(!r.ok||d.error) throw new Error(PRINTER_POOL_ERROR_KEYS[d.code]?t(PRINTER_POOL_ERROR_KEYS[d.code]):(d.error||"HTTP "+r.status));
         // The server saved it, but PRINTERS_CFG is a snapshot fetched once at
         // page-load/gear-open — anything else that reads it (the Queue
@@ -12801,7 +14129,7 @@ function fmtLogHM(sec){
 // target temp, a settings diff, etc.) falls back to plain "key: value" and
 // is intentionally NOT translated — it's an open-ended, ever-growing set of
 // internal field names, not SnapCon UI chrome.
-const LOG_DETAIL_KNOWN_KEYS=new Set(["file","elapsedSec","filamentUsedMm","filamentGramsEst","costEst"]);
+const LOG_DETAIL_KNOWN_KEYS=new Set(["file","elapsedSec","filamentUsedMm","filamentGramsEst","costEst","energy"]);
 function fmtLogDetail(row){
   if(!row.detail) return "";
   let d;
@@ -12813,6 +14141,7 @@ function fmtLogDetail(row){
   if(typeof d.filamentGramsEst==="number") parts.push(t("settings.logs.detail_filament_grams",{value:d.filamentGramsEst.toFixed(1)}));
   else if(typeof d.filamentUsedMm==="number") parts.push(t("settings.logs.detail_filament_meters",{value:(d.filamentUsedMm/1000).toFixed(2)}));
   if(typeof d.costEst==="number") parts.push(t("settings.logs.detail_cost",{value:CURRENCY+d.costEst.toFixed(2)}));
+  if(d.energy&&typeof d.energy.kwhEst==="number") parts.push(t("settings.logs.detail_energy",{value:d.energy.kwhEst.toFixed(2)}));
   for(const [k,v] of Object.entries(d)){
     if(LOG_DETAIL_KNOWN_KEYS.has(k)) continue;
     parts.push(k+": "+(v&&typeof v==="object"?JSON.stringify(v):v));
@@ -13144,6 +14473,10 @@ function gatherPrinters(){
     // connectors ever read it. "auto" is the absence of a pin, so it is sent
     // as undefined rather than stored.
     transport:(v=>v==="native"||v==="moonraker"?v:undefined)(r.querySelector(".ptransport").value),
+    // Sent for every row; the server keeps them only for a connector that
+    // offers them (the Virtual U1) and only values it offers.
+    virtualFirmware:r.querySelector(".pvfirmware").value||undefined,
+    virtualTiming:r.querySelector(".pvtiming").value||undefined,
     // Only ever sent as true or omitted — the server stores it only when
     // exactly true, and the connector treats anything else as "not opted in".
     allowMoonrakerPrintStart:(r.querySelector('[id^="pzmodstart-"]')||{}).checked?true:undefined,
@@ -13235,7 +14568,7 @@ async function runDiscover(subnet){
       row.innerHTML=`<span class="di"><b>${esc(f.device_name||f.machine_type||t("settings.printers.discover_printer_fallback"))}</b> · ${esc(f.ip)}${f.mac?" · "+esc(f.mac):""}${f.serial?" · "+esc(t("settings.printers.discover_serial_label",{value:f.serial})):""}</span>`+
         `<button class="btn ghost" data-i18n="settings.printers.discover_add_button">${t("settings.printers.discover_add_button")}</button>`;
       const btn=row.querySelector("button");
-      btn.addEventListener("click",()=>{ addPrinterRow(f.device_name||"U1", f.url, {serial:f.serial||""},true); btn.disabled=true; btn.textContent=t("settings.printers.discover_added_button"); btn.setAttribute("data-i18n","settings.printers.discover_added_button"); });
+      btn.addEventListener("click",()=>{ addPrinterRow(f.device_name||"U1", f.url, {serial:f.serial||""},true); markPrintersDirty(); btn.disabled=true; btn.textContent=t("settings.printers.discover_added_button"); btn.setAttribute("data-i18n","settings.printers.discover_added_button"); });
       w.appendChild(row);
     });
     const aab=$("addAllSave");
@@ -13254,6 +14587,222 @@ async function runDiscover(subnet){
     w.innerHTML='<div class="discrow"><span class="di" style="color:var(--bad)">'+esc(t("settings.printers.discover_scan_failed",{message:msg}))+'</span></div>';
   }
 }
+// ---- Settings > Printers > Rediscover (docs/TODO.md §35) ----
+// Reads each saved printer at its saved address, scans the networks they are
+// on (plus this machine's own, for printers not added yet), and lists what
+// changed. public/rediscover.js decides what each finding means; this only
+// gathers the evidence and shows it. Corrections are saved through their own
+// route (POST /api/rediscover/apply), not the Settings Save, so they need a
+// Printers tab with no unsaved edits — otherwise re-rendering the rows after
+// an update would throw those edits away.
+let RD=null;   // { printers, plan, done:Set(fix keys/rename ids), added:bool }
+function rdName(id){ const p=RD&&RD.printers.find(x=>x.id===id); return p?p.name:id; }
+function rdNames(ids){ return ids.map(rdName).join(", "); }
+function openRediscover(){
+  $("rediscoverStatus").textContent=""; $("rediscoverStatus").className="pstatus";
+  $("rediscoverAll").style.display="none";
+  $("rediscoverModal").classList.add("show");
+  if(computePrintersDirty().total){
+    RD=null;
+    $("rediscoverBody").innerHTML=`<p class="settings-help warn">${esc(t("settings.printers.rediscover_unsaved"))}</p>`;
+    return;
+  }
+  runRediscover();
+}
+function closeRediscover(){ $("rediscoverModal").classList.remove("show"); RD=null; }
+async function runRediscover(){
+  const body=$("rediscoverBody");
+  const progress=(text,pct)=>{
+    body.innerHTML=`<div class="discrow disc-progress"><span class="di">${esc(text)}</span><span class="disc-count" data-disccount></span></div>`
+      +`<div class="disc-bar"><div class="disc-bar-fill" data-discfill style="width:${pct||0}%"></div></div>`;
+  };
+  progress(t("settings.printers.rediscover_reading"));
+  let saved;
+  try{
+    const r=await fetch("/api/rediscover/printers"); checkAuthFailure(r);
+    saved=await r.json();
+    if(!r.ok||saved.error) throw new Error(saved.error||("HTTP "+r.status));
+  }catch(e){ body.innerHTML=`<p class="settings-help err">${esc(t("settings.printers.rediscover_failed",{message:e.message}))}</p>`; return; }
+  const token=RD={ printers:saved.printers, plan:null, done:new Set(), added:false };
+  if(!saved.printers.some(p=>p.checkable)){
+    body.innerHTML=`<p class="settings-help">${esc(t("settings.printers.rediscover_none_checkable"))}</p>`;
+    return;
+  }
+  // This machine's own network first (the server picks it, as Discover's
+  // Local network does), then every other /24 a checkable printer is saved on.
+  const scans=[];
+  const runScan=async(subnet)=>{
+    const label=subnet?subnet+".0/24":t("settings.printers.discover_local_network_label");
+    progress(t("settings.printers.discover_scanning",{subnet:label}));
+    const fill=body.querySelector("[data-discfill]"), count=body.querySelector("[data-disccount]");
+    let labels=null;
+    try{
+      const d=await streamNdjson(subnet?"/api/discover?subnet="+encodeURIComponent(subnet+".0"):"/api/discover",p=>{
+        if(p.subnets) labels=p.subnets;
+        if(!p.total) return;
+        if(fill) fill.style.width=Math.min(100,Math.round((p.scanned||0)/p.total*100))+"%";
+        if(count) count.textContent=t("settings.printers.discover_progress",{scanned:p.scanned||0,total:p.total,found:p.found||0});
+      });
+      labels=(d&&d.subnets)||labels||[label];
+      const complete=!!(d&&d.done);
+      // A stream that ended without "done" (a dropped connection, a server
+      // restart) has no reason to give; the report says only that it stopped.
+      const error=d&&d.error?d.error:null;
+      // One request can sweep several /24s (Local network on a machine with
+      // two adapters): each is recorded, all sharing the request's outcome.
+      labels.forEach(l=>{ const sub=Rediscover.subnetOf(String(l).split("/")[0]);
+        scans.push({ subnet:sub||l, label:l, complete:complete&&/\/24$/.test(l), error, found:complete?d.found:[] }); });
+    }catch(e){ scans.push({ subnet:subnet||label, label, complete:false, error:e.message, found:[] }); }
+  };
+  await runScan(null);
+  if(RD!==token) return;
+  // Not for a printer that always runs on this machine (the Virtual U1 on
+  // 127.0.0.1): it can't move, and sweeping the loopback range finds nothing.
+  const savedSubnets=[...new Set(saved.printers.filter(p=>p.checkable&&!p.fixedHost).map(p=>Rediscover.subnetOf(p.ip)).filter(Boolean))];
+  for(const sub of savedSubnets){
+    if(scans.some(s=>s.subnet===sub)) continue;
+    await runScan(sub);
+    if(RD!==token) return;
+  }
+  token.plan=Rediscover.plan({ printers:saved.printers, live:saved.live, scans });
+  token.scans=scans;
+  renderRediscover();
+}
+function rdMoveText(m){
+  if(m.field==="address") return t("settings.printers.rediscover_address_line",{from:m.from||"—",to:m.to});
+  return m.from ? t("settings.printers.rediscover_serial_line",{from:m.from,to:m.to}) : t("settings.printers.rediscover_serial_fill_line",{to:m.to});
+}
+function rdReason(f){
+  const m=f.moves[0], p=RD.printers.find(x=>x.id===m.id)||{};
+  const others=ids=>rdNames(ids.filter(id=>id!==m.id));
+  if(f.reason==="shared-serial") return t("settings.printers.rediscover_reason_shared_serial",{others:others(RD.printers.filter(o=>Rediscover.normSerial(o.serial)===Rediscover.normSerial(p.serial)).map(o=>o.id)),ip:p.ip||""});
+  if(f.reason==="shared-address") return t("settings.printers.rediscover_reason_shared_address",{others:others(RD.printers.filter(o=>o.ip&&o.ip===p.ip).map(o=>o.id))});
+  if(f.reason==="scan-incomplete") return t("settings.printers.rediscover_reason_network_incomplete",{subnets:(f.unverified||[]).join(", ")});
+  if(f.reason==="move-unverified") return t("settings.printers.rediscover_reason_move_unverified",{subnets:(f.unverified||[]).join(", ")});
+  if(f.reason==="host-name") return t("settings.printers.rediscover_reason_host_name",{from:m.from,to:m.to});
+  return "";
+}
+function renderRediscover(){
+  const {plan,scans}=RD, body=$("rediscoverBody");
+  const section=(key,rows)=>rows.length?`<div class="rd-section"><div class="rd-head">${esc(t(key))}</div>${rows.join("")}</div>`:"";
+  const row=(name,text,action,note)=>`<div class="discrow rd-row"><span class="di"><b>${esc(name)}</b> · ${esc(text)}${note?`<span class="rd-note">${esc(note)}</span>`:""}</span>${action||""}</div>`;
+  const locked=RD.added?` disabled title="${esc(t("settings.printers.rediscover_update_disabled_added"))}"`:"";
+  const fixBtn=(f,label)=>RD.done.has(f.key)
+    ? `<span class="rd-done">${esc(t("settings.printers.rediscover_updated"))}</span>`
+    : `<button class="btn ghost" data-rd-fix="${esc(f.key)}"${locked}>${esc(label)}</button>`;
+  const fixRows=f=>{
+    const label=f.ambiguous?t("settings.printers.rediscover_review_button")
+      :f.moves.length>1?tn("settings.printers.rediscover_update_group_button",f.moves.length):t("settings.printers.rediscover_update_button");
+    // A group (a swap or a chain) is one decision: its button sits on the
+    // first row, the rest say they go with it.
+    return f.moves.map((m,i)=>row(rdName(m.id),rdMoveText(m),i===0?fixBtn(f,label):"",
+      i===0?(f.ambiguous?rdReason(f):f.moves.length>1?t("settings.printers.rediscover_group_note",{names:rdNames(f.moves.map(x=>x.id))}):""):"")).join("");
+  };
+  const settled=plan.fixes.filter(f=>!f.ambiguous), unsure=plan.fixes.filter(f=>f.ambiguous);
+  const subnets=scans.filter(s=>s.complete).map(s=>s.label);
+  let html=`<p class="settings-help">${esc((subnets.length?t("settings.printers.rediscover_scanned",{subnets:subnets.join(", ")})+" · ":"")
+    +tn("settings.printers.rediscover_summary",plan.checked,{unchanged:plan.unchanged.length}))}</p>`;
+  html+=plan.scanIssues.map(s=>`<p class="settings-help warn">${esc(s.error
+    ?t("settings.printers.rediscover_scan_incomplete",{subnet:s.label,error:s.error})
+    :t("settings.printers.rediscover_scan_incomplete_noerr",{subnet:s.label}))}</p>`).join("");
+  html+=section("settings.printers.rediscover_section_fixes",settled.map(fixRows));
+  html+=section("settings.printers.rediscover_section_confirm",unsure.map(fixRows));
+  html+=section("settings.printers.rediscover_section_blocked",[
+    ...plan.blocked.map(b=>row(rdName(b.id),rdMoveText(b.move),"",
+      b.reason==="address-taken"?t("settings.printers.rediscover_blocked_address",{to:b.move.to,other:rdName(b.other)})
+      :b.reason==="serial-taken"?t("settings.printers.rediscover_blocked_serial",{to:b.move.to,other:rdName(b.other)})
+      :t("settings.printers.rediscover_blocked_other",{other:rdName(b.other)}))),
+    ...plan.conflicts.map(c=>row(rdName(c.id),c.reason==="fixed-host"
+      ?t("settings.printers.rediscover_conflict_fixed_host",{ips:c.ips.join(", ")})
+      :t("settings.printers.rediscover_conflict_several",{ips:c.ips.join(", ")}),""))]);
+  html+=section("settings.printers.rediscover_section_duplicates",plan.duplicates.map(d=>row(d.value,
+    t(d.field==="serial"?"settings.printers.rediscover_duplicate_serial":"settings.printers.rediscover_duplicate_address",{names:rdNames(d.ids)}),"")));
+  html+=section("settings.printers.rediscover_section_missing",plan.notFound.map(id=>{
+    const p=RD.printers.find(x=>x.id===id); return row(p.name,t("settings.printers.rediscover_not_found",{ip:p.ip}),""); }));
+  html+=section("settings.printers.rediscover_section_unchecked",plan.notChecked.map(n=>row(rdName(n.id),
+    t(n.reason==="no-address"?"settings.printers.rediscover_unchecked_no_address":n.reason==="scan-incomplete"?"settings.printers.rediscover_unchecked_incomplete":"settings.printers.rediscover_unchecked_not_scanned"),"")));
+  const renames=plan.renames.map(r=>row(r.from,t("settings.printers.rediscover_rename_line",{to:r.to}),
+    RD.done.has("n:"+r.id)?`<span class="rd-done">${esc(t("settings.printers.rediscover_renamed"))}</span>`
+    :r.clash?`<button class="btn ghost" disabled title="${esc(t("settings.printers.rediscover_rename_clash_title",{to:r.to,other:rdName(r.clash)}))}">${esc(t("settings.printers.rediscover_rename_button"))}</button>`
+    :`<button class="btn ghost" data-rd-rename="${esc(r.id)}"${locked}>${esc(t("settings.printers.rediscover_rename_button"))}</button>`));
+  if(renames.length) html+=section("settings.printers.rediscover_section_names",[`<p class="settings-help">${esc(t("settings.printers.rediscover_rename_note"))}</p>`,...renames]);
+  html+=section("settings.printers.rediscover_section_new",plan.newPrinters.map((f,i)=>row(f.device_name||f.machine_type||t("settings.printers.discover_printer_fallback"),
+    f.ip+(f.serial?" · "+t("settings.printers.discover_serial_label",{value:f.serial}):""),
+    f.added?`<span class="rd-done">${esc(t("settings.printers.discover_added_button"))}</span>`:`<button class="btn ghost" data-rd-add="${i}">${esc(t("settings.printers.discover_add_button"))}</button>`)));
+  if(RD.added) html+=`<p class="settings-help">${esc(t("settings.printers.rediscover_new_added"))}</p>`;
+  if(!plan.fixes.length&&!plan.blocked.length&&!plan.conflicts.length&&!plan.duplicates.length&&!plan.notFound.length&&!plan.notChecked.length&&!plan.renames.length&&!plan.newPrinters.length&&!plan.scanIssues.length)
+    html+=`<p class="settings-help ok">${esc(t("settings.printers.rediscover_all_good"))}</p>`;
+  body.innerHTML=html;
+  // Update all: the settled corrections only (Rediscover.plan's updateAll),
+  // never a rename, a new printer, or anything waiting for confirmation.
+  const pending=plan.fixes.filter(f=>plan.updateAll.includes(f.key)&&!RD.done.has(f.key));
+  const all=$("rediscoverAll"), count=pending.reduce((n,f)=>n+f.moves.length,0);
+  all.style.display=count?"":"none";
+  all.textContent=tn("settings.printers.rediscover_update_all",count);
+  all.disabled=RD.added; all.title=RD.added?t("settings.printers.rediscover_update_disabled_added"):"";
+}
+// The values each change was planned against: a printer edited since (in
+// another tab, by another admin) is refused by the server instead of
+// overwritten.
+function rdExpect(id){
+  const p=PRINTERS_CFG.find(x=>x.id===id)||RD.printers.find(x=>x.id===id)||{};
+  return { url:p.url, serial:p.serial||"", name:p.name };
+}
+async function rdApply(changes,doneKeys){
+  const status=$("rediscoverStatus");
+  if(computePrintersDirty().total){ status.className="pstatus err"; status.textContent=t("settings.printers.rediscover_unsaved"); return; }
+  status.className="pstatus work"; status.textContent=t("settings.dirty_bar.saving");
+  $("rediscoverBody").querySelectorAll("button").forEach(b=>b.disabled=true);
+  $("rediscoverAll").disabled=true;
+  try{
+    const r=await postJSON("/api/rediscover/apply",{changes:changes.map(c=>({...c,expect:rdExpect(c.id)}))});
+    const j=await r.json();
+    if(!r.ok||j.error) throw new Error(j.error||("HTTP "+r.status));
+    doneKeys.forEach(k=>RD.done.add(k));
+    PRINTERS_CFG=j.printers||PRINTERS_CFG;
+    renderPrinterRowsFromConfig();
+    loadFleet();
+    status.className="pstatus ok"; status.textContent=t("settings.dirty_bar.saved");
+  }catch(e){ status.className="pstatus err"; status.textContent=e.message; }
+  if(RD) renderRediscover();
+}
+$("rediscover").addEventListener("click",openRediscover);
+wireModal("rediscoverModal",closeRediscover,["rediscoverX","rediscoverClose"]);
+$("rediscoverBody").addEventListener("click",e=>{
+  if(!RD||!RD.plan) return;
+  const fixBtn=e.target.closest("[data-rd-fix]"), renBtn=e.target.closest("[data-rd-rename]"), addBtn=e.target.closest("[data-rd-add]");
+  if(fixBtn){
+    const f=RD.plan.fixes.find(x=>x.key===fixBtn.dataset.rdFix);
+    if(!f) return;
+    // Nothing the evidence leaves open is saved without a person saying so,
+    // and the question names the printer and both values.
+    if(f.ambiguous){
+      const m=f.moves[0];
+      const q=t(m.field==="address"?"settings.printers.rediscover_confirm_address":"settings.printers.rediscover_confirm_serial",{name:rdName(m.id),from:m.from||"—",to:m.to});
+      if(!confirm(q+"\n\n"+rdReason(f))) return;
+    }
+    rdApply(Rediscover.fixChanges(f),[f.key]);
+  } else if(renBtn){
+    const r=RD.plan.renames.find(x=>x.id===renBtn.dataset.rdRename);
+    if(!r||!confirm(t("settings.printers.rediscover_rename_confirm",{from:r.from,to:r.to}))) return;
+    rdApply([{id:r.id,name:r.to}],["n:"+r.id]);
+  } else if(addBtn){
+    // The existing Discover path: a new row in the list, saved by Save.
+    const f=RD.plan.newPrinters[+addBtn.dataset.rdAdd];
+    if(!f||f.added) return;
+    addPrinterRow(f.device_name||"U1",f.url,{serial:f.serial||""},true);
+    markPrintersDirty();   // the unsaved row shows in the footer, as a typed edit does
+    f.added=true; RD.added=true;
+    renderRediscover();
+  }
+});
+$("rediscoverAll").addEventListener("click",()=>{
+  if(!RD||!RD.plan) return;
+  const fixes=RD.plan.fixes.filter(f=>RD.plan.updateAll.includes(f.key)&&!RD.done.has(f.key));
+  if(!fixes.length) return;
+  rdApply(fixes.flatMap(f=>Rediscover.fixChanges(f)),fixes.map(f=>f.key));
+});
+
 let FLEET_TIMER=null;
 // Metadata (temps/progress/status) always refreshes at the normal, fast
 // fleet refresh interval — including in camera view, so switching views
@@ -13353,7 +14902,7 @@ async function saveConfig(){
   const logsRetentionDays=parseInt($("setLogsRetentionDays").value,10);
   const cameraRetentionDays=parseInt($("setCameraRetentionDays").value,10);
   const gcodeSyncRetentionDays=parseInt($("setGcodeSyncRetentionDays").value,10);
-  const body={ gcodeFolder:$("setFolder").value.trim(), firmwareFolder:$("setFirmwareFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:useTNotation||undefined, defaultView:$("setDefaultView").value, cardLayout:$("setCardLayout").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING, skipIdenticalUploads:$("setSkipIdenticalUploads").checked, checkForUpdates:$("setCheckForUpdates").checked, overwriteDifferentFiles:$("setOverwriteDifferent").checked, allowUploadWhilePrinting:$("setAllowUploadWhilePrinting").checked, uploadIntoQueue:$("setUploadIntoQueue").checked, locale:$("setLocale")?$("setLocale").value:undefined,
+  const body={ gcodeFolder:$("setFolder").value.trim(), firmwareFolder:$("setFirmwareFolder").value.trim(), logsFolder:$("setLogsFolder").value.trim(), cameraFolder:$("setCameraFolder").value.trim(), gcodeSyncFolder:$("setGcodeSyncFolder").value.trim(), logsRetentionDays:logsRetentionDays>0?logsRetentionDays:undefined, cameraRetentionDays:cameraRetentionDays>0?cameraRetentionDays:undefined, gcodeSyncRetentionDays:gcodeSyncRetentionDays>0?gcodeSyncRetentionDays:undefined, refreshInterval:(ri>=1&&ri<=60)?ri:2, cameraViewRefreshInterval:(cr>=3&&cr<=60)?cr:6, cameraViewStagger:CAM_STAGGER, currency:CURRENCY, filamentCost:fc>0?fc:undefined, electricityRate:er>0?er:undefined, tNotation:useTNotation||undefined, defaultView:$("setDefaultView").value, cardLayout:$("setCardLayout").value, siteName:$("setSiteName").value.trim(), allowMapping:ALLOW_MAPPING, suggestMatching:SUGGEST_MATCHING, checkForUpdates:$("setCheckForUpdates").checked, virtualPrintersEnabled:$("setVirtualPrinters").checked, overwriteDifferentFiles:$("setOverwriteDifferent").checked, allowUploadWhilePrinting:$("setAllowUploadWhilePrinting").checked, uploadIntoQueue:$("setUploadIntoQueue").checked, locale:$("setLocale")?$("setLocale").value:undefined,
     usersEnabled:$("setUsersEnabled").checked||undefined,
     resend:{ apiKey:$("setResendKey").value.trim(), fromAddress:$("setResendFrom").value.trim() },
     otp:{
@@ -13431,6 +14980,15 @@ async function saveConfig(){
     if(USERS_ENABLED && !CURRENT_USER){ applyRoleUI(); showLoginOverlay(); }
     else applyRoleUI();
     applyViewMode(); // re-sync the View cell and realign the view's own state after a save
+    // Enable virtual printers changes which printer types can be added and
+    // which printers exist at all: rebuild the Type lists and the rows from
+    // what the server now runs.
+    if(VIRTUAL_PRINTERS_ON!==(c.virtualPrintersEnabled===true)){
+      VIRTUAL_PRINTERS_ON=c.virtualPrintersEnabled===true;
+      await loadConnectorTypes();
+      PRINTERS_CFG=c.printers||[];
+      renderPrinterRowsFromConfig();
+    }
     loadFiles(); loadFleet(); startFleetRefresh();
     // The Health page reads the same interval, so a changed value has to
     // re-arm that timer too — it caches the interval when it starts.

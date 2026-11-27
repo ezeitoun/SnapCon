@@ -1,0 +1,11 @@
+id: no-load-time-timers
+valid:
+  - 'function f() { setTimeout(() => {}, 5); }'
+  - 'const g = () => setInterval(tick, 1000);'
+  - 'app.get("/x", async (req, res) => { setTimeout(done, 1); });'
+  - 'class A { m() { setInterval(x, 1); } }'
+  - 'const h = function () { setTimeout(y, 2); };'
+invalid:
+  - 'setInterval(tick, 1000);'
+  - 'const t = setTimeout(() => {}, 5);'
+  - 'if (enabled) setInterval(poll, 30000);'

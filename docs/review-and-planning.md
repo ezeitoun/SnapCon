@@ -97,3 +97,15 @@ Before finalizing a plan, challenge it:
 - Is every planned change actually necessary?
 
 Remove unnecessary work before presenting the plan.
+
+---
+
+## Delegating a review
+
+When a review is handed to a reviewer agent (the definitions are local, in `.claude/agents/`):
+
+- **Give it the diff, not a summary.** Name the base and head (or the baseline tree for uncommitted work) and the files in scope. State the requirements the change must meet and what has already been ruled out. Do not give it your conclusion.
+- **Let it widen the scope** to callers, consumers and dependencies when correctness requires it; that is part of the review, not scope creep.
+- **Ask for a concise report:** findings ranked by severity with `file:line`, a concrete failure scenario, whether it was reproduced and the smallest fix; then what was verified and what could not be. Whole files and unfiltered command output do not belong in a report or in the reviewer's own working output.
+- **Follow-up reviews reuse the earlier reviewer** when it is still available (continue it instead of starting a new one), so it keeps what it already read. When it is not available, give the new reviewer the original findings and the fix diff, not the whole change again.
+- A fix made after a review is unreviewed until that follow-up has happened; say so when reporting.

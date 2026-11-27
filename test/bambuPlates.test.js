@@ -7,9 +7,9 @@
 // project_file, a plate the file does not hold is refused before anything is
 // sent, and a printer that cannot choose a plate is never sent one but 1.
 //
-// The project is built here: the owner's Library has no multi-plate sliced
-// Bambu file. Its plate G-code headers and slice_info are in the shape of the
-// owner's real P2S project (Bambu/ams.gcode.3mf). Server functions are taken
+// The project is built here: no multi-plate sliced Bambu file was at hand.
+// Its plate G-code headers and slice_info are in the shape of a real P2S
+// project (Bambu/ams.gcode.3mf). Server functions are taken
 // from server.js and run against the real threemf reader and parser.
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -110,12 +110,13 @@ test("the plate travels from the request to the connector, on the direct, staged
   const body = route.slice(0, route.indexOf("\napp."));
   assert.ok(body.indexOf("resolvePrintPlate(p, ref.fp, plateAsked)") < body.indexOf("libraryPrintIdentity("), "the Variant is the plate that prints");
   assert.match(body, /c\.applyHeadMapping\(p, tools, map, prefs, \{ file: name, plate \}\)/);
-  assert.match(body, /c\.startPrintFile\(p, name, \{ plate \}\)/);
-  assert.match(body, /pendingLoad\.set\(printer, \{[^}]*actorFromReq\(req\), plate[,\s}]/, "a deferred send keeps its plate");
+  assert.match(body, /c\.startPrintFile\(p, name, \{ plate, prefs \}\)/);
+  assert.match(body, /acceptDeferredSend\(p, \{[^}]*\bplate, actor: actorFromReq\(req\)/, "a deferred send keeps its plate");
   const job = fnSrc("runPrintFileJob");
   assert.match(job, /c\.applyHeadMapping\(p, tools, map, prefs, \{ file: filename, plate \}\)/);
-  assert.match(job, /c\.startPrintFile\(p, filename, \{ plate \}\)/);
-  assert.match(fnSrc("uploadNotifiedFile"), /\{ file: pl\.name, plate: pl\.plate \}/);
+  assert.match(job, /c\.startPrintFile\(p, filename, \{ plate, prefs \}\)/);
+  // The deferred send (§37 P3) sends only the file; its plate waits for the Print (§38).
+  assert.doesNotMatch(fnSrc("runDeferredSend"), /applyHeadMapping/);
   // The browser: a card's own Print passes the plate its colours were mapped for.
   assert.match(appSrc, /if\(plate==null&&MAP&&MAP\.plate\) plate=MAP\.plate;/);
 });

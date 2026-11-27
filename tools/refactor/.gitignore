@@ -1,0 +1,4 @@
+# Generated reports, local machine paths and temporary data: never tracked.
+out/
+local/
+node_modules/

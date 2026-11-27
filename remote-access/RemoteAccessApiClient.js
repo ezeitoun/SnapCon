@@ -1,8 +1,8 @@
 // remote-access/RemoteAccessApiClient.js — client for the SnapCon Remote
 // Access provisioning backend (Milestone B). Implements the real, deployed
-// contract at https://api.snapcon.app — see
-// D:\code\scbe\snapcon-api\docs\CLIENT_INTEGRATION.md, which this file
-// implements exactly.
+// contract at https://api.snapcon.app — see docs/CLIENT_INTEGRATION.md in
+// the provisioning backend's repository, which this file implements
+// exactly.
 //
 // Auth: every /v1/hubs/* call is signed with the installation's Ed25519
 // private key (see Ed25519Identity.js). Signing happens INSIDE this module

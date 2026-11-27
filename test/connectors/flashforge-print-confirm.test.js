@@ -143,6 +143,39 @@ test("the PRODUCTION default issues exactly ONE start and never re-sends it", as
   assert.equal(m.state.starts, 1, "the default must not re-issue a print start");
 });
 
+// The production window, run on mocked timers: Date and setTimeout move only
+// when the test ticks them, a 500ms poll at a time.
+async function runOnMockClock(t, fn, maxMs) {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const t0 = Date.now();
+  let settled = null;
+  const run = Promise.resolve().then(fn).then(v => { settled = { ok: true, v }; }, e => { settled = { ok: false, e }; });
+  const flush = () => new Promise(r => setImmediate(r));
+  while (!settled && Date.now() - t0 <= maxMs) { await flush(); await flush(); t.mock.timers.tick(500); }
+  await flush(); await flush();
+  await run;
+  return { settled, elapsed: Date.now() - t0 };
+}
+
+test("with the production window, a start slower than the old 2.5 s is confirmed, not reported as failed", async t => {
+  // A healthy 5.1.7 start took 2674ms in all (docs/TODO.md §2).
+  let startedAt = null;
+  const m = mockPrinter(s => (s.starts >= 1 && startedAt != null && Date.now() - startedAt >= 4000) ? "printing" : "ready");
+  const real = m.handler;
+  const handler = async (url, opts) => { if (String(url).endsWith("/printGcode")) startedAt = Date.now(); return real(url, opts); };
+  const { settled } = await withMockFetch(handler, () => runOnMockClock(t, () => ff.issuePrintAndConfirm(p, BODY), 20000));
+  assert.ok(settled && settled.ok, "a printer that shows printing after 4 s is a started print: " + (settled && settled.e && settled.e.message));
+  assert.equal(m.state.starts, 1);
+});
+
+test("with the production window, a start that never shows is reported only after about 15 s, and is not re-sent", async t => {
+  const m = mockPrinter(() => "ready");
+  const { settled, elapsed } = await withMockFetch(m.handler, () => runOnMockClock(t, () => ff.issuePrintAndConfirm(p, BODY), 30000));
+  assert.ok(settled && !settled.ok && /never started it/.test(settled.e.message), "it fails, saying the printer never started");
+  assert.ok(elapsed >= 15000 && elapsed <= 16500, "after the 15 s window, not before: " + elapsed);
+  assert.equal(m.state.starts, 1, "one start, never re-sent");
+});
+
 test("both FlashForge connectors route their print through the confirmation, not a bare ffPost", () => {
   // flashforge-ad5x.js builds a different body (material-station mappings) but
   // hits the identical endpoint, so a fix confined to the shared
@@ -157,5 +190,5 @@ test("both FlashForge connectors route their print through the confirmation, not
   // test fail on a change that did not alter what it exists to protect.
   assert.match(ad5x, /issuePrintAndConfirm\(\s*(asNative\(p\)|p)\s*,\s*body\s*\)/);
   assert.doesNotMatch(ad5x, /ffPost\((asNative\(p\)|p), "\/printGcode"/, "AD5X must not bypass the confirmation");
-  assert.match(utils, /startPrintFile = \(p, filename\) => issuePrintAndConfirm\(/);
+  assert.match(utils, /startPrintFile = \(p, filename, opts = \{\}\) => \{[\s\S]*?return issuePrintAndConfirm\(/);
 });

@@ -2,7 +2,7 @@
 // networks a printer could actually be on, and nothing else.
 //
 // The bug, from a real machine: Discover reported "No printers found on
-// 100.83.148.0/24, 192.168.2.0/24, 172.17.64.0/24". Only the middle one is a
+// 100.64.0.0/24, 192.168.20.0/24, 172.17.64.0/24". Only the middle one is a
 // LAN. The other two are a Tailscale interface (a single /32 address on a VPN)
 // and a Hyper-V virtual switch — 508 addresses probed for nothing, three times
 // the wait, and an error naming networks the operator has never heard of.
@@ -16,7 +16,7 @@ const path = require("path");
 const vm = require("node:vm");
 
 const ROOT = path.join(__dirname, "..");
-const serverSrc = fs.readFileSync(path.join(ROOT, "server.js"), "utf8");
+const serverSrc = fs.readFileSync(path.join(ROOT, "routes", "discover.js"), "utf8");
 
 function extract(name) {
   const start = serverSrc.indexOf("function " + name + "(");
@@ -33,16 +33,16 @@ for (const c of ["const SKIP_INTERFACE_RE", "const SKIP_ADDRESS_RE"]) {
 vm.runInContext(extract("localSubnets"), sandbox);
 const subnets = (ifs) => Array.from(vm.runInContext("localSubnets", sandbox)(ifs));
 
-// Exactly what the machine that hit this reports.
+// What the machine that hit this reported; the addresses are examples.
 const REAL_MACHINE = {
-  "Ethernet 3": [{ family: "IPv4", internal: false, address: "192.168.2.151", netmask: "255.255.255.0" }],
+  "Ethernet 3": [{ family: "IPv4", internal: false, address: "192.168.20.151", netmask: "255.255.255.0" }],
   "vEthernet (Default Switch)": [{ family: "IPv4", internal: false, address: "172.17.64.1", netmask: "255.255.240.0" }],
-  "Tailscale": [{ family: "IPv4", internal: false, address: "100.83.148.80", netmask: "255.255.255.255" }],
+  "Tailscale": [{ family: "IPv4", internal: false, address: "100.64.0.80", netmask: "255.255.255.255" }],
   "Loopback Pseudo-Interface 1": [{ family: "IPv4", internal: true, address: "127.0.0.1", netmask: "255.0.0.0" }]
 };
 
 test("only the real LAN is scanned on the machine that reported this", () => {
-  assert.deepEqual(subnets(REAL_MACHINE), ["192.168.2"]);
+  assert.deepEqual(subnets(REAL_MACHINE), ["192.168.20"]);
 });
 
 test("a Tailscale address is not a network to scan", () => {
@@ -106,39 +106,39 @@ vm.runInContext(extract("scanSubnets"), sandbox);
 const scanFor = (ifs, sourceIp) => Array.from(vm.runInContext("scanSubnets", sandbox)(ifs, sourceIp));
 
 const TWO_LANS = {
-  "Ethernet 3": [{ family: "IPv4", internal: false, address: "192.168.2.151", netmask: "255.255.255.0" }],
+  "Ethernet 3": [{ family: "IPv4", internal: false, address: "192.168.20.151", netmask: "255.255.255.0" }],
   "Wi-Fi": [{ family: "IPv4", internal: false, address: "10.20.30.40", netmask: "255.255.255.0" }],
-  "Tailscale": [{ family: "IPv4", internal: false, address: "100.83.148.80", netmask: "255.255.255.255" }]
+  "Tailscale": [{ family: "IPv4", internal: false, address: "100.64.0.80", netmask: "255.255.255.255" }]
 };
 
 test("only the network the machine routes through is scanned", () => {
-  assert.deepEqual(scanFor(TWO_LANS, "192.168.2.151"), ["192.168.2"]);
+  assert.deepEqual(scanFor(TWO_LANS, "192.168.20.151"), ["192.168.20"]);
   assert.deepEqual(scanFor(TWO_LANS, "10.20.30.40"), ["10.20.30"]);
 });
 
 test("a machine whose default route is a VPN falls back to its real networks", () => {
   // An exit node, or a full-tunnel VPN. Scanning the VPN would find nothing, so
   // this is the one case where scanning every real LAN is better than nothing.
-  assert.deepEqual(scanFor(TWO_LANS, "100.83.148.80").sort(), ["10.20.30", "192.168.2"]);
+  assert.deepEqual(scanFor(TWO_LANS, "100.64.0.80").sort(), ["10.20.30", "192.168.20"]);
 });
 
 test("not knowing the route is not a failure", () => {
   // The routing lookup is best effort; without an answer the scan behaves as
   // it did before, minus the virtual adapters.
-  assert.deepEqual(scanFor(TWO_LANS, null).sort(), ["10.20.30", "192.168.2"]);
-  assert.deepEqual(scanFor(TWO_LANS, "203.0.113.7").sort(), ["10.20.30", "192.168.2"],
+  assert.deepEqual(scanFor(TWO_LANS, null).sort(), ["10.20.30", "192.168.20"]);
+  assert.deepEqual(scanFor(TWO_LANS, "203.0.113.7").sort(), ["10.20.30", "192.168.20"],
     "an address belonging to no adapter tells us nothing");
 });
 
 test("one LAN behaves the same either way", () => {
-  assert.deepEqual(scanFor(REAL_MACHINE, "192.168.2.151"), ["192.168.2"]);
-  assert.deepEqual(scanFor(REAL_MACHINE, null), ["192.168.2"]);
+  assert.deepEqual(scanFor(REAL_MACHINE, "192.168.20.151"), ["192.168.20"]);
+  assert.deepEqual(scanFor(REAL_MACHINE, null), ["192.168.20"]);
 });
 
 test("a machine with nothing scannable says so instead of scanning nonsense", () => {
   assert.deepEqual(subnets({ "Tailscale": REAL_MACHINE["Tailscale"] }), []);
   const at = serverSrc.indexOf('app.get("/api/discover"');
-  const route = serverSrc.slice(at, serverSrc.indexOf("\n});", at));
+  const route = serverSrc.slice(at, serverSrc.indexOf("\n  });", at));
   assert.match(route, /no_local_network|No network/i,
     "a scan with no networks to scan must explain itself, not report 'no printers found'");
 });

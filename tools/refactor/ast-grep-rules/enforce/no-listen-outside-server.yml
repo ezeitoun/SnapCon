@@ -1,0 +1,8 @@
+id: no-listen-outside-server
+language: javascript
+severity: error
+message: Only server.js starts the HTTP server.
+files: ["**/routes/**", "**/library/**", "**/queue/**", "**/transfers/**", "**/sync/**", "**/audit/**", "**/utilization/**"]
+ignores: ["test/**", "tools/**", "**/test/**", "**/tools/**", "**/node_modules/**"]
+rule:
+  pattern: $APP.listen($$$)

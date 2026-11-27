@@ -14,7 +14,6 @@ const labelOf = fam => (fam ? (PrinterIdentity.FAMILIES.find(f => f.key === fam)
 const json = s => { try { return JSON.parse(s || "null"); } catch { return null; } };
 const loc = f => f.root_id + ":" + f.rel_path;
 const PAGE_MAX = 120;
-const stemOf = n => String(n || "").replace(/(\.gcode)?\.[^.]+$/, "");
 
 // How strongly a Review Item asks for attention. "action": something the
 // owner decided no longer applies, or a file is broken; "review": SnapCon is
@@ -505,8 +504,8 @@ function modelDetail(db, uuid, { printerVisible } = {}) {
   // Pictures a person may choose as the cover (M6): every image, plate
   // picture and file thumbnail of this Model, by content key (+ plate).
   const pictures = [];
-  for (const f of files) if (f.thumb_key && !f.hidden) pictures.push({ contentKey: f.content_key, plate: null, thumb: f.thumb_key, label: f.entry_path ? f.name : stemOf(f.name) });
-  for (const p of projects) for (const pl of p.plates) if (pl.thumb) pictures.push({ contentKey: p.file.contentKey, plate: pl.plate, thumb: pl.thumb, label: (p.title || stemOf(p.file.name)) + " · " + pl.plate });
+  for (const f of files) if (f.thumb_key && !f.hidden) pictures.push({ contentKey: f.content_key, plate: null, thumb: f.thumb_key, label: f.name });
+  for (const p of projects) for (const pl of p.plates) if (pl.thumb) pictures.push({ contentKey: p.file.contentKey, plate: pl.plate, thumb: pl.thumb, label: (p.title || p.file.name) + " · " + pl.plate });
   const chosenMissing = m.cover_source === "user" && !(cover && cover.source === "chosen");
   const gallery = [];
   const seenThumb = new Set();

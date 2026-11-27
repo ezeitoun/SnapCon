@@ -13,7 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const vm = require("node:vm");
 
-const serverSrc = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+const serverSrc = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8") + "\n" + fs.readFileSync(path.join(__dirname, "..", "routes", "snapshot.js"), "utf8").replace(/^  /gm, "");
 function extractFn(name) {
   const a = serverSrc.indexOf("async function " + name + "(");
   const at = a >= 0 ? a : serverSrc.indexOf("function " + name + "(");

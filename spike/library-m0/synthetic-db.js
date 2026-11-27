@@ -61,8 +61,8 @@ time("insert_models", () => {
 
 // ---- roots ----
 db.exec(`INSERT INTO roots (id,name,path,grouping,created_at) VALUES
-  ('gcode','G-code folder','\\\\192.168.2.18\\SnapCon\\Files','files',${now}),
-  ('nas','NAS Models','\\\\192.168.2.18\\Models','folders',${now}),
+  ('gcode','G-code folder','\\\\198.51.100.7\\Storage\\Files','files',${now}),
+  ('nas','NAS Models','\\\\198.51.100.7\\Models','folders',${now}),
   ('local','Local downloads','D:\\\\Models','folders',${now})`);
 
 // ---- files and everything derived from them ----

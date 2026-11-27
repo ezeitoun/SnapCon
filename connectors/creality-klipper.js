@@ -33,6 +33,9 @@ exports.brand = "Creality";
 exports.address = { scheme: "http", defaultPort: 7125, portEditable: true, required: true };
 exports.capabilities = {
   camera: false, filamentHeads: false, excludeObject: true,
+  // Moonraker's job history (its rows closing at a print's end are relied on
+  // below, confirmed live), read for fleet utilization.
+  jobHistory: true,
   // FALSE on purpose, and not because G29 is broken. G29 is real, registered
   // and confirmed live on K1, K1 Max, Ender-3 V3 KE and a real Ender-3 V3 Plus
   // — a full leveling routine (home, clear old mesh, nozzle-clear, re-home,
@@ -770,6 +773,9 @@ exports.listFiles = http.listFiles;
 // implementation for every connector that stores files through it, so the
 // identity rules cannot drift between them.
 exports.compareRemoteFile = http.compareRemoteFile;
+// Read back after an upload, before a start (docs/TODO.md §37 P2).
+exports.verifyUpload = http.verifyUpload;
+exports.fetchJobHistory = http.fetchJobHistory;
 exports.getFileMetadata = http.getFileMetadata;
 
 // Thumbnail: embedded base64 PNG in the gcode's own header comments, NOT a

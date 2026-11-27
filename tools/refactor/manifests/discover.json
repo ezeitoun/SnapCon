@@ -1,0 +1,348 @@
+{
+  "boundary": "discover",
+  "comment": "Discover extraction: GET /api/discover and its helpers move from server.js to routes/discover.js. Executed only with the owner's OK to Dev, mechanically by tools/refactor/codemods/extract-discover.js (two slices, no rewrites).",
+  "base": "7e2cf0008221431268aad5a1c7abb4df8c750fc5",
+  "movedFrom": "server.js",
+  "sourceRange": "Two non-contiguous slices of server.js at the base. (a) 7257-7421 (165 lines): the \"// ---- Auto-discovery\" header through discoverIp — 4 constants (MIN_SCAN_PREFIX 7284, SKIP_INTERFACE_RE 7326, SKIP_ADDRESS_RE 7330, DISCOVER_PORTS 7396) and 9 functions (ipToInt 7261, intToIp 7268, maskToPrefixLen 7274, parseSubnetSpec 7293, defaultRouteAddress 7339, scanSubnets 7371, localSubnets 7380, discoverAt 7401, discoverIp 7412) with their comments. (b) 7485-7532 (48 lines): the streaming comment and app.get(\"/api/discover\"). Lines 7422-7484 (GET /api/probe-printer, POST /api/test-connection and their comments) are policy-excluded and STAY in server.js, unchanged. Also removed from server.js: lines 13-15 (the dgram require and its two comment lines — dgram's only use is defaultRouteAddress; `os` at line 12 stays, used at 4721/4723/6779). The mapper's 147 = 40 route lines + 107 exclusive-helper code lines (comments/blanks excluded); the 276-line region 7257-7532 includes the 62 excluded lines.",
+  "newFiles": [
+    "routes/discover.js"
+  ],
+  "allowedFiles": [
+    "server.js",
+    "test/discoverySubnets.test.js",
+    "test/connectorCoreMethods.test.js",
+    "test/helpers/discoverCode.js"
+  ],
+  "moved": [
+    "ipToInt",
+    "intToIp",
+    "maskToPrefixLen",
+    "MIN_SCAN_PREFIX",
+    "parseSubnetSpec",
+    "SKIP_INTERFACE_RE",
+    "SKIP_ADDRESS_RE",
+    "defaultRouteAddress",
+    "scanSubnets",
+    "localSubnets",
+    "DISCOVER_PORTS",
+    "discoverAt",
+    "discoverIp",
+    "GET /api/discover"
+  ],
+  "rewrites": [],
+  "injected": {
+    "requireAdmin": "server.js:397 const (from auth)",
+    "getConnector": "server.js:21 const (connectors)",
+    "listConnectorTypes": "server.js:21 const (connectors)",
+    "how": "parameters of registerDiscoverRoutes(app, { requireAdmin, getConnector, listConnectorTypes }). Only discoverAt, discoverIp and the route use injected names, so only those three are declared inside registerDiscoverRoutes; the four constants and the seven dependency-free functions (ipToInt, intToIp, maskToPrefixLen, parseSubnetSpec, defaultRouteAddress, scanSubnets, localSubnets) stay at module scope with their text unchanged. No module-level dependency slots. No CFG/PRINTERS/FOLDER reads anywhere in the moved code, hence no rewrites.",
+    "requiresInModule": "const os = require(\"os\"); const dgram = require(\"dgram\"); (dgram's comment from server.js:13-14 moves with it)"
+  },
+  "exports": "module.exports = { registerDiscoverRoutes, _internal: { ipToInt, intToIp, maskToPrefixLen, parseSubnetSpec, defaultRouteAddress, scanSubnets, localSubnets, MIN_SCAN_PREFIX, SKIP_INTERFACE_RE, SKIP_ADDRESS_RE, DISCOVER_PORTS } } — the connectors' existing `_internal` test-seam convention; registerDiscoverRoutes returns nothing (does not repeat the Health pattern the Guardian flagged as F5).",
+  "strictMode": "routes/discover.js has no \"use strict\" (server.js is sloppy mode; semantics kept identical).",
+  "moduleState": {
+    "constants": "MIN_SCAN_PREFIX, SKIP_INTERFACE_RE, SKIP_ADDRESS_RE, DISCOVER_PORTS at module scope; pure values, no timers, no Maps, no I/O at creation. The boundary owns no mutable state.",
+    "registration": "server.js requires the module and calls registerDiscoverRoutes(app, {...}) at the route's original position (replacing lines 7485-7532), so the Express handler order is unchanged (probe-printer, test-connection, discover, rediscover…). The helper definitions therefore sit later in start-up than before (after the two excluded routes register); nothing between 7422 and 7484 references them (grep-verified) and their creation has no side effect, so this is unobservable — stated for the Guardian."
+  },
+  "pinningTests": [
+    "test/discoverySubnets.test.js",
+    "test/discoverBehaviour.test.js",
+    "test/connectorCoreMethods.test.js"
+  ],
+  "declaredTestFiles": [
+    "test/helpers/discoverCode.js"
+  ],
+  "declaredHarness": {
+    "test/discoverySubnets.test.js": [
+      {
+        "base": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(ROOT, \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(ROOT, \"routes\", \"discover\\.js\"\\), \"utf8\"\\);$"
+      },
+      {
+        "base": "^  const route = serverSrc\\.slice\\(at, serverSrc\\.indexOf\\(\"\\\\n\\}\\);\", at\\)\\);$",
+        "head": "^  const route = serverSrc\\.slice\\(at, serverSrc\\.indexOf\\(\"\\\\n  \\}\\);\", at\\)\\);$"
+      }
+    ],
+    "test/connectorCoreMethods.test.js": [
+      {
+        "base": "^const serverSrc = \\[\"server\\.js\", \"routes/health\\.js\"\\]\\.map\\(f => require\\(\"fs\"\\)\\.readFileSync\\(require\\(\"path\"\\)\\.join\\(__dirname, \"\\.\\.\", f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$",
+        "head": "^const serverSrc = \\[\"server\\.js\", \"routes/health\\.js\", \"routes/discover\\.js\"\\]\\.map\\(f => require\\(\"fs\"\\)\\.readFileSync\\(require\\(\"path\"\\)\\.join\\(__dirname, \"\\.\\.\", f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$"
+      }
+    ]
+  },
+  "declaredHarnessNotes": {
+    "test/discoverySubnets.test.js": "line 19: the source text read is routes/discover.js; line 141: inside registerDiscoverRoutes the route ends \"\\n  });\" (without this the slice end is -1 and the text assertion would look at almost the whole file). Every assertion unchanged; the message \"must exist in server.js\" on line 23 is an assertion line and is deliberately left as it is.",
+    "test/connectorCoreMethods.test.js": "line 29: routes/discover.js joins the scanned sources, so the generated test \"server.js checks a connector has discoverAt() before calling it\" stays active (the call and its guard move).",
+    "test/helpers/discoverCode.js": "declared helper (Guardian reviews every line): only the header comment, the SERVER→MODULE constant, the unused routeEnd import and loadSource() change. Base: slices server.js into the sandbox where os/dgram/app/requireAdmin/getConnector/listConnectorTypes are globals. Head: runs routes/discover.js in the sandbox with a require() resolving only os and dgram to the same fakes, removes those six globals, calls registerDiscoverRoutes(app, deps), requires it to return nothing, takes the helpers from _internal. test/discoverBehaviour.test.js is not changed."
+  },
+  "mutations": [
+    {
+      "name": "requireAdmin-dropped",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 1. GET /api/discover is registered with requireAdmin as its only middleware, before the handler",
+        "test/discoverBehaviour.test.js :: 1. when requireAdmin refuses, the handler never runs (nothing is probed, no route lookup)"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "app.get(\"/api/discover\", requireAdmin, async (req, res) => {",
+        "replace": "app.get(\"/api/discover\", requireAdmin && ((q, s, n) => n()), async (req, res) => {"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "app.get(\"/api/discover\", requireAdmin, async (req, res) => {",
+        "replace": "app.get(\"/api/discover\", requireAdmin && ((q, s, n) => n()), async (req, res) => {"
+      }
+    },
+    {
+      "name": "cgnat-not-skipped",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 3. carrier-grade NAT (100.64.0.0/10) and link-local (169.254.0.0/16) addresses are never a LAN — whatever the adapter is called and whatever its mask"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "const SKIP_ADDRESS_RE = /^(100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.|169\\.254\\.)/;",
+        "replace": "const SKIP_ADDRESS_RE = /^(169\\.254\\.)/;"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "const SKIP_ADDRESS_RE = /^(100\\.(6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.|169\\.254\\.)/;",
+        "replace": "const SKIP_ADDRESS_RE = /^(169\\.254\\.)/;"
+      }
+    },
+    {
+      "name": "host-route-scanned",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 3. a /32 address is one host, not a network — whatever the adapter is called"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    if (a.netmask === \"255.255.255.255\") continue;\n",
+        "replace": ""
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "    if (a.netmask === \"255.255.255.255\") continue;\n",
+        "replace": ""
+      }
+    },
+    {
+      "name": "fallback-removed",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 3. no local network to sweep: 400 with code no_local_network, and nothing is probed",
+        "test/discoverySubnets.test.js :: a machine whose default route is a VPN falls back to its real networks",
+        "test/discoverySubnets.test.js :: not knowing the route is not a failure"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  return all.includes(base) ? [base] : all;",
+        "replace": "  return [base];"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "  return all.includes(base) ? [base] : all;",
+        "replace": "  return [base];"
+      }
+    },
+    {
+      "name": "min-prefix-16",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 2. the largest block that may be swept is a /20 (4096 addresses); anything larger is refused by name",
+        "test/discoverBehaviour.test.js :: 3. an invalid subnet argument is a 400 with the parser's message, before any stream starts"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "const MIN_SCAN_PREFIX = 20;",
+        "replace": "const MIN_SCAN_PREFIX = 16;"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "const MIN_SCAN_PREFIX = 20;",
+        "replace": "const MIN_SCAN_PREFIX = 16;"
+      }
+    },
+    {
+      "name": "single-port",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 4. every address is tried on port 80 (bare URL) and then 7125; a printer answering only on 7125 is found",
+        "test/discoverBehaviour.test.js :: 5. without a subnet the routed LAN's /24 is swept in batches of 40: 1 initial + 7 progress + 1 done, found counted as it goes",
+        "test/discoverBehaviour.test.js :: 6. a request closed during the first batch stops the sweep: no further batch is probed and no done record is written",
+        "test/discoverBehaviour.test.js :: 6. a request that stays open runs every batch and ends with the done record"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "const DISCOVER_PORTS = [80, 7125];",
+        "replace": "const DISCOVER_PORTS = [80];"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "const DISCOVER_PORTS = [80, 7125];",
+        "replace": "const DISCOVER_PORTS = [80];"
+      }
+    },
+    {
+      "name": "first-connector-only",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 4. a connector that throws does not stop the next one"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "    } catch { /* try the next connector */ }",
+        "replace": "    } catch { return null; }"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "      } catch { /* try the next connector */ }",
+        "replace": "      } catch { return null; }"
+      }
+    },
+    {
+      "name": "no-network-unexplained",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 3. no local network to sweep: 400 with code no_local_network, and nothing is probed",
+        "test/discoverySubnets.test.js :: a machine with nothing scannable says so instead of scanning nonsense"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "        code: \"no_local_network\"\n",
+        "replace": "        code: \"no_lan\"\n"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "          code: \"no_local_network\"\n",
+        "replace": "          code: \"no_lan\"\n"
+      }
+    },
+    {
+      "name": "nosniff-dropped",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 5. headers: NDJSON, never cached, never sniffed"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  res.set(\"X-Content-Type-Options\", \"nosniff\");\n  const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n  line({ subnets: labels, total: ips.length, scanned: 0 });",
+        "replace": "  const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n  line({ subnets: labels, total: ips.length, scanned: 0 });"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "    res.set(\"X-Content-Type-Options\", \"nosniff\");\n    const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n    line({ subnets: labels, total: ips.length, scanned: 0 });",
+        "replace": "    const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + \"\\n\"); };\n    line({ subnets: labels, total: ips.length, scanned: 0 });"
+      }
+    },
+    {
+      "name": "abort-ignored",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 6. a request closed during the first batch stops the sweep: no further batch is probed and no done record is written"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "  // A browser that navigated away should not leave the scan running.\n  let aborted = false;\n  req.on(\"close\", () => { aborted = true; });\n  const B = 40;",
+        "replace": "  // A browser that navigated away should not leave the scan running.\n  let aborted = false;\n  req.on(\"close\", () => {});\n  const B = 40;"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "    // A browser that navigated away should not leave the scan running.\n    let aborted = false;\n    req.on(\"close\", () => { aborted = true; });\n    const B = 40;",
+        "replace": "    // A browser that navigated away should not leave the scan running.\n    let aborted = false;\n    req.on(\"close\", () => {});\n    const B = 40;"
+      }
+    },
+    {
+      "name": "udp-socket-not-closed",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 7. a socket error, a refused connect, no sockets at all, and an unbound 0.0.0.0 are all 'unknown' (null), with the socket closed and the timer cleared",
+        "test/discoverBehaviour.test.js :: 7. a socket that never answers gives null at the deadline, and is closed",
+        "test/discoverBehaviour.test.js :: 7. the default route is read from a UDP socket connected to 8.8.8.8:53; the socket is closed once and the deadline timer cleared"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "const finish = (v) => { if (!done) { done = true; try { sock.close(); } catch {} resolve(v); } };",
+        "replace": "const finish = (v) => { if (!done) { done = true; resolve(v); } };"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "const finish = (v) => { if (!done) { done = true; try { sock.close(); } catch {} resolve(v); } };",
+        "replace": "const finish = (v) => { if (!done) { done = true; resolve(v); } };"
+      }
+    },
+    {
+      "name": "udp-deadline-removed",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 7. a socket that never answers gives null at the deadline, and is closed"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "const timer = setTimeout(() => finish(null), timeoutMs);",
+        "replace": "const timer = setTimeout(() => {}, timeoutMs);"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "const timer = setTimeout(() => finish(null), timeoutMs);",
+        "replace": "const timer = setTimeout(() => {}, timeoutMs);"
+      }
+    },
+    {
+      "name": "udp-timer-not-cleared",
+      "detectedBy": [
+        "test/discoverBehaviour.test.js :: 7. a socket error, a refused connect, no sockets at all, and an unbound 0.0.0.0 are all 'unknown' (null), with the socket closed and the timer cleared",
+        "test/discoverBehaviour.test.js :: 7. the default route is read from a UDP socket connected to 8.8.8.8:53; the socket is closed once and the deadline timer cleared"
+      ],
+      "base": {
+        "file": "server.js",
+        "find": "      sock.connect(53, \"8.8.8.8\", () => {\n        clearTimeout(timer);",
+        "replace": "      sock.connect(53, \"8.8.8.8\", () => {"
+      },
+      "head": {
+        "file": "routes/discover.js",
+        "find": "      sock.connect(53, \"8.8.8.8\", () => {\n        clearTimeout(timer);",
+        "replace": "      sock.connect(53, \"8.8.8.8\", () => {"
+      }
+    }
+  ],
+  "contractSets": [
+    "discover",
+    "health",
+    "smoke"
+  ],
+  "contractNotes": "discover.json: 11 requests, each with a declared expectation; N addresses in batches of 40 = 1 initial + ceil(N/40) progress + 1 done record (/30: 3; bare x.x.x.0: 9). health.json and smoke.json unchanged. NDJSON compared record by record; trackDelays adds 300 ms (the route lookup) to the 25 s Health deadline.",
+  "packaging": "Dockerfile already has `COPY routes ./routes` (added for Health); pkg follows the require graph (no pkg.scripts entry: not a worker); test/docker.test.js walks server.js's require graph and will see routes/discover.js under the existing COPY. No package.json change. Policy rule 8: real Docker + pkg builds (V12) remain mandatory before deployment, each download/build owner-approved.",
+  "reconciliation": {
+    "lines": {
+      "sliceA": {
+        "firstLine": 7257,
+        "lastLine": 7421
+      },
+      "sliceB": {
+        "firstLine": 7485,
+        "lastLine": 7532
+      },
+      "dgramLines": {
+        "firstLine": 13,
+        "lastLine": 15
+      },
+      "keptBetween": {
+        "firstLine": 7422,
+        "lastLine": 7484
+      },
+      "serverLines": {
+        "before": 7723,
+        "after": 7512
+      }
+    },
+    "note": "line numbers at the base; keptBetween = GET /api/probe-printer and POST /api/test-connection with their comments, byte-identical before and after (checked by the codemod). serverLines counts a trailing empty element (7,722 lines of text before)."
+  },
+  "verifiedBaseline": {
+    "commit": "7e2cf0008221431268aad5a1c7abb4df8c750fc5",
+    "what": "Gate 2 commit: application code identical to production 123470b; pins (24), loader, contract set and NDJSON/expect harness in place. Baseline evidence: pins 24/24; 13/13 mutations detected on base; discover+smoke and health+smoke contract runs stable in all six orderings."
+  },
+  "extractionParent": "Two different commits, not to be confused. (1) Verification baseline: the Gate 2 commit 7e2cf0008221431268aad5a1c7abb4df8c750fc5 — the application and test files every V1–V11 result and the Guardian review were measured against. (2) The extraction commit's immediate parent: the tooling-only commit that adds this final manifest, the codemod and the identity-check correction with its tests. That commit changes nothing outside tools/refactor/ and scripts/verify-refactor.js, so its application and test files are identical to the verification baseline; the verifier's --base for re-runs may be either.",
+  "rollback": {
+    "beforeCommit": "the extraction is uncommitted: `git checkout -- server.js test/discoverySubnets.test.js test/connectorCoreMethods.test.js test/helpers/discoverCode.js && rm routes/discover.js` restores the application and tests exactly and leaves the tooling preparation in place",
+    "afterCommit": "`git revert <extraction commit>` (keeps history), or `git reset --keep <the extraction commit's immediate parent>` = the tooling-only commit. Both keep the approved tooling (manifest, codemod, identity correction, Gate 2 pins and harness).",
+    "notThis": "`git reset --keep 7e2cf00` would also drop the tooling-only commit — use it only if the tooling preparation itself is to be withdrawn.",
+    "never": "production main (123470b) is not touched by any of this; it changes only through a separate release decision"
+  },
+  "knownToolingLimitations": [
+    "compareRuns compares logs, files written and audit rows between base1 and head only, and consults base2 for printer requests only when base1 and head differ: a base2 that differed only there would not block. Separate tooling follow-up (recorded 2026-11-16); mitigated here by comparing the three baseline runs in all six orderings.",
+    "disconnect handling is pinned in-process only (the harness client cannot abort a request)",
+    "concurrency within a batch of 40 is not verified",
+    "a successful default-route lookup is covered only by the pins' fake socket (the isolated container has no route)",
+    "the connectors' 900 ms fingerprint timeout is not pinned here (connectors do not move)"
+  ]
+}

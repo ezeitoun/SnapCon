@@ -16,7 +16,7 @@ const conn = require("../../connectors/creality-klipper");
 
 const ROOT = path.join(__dirname, "..", "..");
 const appSrc = fs.readFileSync(path.join(ROOT, "public", "app.js"), "utf8");
-const serverSrc = fs.readFileSync(path.join(ROOT, "server.js"), "utf8");
+const serverSrc = ["server.js", "routes/snapshot.js"].map(f => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n");
 const SRC_CREALITY_BRANCH = 'if (o.connector === "creality-klipper")';
 const crealityProbeSrc = () => {
   const i = serverSrc.indexOf("async function detectCrealityWebrtcCamera(");
@@ -274,8 +274,8 @@ test("an ordinary List View render does NOT close WebRTC sessions", () => {
   const branch = appSrc.match(/if\(VIEW_MODE==='list'\)\{[\s\S]*?renderFleetListRows\([^)]*\);/)[0];
   assert.equal(/closeAllCamRtc\(\)/.test(branch.replace(/\/\/[^\n]*/g, "")), false,
     "a fleet refresh in List View must not tear down the Snapshot modal's session");
-  // The rest of the branch is unchanged — the table is still rebuilt.
-  assert.match(branch, /wrap\.innerHTML=""; CARD_CACHE\.clear\(\);/);
+  // A full render still clears #fleet; a poll keeps the table (renderFleetListRows).
+  assert.match(branch, /if\(!incremental\) wrap\.innerHTML="";\s*CARD_CACHE\.clear\(\);/);
 });
 
 test("the full-rebuild teardown path still closes sessions", () => {
@@ -294,10 +294,12 @@ test("sessions can only be created for visible Camera View tiles, so they cannot
 });
 
 test("List View rows mount no camera elements of their own", () => {
+  // The table and its rows, and the cells' HTML (listRowCellsHtml).
   const fn = appSrc.match(/function renderFleetListRows\([\s\S]*?\n\}/)[0];
-  assert.equal(/mountCamRtc|mountCamShot|cam-shot-slot/.test(fn), false);
+  const cells = appSrc.match(/function listRowCellsHtml\([\s\S]*?\n\}/)[0];
+  assert.equal(/mountCamRtc|mountCamShot|cam-shot-slot/.test(fn + cells), false);
   // A camera button that opens the Snapshot modal is all a List row carries.
-  assert.match(fn, /data-snap="\$\{p\.id\}"/);
+  assert.match(cells, /data-snap="\$\{p\.id\}"/);
 });
 
 test("sessions are gated on visibility by IntersectionObserver, not opened for every card", () => {

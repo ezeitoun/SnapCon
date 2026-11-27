@@ -24,7 +24,7 @@ const ROOT = path.join(__dirname, "..");
 const serverSrc = fs.readFileSync(path.join(ROOT, "server.js"), "utf8");
 const appSrc = fs.readFileSync(path.join(ROOT, "public", "app.js"), "utf8");
 
-const SECRET = "603db0db";   // shape of a real Bambu access code
+const SECRET = "123ab4cd";   // shape of a real Bambu access code
 
 // A function's source ends at the first "}" in column 0 — every nested block in
 // these two is indented.
@@ -53,8 +53,8 @@ function runPublicCfg(printers, role = "admin") {
 }
 
 const SAVED_PRINTER = {
-  name: "P2S", url: "http://192.168.16.223", connector: "bambu-lab",
-  serial: "22E8AJ5C2001188", verificationCode: SECRET, token: "moonraker-token",
+  name: "P2S", url: "http://192.168.60.223", connector: "bambu-lab",
+  serial: "00T0ES0T0000001", verificationCode: SECRET, token: "moonraker-token",
 };
 
 test("/api/config never carries a printer's access code", () => {
@@ -111,8 +111,8 @@ async function buildRecord(submitted, existing) {
   return vm.runInContext("buildPrinterRecord", ctx)(submitted, existing);
 }
 
-const STORED = { id: "p1", url: "http://192.168.16.223", connector: "bambu-lab", verificationCode: SECRET };
-const SUBMITTED = { name: "P2S", url: "http://192.168.16.223", connector: "bambu-lab" };
+const STORED = { id: "p1", url: "http://192.168.60.223", connector: "bambu-lab", verificationCode: SECRET };
+const SUBMITTED = { name: "P2S", url: "http://192.168.60.223", connector: "bambu-lab" };
 
 test("saving a row whose access code was never touched keeps the stored code", async () => {
   // The masked control sends nothing unless the user actually replaces or

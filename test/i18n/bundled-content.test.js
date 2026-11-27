@@ -185,7 +185,7 @@ test("the queue.* and settings.queue.* sections exist — attention reason label
   // Every action id from QueueEngine.js's RESOLUTIONS_BY_REASON must have a
   // translated label (QUEUE_ACTION_LABEL_KEYS in app.js).
   ["action_resume", "action_retry_job", "action_skip_job", "action_stop_queue",
-    "action_retry_bed_clear", "action_skip_bed_clear", "action_use_current_file", "action_acknowledge_resume"]
+    "action_retry_bed_clear", "action_skip_bed_clear", "action_use_current_file", "action_acknowledge_resume", "action_mark_completed"]
     .forEach(k => assert.ok(`queue.${k}` in enFlat, `queue.${k} must exist`));
   // Plural pairs — base keys must NOT exist directly (tn() consumers only).
   ["printer_count", "jobs_queued", "idle_with_queue", "idle_with_queue_stopped"].forEach(base => {
@@ -194,9 +194,10 @@ test("the queue.* and settings.queue.* sections exist — attention reason label
     assert.equal(`queue.${base}` in enFlat, false, `queue.${base} (no suffix) must not exist`);
   });
   // Destructive confirmations must be complete sentences.
-  ["release_error_confirm", "stop_queue_confirm", "clear_queue_confirm", "cancel_print_confirm", "delete_pool_confirm"]
+  ["release_error_confirm", "stop_queue_confirm", "clear_queue_confirm", "cancel_print_confirm", "delete_pool_confirm", "mark_completed_confirm"]
     .forEach(k => assert.ok(`queue.${k}` in enFlat, `queue.${k} must exist`));
   assert.ok(enFlat["queue.delete_pool_confirm"].includes("{name}"));
+  assert.ok(enFlat["queue.mark_completed_confirm"].includes("{file}"), "the confirmation names the file");
   // /api/queue*, /api/printer-pools*, and /api/queue-store's additive codes.
   ["error_no_printer_access", "error_pool_not_found", "error_pool_name_required",
     "error_queue_save_failed", "error_queue_save_failed_detail", "error_reset_confirm_mismatch"]

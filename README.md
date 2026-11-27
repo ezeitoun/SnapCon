@@ -471,9 +471,22 @@ This is an experimental feature, to get it working, configure your connection as
 **Hostname**: enter the actual hostname/IP of the printer
 **Device UI**: enter http://snapcon-ip:4545/orca/Printer-Name-in-SnapCon
 
-After saving, go to the Process settings' Other tab and add a Post-Processing Script, pointing to a batch file that runs:
-``D:\snapcon-win-x64.exe --printer "U1_White" --snapcon x.x.x.x --outputname "%SLIC3R_PP_OUTPUT_NAME%" --load %1``
+After saving, go to the Process settings' Other tab and add a Post-Processing Script, pointing to a batch file containing:
+```bat
+@echo off
+rem Export G-code gives SLIC3R_PP_OUTPUT_NAME as a full path; SnapCon needs only the file name.
+for %%F in ("%SLIC3R_PP_OUTPUT_NAME%") do set "SNAPCON_NAME=%%~nxF"
+D:\snapcon-win-x64.exe --printer "U1_White" --snapcon x.x.x.x --outputname "%SNAPCON_NAME%" --load "%~1"
+```
 (If Orca is running on the same machine as SnapCon, --snapcon can be omitted.)
+
+Leave `--wait` out of Orca's script by default:
+- **Without `--wait`, exit code 0 means SnapCon accepted the file, not that it was delivered.** Check the printer's card in SnapCon to see how it went.
+- **With `--wait`, Orca waits until the transfer ends or the time runs out, and exit code 3 means the transfer is still waiting or sending, not necessarily that it failed.** Orca may report the export as failed while SnapCon keeps the transfer and delivers it later.
+- **Exit code 1 doesn't always mean the same thing.** If SnapCon refused the send or couldn't be reached, such as with an unknown printer name, no transfer was created and nothing appears on a card. With `--wait`, it can also mean a transfer SnapCon had accepted then failed or was cancelled: the card says what happened, and a transfer cancelled late may already have reached the printer. In neither case does SnapCon send the file again by itself.
+- **Orca may report only that the script failed and its error code, not SnapCon's reason.** To see the reason, run the batch file's command in a terminal.
+- **Before retrying, look at the printer's card in SnapCon**, especially when sending the same file name: a second send of a name that is already waiting is refused.
+
 After clicking Upload or Upload/Print — neither of which actually performs an upload or print operation — you can switch to the Device tab to control the printer.
 
 Depending on feedback on this feature, the final GUI in the Device tab may end up matching Snapmaker Orca's (Snorca) Device Control interface exactly.

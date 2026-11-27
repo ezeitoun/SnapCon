@@ -1,0 +1,45 @@
+{
+  "comment": "Declared volatile fields (docs/refactoring-policy.md). A field is masked only if it is declared here AND differs between the two base runs; everything else is compared exactly. '*' matches one array index only.",
+  "results": {
+    "smoke-fleet": [
+      {
+        "pointer": "/*/lastSeenAt",
+        "kind": "timestamp",
+        "reason": "time the printer last answered"
+      },
+      {
+        "pointer": "/*/statusCheckedAt",
+        "kind": "timestamp",
+        "reason": "time an offline printer was last checked"
+      }
+    ],
+    "smoke-library-status": [
+      {
+        "pointer": "/indexer/lastHash/finishedAt",
+        "kind": "timestamp",
+        "reason": "time the Library's background hash finished"
+      }
+    ]
+  },
+  "logs": {
+    "stepAttribution": {
+      "kind": "timing",
+      "reason": "background lines (Library scan, warnings) land in whichever replay step is running; line content and count are still compared exactly, and [health] lines keep their step"
+    },
+    "exactStepPrefixes": [
+      "[health]"
+    ],
+    "linePatterns": [
+      {
+        "regex": "^\\[library\\] scanned G-code folder: ok in (\\d+\\.\\d) s — ",
+        "kind": "duration",
+        "reason": "measured scan time; elapsed time cannot be made to vary on demand, so a declared duration is masked even when the two base runs happened to agree (reported every time)"
+      },
+      {
+        "regex": "^\\(node:(\\d+)\\) ",
+        "kind": "pid",
+        "reason": "process ID in Node's own runtime-warning prefix (e.g. the SQLite ExperimentalWarning); Node's internal threads share the PID range, so it can shift by one between runs. Only the number is masked; the warning text is compared exactly."
+      }
+    ]
+  }
+}

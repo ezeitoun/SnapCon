@@ -5,7 +5,7 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
-const { Transform, Readable } = require("stream");
+const { Readable } = require("stream");
 const { parseGcodeMap, normHex } = require("../parser");
 // Local job files are read through netfs: the G-code folder is often a NAS,
 // and a synchronous read of an unreachable share froze the whole server for
@@ -13,6 +13,15 @@ const { parseGcodeMap, normHex } = require("../parser");
 const netfs = require("../netfs").getNetFs();
 
 const baseUrl = p => String(p.url).replace(/\/+$/, "");
+
+// Moonraker's WebSocket address for a printer, on the same host AND port as
+// its HTTP address. A real U1 stores no port (always 80), so its address is
+// the bare ws://<ip>/websocket; a printer on another port keeps that port.
+// Throws on an unparseable url, like new URL().
+function websocketUrl(p) {
+  const token = p.token || "";
+  return `ws://${new URL(baseUrl(p)).host}/websocket${token ? "?token=" + encodeURIComponent(token) : ""}`;
+}
 
 // fetch with a built-in timeout via AbortController.
 // NOTE: the timer only covers the response HEADERS — reading the body after
@@ -22,6 +31,27 @@ async function fetchTimeout(url, ms = 3500, opts = {}) {
   const id = setTimeout(() => ctrl.abort(), ms);
   try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
   finally { clearTimeout(id); }
+}
+
+// Fetch + read the body under ONE timeout (docs/TODO.md §37 P1): the body of a
+// ranged read is what the identity check compares, and a printer that sends
+// the headers and then stalls would otherwise hold it — and the upload or the
+// queue dispatch waiting on it — forever.
+// A Range request answered with anything but 206 is not read further: the
+// caller cannot compare it, and a 200 would be the whole file (§37 P2 reads
+// back after every upload, so a printer that ignores ranges must not cost a
+// whole download each time).
+async function fetchBufferTimeout(url, ms, opts = {}) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { ...opts, signal: ctrl.signal });
+    if (opts.headers && opts.headers.Range && r.status !== 206) {
+      ctrl.abort();
+      return { ok: r.ok, status: r.status, buffer: Buffer.alloc(0) };
+    }
+    return { ok: r.ok, status: r.status, buffer: Buffer.from(await r.arrayBuffer()) };
+  } finally { clearTimeout(id); }
 }
 
 // Fetch + parse JSON under ONE timeout. A printer that accepts the connection
@@ -91,47 +121,146 @@ async function moonrakerPost(p, apiPath, ms = 8000) {
 }
 const sendGcode = (p, script, ms) => moonrakerPost(p, "/printer/gcode/script?script=" + encodeURIComponent(script), ms);
 
-// Stream a file to the printer as multipart/form-data, reporting bytes sent so
-// the UI can show a real upload progress bar. Resolves on the printer's 2xx.
-async function uploadWithProgress(base, fp, name, job) {
+// ---- Sending a file (docs/TODO.md §37 P1) ----
+// Every upload ends, with one of three outcomes the caller can act on:
+//   resolved             the printer answered and accepted the file;
+//   e.outcome "failed"   the transfer did not complete: nothing connected, it
+//                        was cut before the last byte (a body shorter than its
+//                        Content-Length, which the printer discards), the
+//                        printer refused it, or the local file could not be
+//                        read. That is all it says: it is not evidence about
+//                        what the printer holds;
+//   e.outcome "unknown"  every byte was handed over and no definite answer came
+//                        back (no reply in time, the connection dropped after
+//                        the last byte, a reply that could not be read). The
+//                        file may or may not be on the printer.
+// Three deadlines, each over one stretch of the transfer, overridable per
+// upload through job.timeouts (the server fills it from config.json's
+// uploadTimeouts):
+//   connectMs     request created → connection open (name lookup included);
+//   inactivityMs  restarted each time a chunk is handed to the OS: a printer
+//                 that stops taking data. Not a limit on the whole transfer,
+//                 so a slow but steady one never trips it;
+//   confirmMs     last byte handed to the OS → the printer's complete reply.
+//                 It also covers the bytes still in the OS buffers on their
+//                 way to the printer, which on a slow link is a good share.
+const UPLOAD_TIMEOUTS = Object.freeze({ connectMs: 10000, inactivityMs: 60000, confirmMs: 120000 });
+const uploadTimeoutsFor = job => ({ ...UPLOAD_TIMEOUTS, ...((job && job.timeouts) || {}) });
+const secs = ms => Math.round(ms / 1000);
+function uploadError(message, code, outcome, extra) {
+  return Object.assign(new Error(message), { code, outcome, ...(extra || {}) });
+}
+
+// Streams a file as multipart/form-data, reporting the bytes handed to the OS
+// so the UI can show real progress. `judge(statusCode, body)` reads the
+// printer's answer: it returns for an accepted file and throws (an error with
+// its own code and outcome) otherwise. Shared by the Moonraker upload below and
+// FlashForge's native one, which differ only in the address, headers, field
+// name and how the answer reads.
+//
+// Cancel (POST /api/print-cancel calls job.cancelUpload) while bytes are going
+// out cuts the body short: a broken upload, never a complete-looking file.
+// After the last byte nothing is cut: the file may already be complete on the
+// printer. Cancel then only sets job.cancelRequested, so the caller starts
+// nothing, and this keeps waiting for the printer's answer until the
+// confirmation deadline, which is the real outcome reported.
+//
+// Each upload has its own connection (agent: false): no idle keep-alive socket
+// the printer may already have closed, and the connect deadline means one thing.
+async function sendMultipartUpload({ url, headers, field, name, fp, job, judge }) {
   const fileSize = (await netfs.stat(fp)).size;
+  const T = uploadTimeoutsFor(job);
   return new Promise((resolve, reject) => {
     const boundary = "----snapcon" + Math.random().toString(16).slice(2);
-    const pre = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
+    const pre = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
     const post = Buffer.from(`\r\n--${boundary}--\r\n`);
     job.total = pre.length + fileSize + post.length;
     job.sent = 0;
-    const u = new URL(base + "/server/files/upload");
+    let settled = false, lastByte = false, timer = null;
+    const u = new URL(url);
     const req = http.request({
-      protocol: u.protocol, hostname: u.hostname, port: u.port || 80, path: u.pathname, method: "POST",
-      headers: { "Content-Type": "multipart/form-data; boundary=" + boundary, "Content-Length": job.total }
-    }, res => {
-      let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
-      // UPLOAD_REJECTED: the printer answered and refused the file (as
-      // opposed to a connection that failed), so the browser can say so.
-      res.on("end", () => (res.statusCode < 300 ? resolve(b) : reject(Object.assign(new Error("Upload " + res.statusCode + ": " + b.slice(0, 160)), { code: "UPLOAD_REJECTED" }))));
+      protocol: u.protocol, hostname: u.hostname, port: u.port || 80, path: u.pathname, method: "POST", agent: false,
+      headers: { "Content-Type": "multipart/form-data; boundary=" + boundary, "Content-Length": job.total, ...headers }
     });
-    req.on("error", e => { job.cancelUpload = null; reject(e); });
-    req.write(pre); job.sent += pre.length;
     const fileStream = netfs.createReadStream(fp);
-    const counter = new Transform({ transform(chunk, _e, cb) { job.sent += chunk.length; cb(null, chunk); } });
-    // A local read that fails mid-upload (the NAS went away) aborts the
-    // request too: the printer must see a broken upload, never a complete one
-    // with the tail missing — Content-Length makes the short body invalid.
-    fileStream.on("error", e => { job.cancelUpload = null; req.destroy(e); reject(e); });
-    // Cancel (POST /api/print-cancel), possible only while bytes are still
-    // going out: the printer gets a body shorter than its Content-Length, a
-    // broken upload, never a complete-looking file. Cleared once the last
-    // byte is written, after which it is too late to cancel.
-    job.cancelUpload = () => {
+    // Settles once, whichever comes first: the answer, a deadline, a cancel, an
+    // error. Everything that could still fire afterwards is a no-op.
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       job.cancelUpload = null;
-      const e = new Error("Upload cancelled"); e.code = "UPLOAD_CANCELLED";
-      fileStream.destroy(); req.destroy(e); reject(e);
+      if (err) { fileStream.destroy(); req.destroy(); reject(err); }
+      else resolve(value);
     };
-    counter.on("error", reject);
-    counter.on("data", chunk => { if (!req.write(chunk)) { counter.pause(); req.once("drain", () => counter.resume()); } });
-    counter.on("end", () => { job.cancelUpload = null; req.write(post); job.sent += post.length; req.end(); });
-    fileStream.pipe(counter);
+    const arm = (ms, makeError) => { clearTimeout(timer); timer = setTimeout(() => finish(makeError()), ms); };
+    // A connection lost before the last byte is a failed transfer; after it,
+    // the printer may have the whole file.
+    const lost = e => lastByte
+      ? uploadError(`All ${job.total} bytes were sent, but the connection to the printer was lost before it confirmed the upload${e && e.message ? " (" + e.message + ")" : ""}`, "UPLOAD_UNCONFIRMED", "unknown", { reason: "connection-lost" })
+      : Object.assign(e || new Error("Connection to the printer lost"), { outcome: "failed" });
+    const stalled = () => uploadError(`The printer stopped accepting data for ${secs(T.inactivityMs)} s`, "UPLOAD_STALLED", "failed", { abortedMidBody: true, seconds: secs(T.inactivityMs) });
+
+    arm(T.connectMs, () => uploadError(`Could not connect to the printer within ${secs(T.connectMs)} s`, "UPLOAD_CONNECT_TIMEOUT", "failed", { seconds: secs(T.connectMs) }));
+    req.on("error", e => finish(lost(e)));
+    req.on("response", res => {
+      let b = "";
+      res.setEncoding("utf8");
+      res.on("data", d => { if (b.length < 65536) b += d; });
+      res.on("end", () => {
+        try { judge(res.statusCode, b); }
+        catch (e) { return finish(e); }
+        // Accepted before the whole body had gone: not an answer about this file.
+        if (!lastByte) return finish(uploadError("The printer answered before it had received the whole file", "UPLOAD_UNCONFIRMED", "unknown", { reason: "unreadable-reply" }));
+        finish(null, b);
+      });
+      res.on("error", e => finish(lost(e)));
+      res.on("close", () => { if (!res.complete) finish(lost(new Error("the printer's answer was cut off"))); });
+    });
+    // A local read that fails mid-upload (the NAS went away) aborts the
+    // request: the printer must see a broken upload, never a complete one with
+    // the tail missing.
+    fileStream.on("error", e => finish(Object.assign(e, { outcome: "failed" })));
+    job.cancelUpload = () => {
+      job.cancelRequested = true;
+      finish(uploadError("Upload cancelled", "UPLOAD_CANCELLED", "failed", { abortedMidBody: true }));
+    };
+    const send = () => {
+      if (settled) return;
+      const sent = n => err => {
+        if (err || settled) return;
+        job.sent += n;
+        if (!lastByte) arm(T.inactivityMs, stalled);
+      };
+      arm(T.inactivityMs, stalled);
+      req.write(pre, sent(pre.length));
+      fileStream.on("data", chunk => {
+        if (!req.write(chunk, sent(chunk.length))) { fileStream.pause(); req.once("drain", () => fileStream.resume()); }
+      });
+      fileStream.on("end", () => { if (!settled) req.end(post, sent(post.length)); });
+    };
+    req.on("socket", s => { if (s.connecting) s.once("connect", send); else send(); });
+    // The last byte is with the OS: from here the printer may hold the file.
+    req.on("finish", () => {
+      if (settled) return;
+      lastByte = true;
+      job.sent = job.total;
+      job.confirmingSince = Date.now();
+      job.cancelUpload = () => { job.cancelRequested = true; job.cancelUpload = null; };
+      arm(T.confirmMs, () => uploadError(`All ${job.total} bytes were sent, but the printer did not confirm the upload within ${secs(T.confirmMs)} s`, "UPLOAD_UNCONFIRMED", "unknown", { reason: "timeout", seconds: secs(T.confirmMs) }));
+    });
+  });
+}
+
+// Moonraker: any 2xx accepts the file.
+async function uploadWithProgress(base, fp, name, job) {
+  return sendMultipartUpload({
+    url: base + "/server/files/upload", headers: {}, field: "file", name, fp, job,
+    // UPLOAD_REJECTED: the printer answered and refused the file (as opposed
+    // to a connection that failed), so the browser can say so.
+    judge: (status, body) => {
+      if (status >= 300) throw uploadError("Upload " + status + ": " + body.slice(0, 160), "UPLOAD_REJECTED", "failed");
+    },
   });
 }
 const uploadFile = (p, fp, name, job) => uploadWithProgress(baseUrl(p), fp, name, job);
@@ -203,7 +332,9 @@ async function listFiles(p) {
 const IDENTITY_WINDOW = 64 * 1024;
 const baseNameOf = s => String(s).replace(/\\/g, "/").split("/").pop();
 
-async function compareRemoteFile(p, name, localPath) {
+// opts.rangeTimeoutMs: the deadline for each ranged read, headers and body
+// together (10 s; tests shorten it).
+async function compareRemoteFile(p, name, localPath, { rangeTimeoutMs = 10000 } = {}) {
   // Throws if the local file is gone — a caller must not read that as a match.
   const localSize = (await netfs.stat(localPath)).size;
 
@@ -217,7 +348,18 @@ async function compareRemoteFile(p, name, localPath) {
     return { present: true, sameSize: false, identical: false, localSize, remoteSize: remote.size };
   }
 
-  const url = baseUrl(p) + "/server/files/gcodes/" + String(remote.path).split("/").map(encodeURIComponent).join("/");
+  const same = await compareWindows(p, remote.path, localPath, localSize, rangeTimeoutMs);
+  if (same === "unverifiable") return { present: true, sameSize: true, identical: false, localSize, remoteSize: remote.size, unverified: true };
+  if (same === "different") return { present: true, sameSize: true, identical: false, localSize, remoteSize: remote.size };
+  return { present: true, sameSize: true, identical: true, localSize, remoteSize: remote.size };
+}
+
+// Head, middle and tail of the printer's copy at `remotePath` (relative to the
+// gcodes root) against the local file of the same length: "same" when every
+// window matched, "different" when one did not, "unverifiable" when one could
+// not be read in time or the printer did not honour the range.
+async function compareWindows(p, remotePath, localPath, localSize, rangeTimeoutMs) {
+  const url = baseUrl(p) + "/server/files/gcodes/" + String(remotePath).split("/").map(encodeURIComponent).join("/");
   // Head, middle and tail: a re-slice that changed only infill differs in the
   // middle, and one that changed only end-gcode differs at the tail.
   const win = Math.min(IDENTITY_WINDOW, localSize);
@@ -226,21 +368,93 @@ async function compareRemoteFile(p, name, localPath) {
   for (const start of starts) {
     const len = Math.min(win, localSize - start);
     if (len <= 0) continue;
+    // One deadline over the whole read: a window that does not arrive in time
+    // leaves the copy unverified.
     let res;
-    try { res = await fetchTimeout(url, 10000, { headers: { Range: `bytes=${start}-${start + len - 1}` } }); }
-    catch { return { present: true, sameSize: true, identical: false, localSize, remoteSize: remote.size, unverified: true }; }
+    try { res = await fetchBufferTimeout(url, rangeTimeoutMs, { headers: { Range: `bytes=${start}-${start + len - 1}` } }); }
+    catch { return "unverifiable"; }
     // 206 is the only answer that proves the range was honoured; a 200 would
     // be the whole file and must not be compared against one window.
-    if (!res.ok || res.status !== 206) {
-      return { present: true, sameSize: true, identical: false, localSize, remoteSize: remote.size, unverified: true };
-    }
-    const remoteChunk = Buffer.from(await res.arrayBuffer());
+    if (!res.ok || res.status !== 206) return "unverifiable";
+    const remoteChunk = res.buffer;
     const localChunk = await netfs.read(localPath, start, len);
-    if (remoteChunk.length !== len || !remoteChunk.equals(localChunk)) {
-      return { present: true, sameSize: true, identical: false, localSize, remoteSize: remote.size };
-    }
+    if (remoteChunk.length !== len || !remoteChunk.equals(localChunk)) return "different";
   }
-  return { present: true, sameSize: true, identical: true, localSize, remoteSize: remote.size };
+  return "same";
+}
+
+// Whether this Moonraker rewrites uploaded files (object processing). Anything
+// that cannot be read says no: a mismatch then stays a mismatch.
+async function rewritesUploads(p, ms) {
+  try {
+    const { ok, json } = await fetchJSONTimeout(baseUrl(p) + "/server/config", ms);
+    const fm = ok && json && json.result && json.result.config && json.result.config.file_manager;
+    return !!(fm && fm.enable_object_processing === true);
+  } catch { return false; }
+}
+
+// ---- "Is the file we just sent on the printer?" (docs/TODO.md §37 P2) ----
+// Read back after an upload, before anything may start it. Unlike
+// compareRemoteFile, which looks anywhere for a copy worth not sending again,
+// this asks about the one file a print start will use: `name` at the gcodes
+// root, where every upload lands. The root's directory listing, not
+// /server/files/list, so a same-named file in a subfolder cannot answer for it.
+//   verified      at that path, the local size, and head, middle and tail match;
+//   acknowledged  at that path and the local size; the content could not be
+//                 read back (no range support, a read that ran out of time);
+//   mismatch      at that path with another size or other content: proof the
+//                 printer holds something else under that name;
+//   absent        the listing answered and the file is not in it, after a few
+//                 tries (a listing can lag an upload by a moment);
+//   unverifiable  the listing could not be read.
+// Every answer says what it rests on (basis): "content" (the windows were
+// compared), "size" (listed at the expected size) or "name" (listed only).
+// With no localPath (a Loaded file checked later, §37 P5: the local copy may
+// have moved or changed since) opts.localSize is what the printer's copy is
+// held to, and the content is not read; with neither, only the name.
+// opts (tests shorten them): attempts, retryMs, listTimeoutMs, rangeTimeoutMs, localSize.
+async function verifyUpload(p, name, localPath, { attempts = 3, retryMs = 1500, listTimeoutMs = 8000, rangeTimeoutMs = 10000, localSize: knownSize = null } = {}) {
+  let localSize = Number.isFinite(knownSize) ? knownSize : null;
+  if (localPath) {
+    try { localSize = (await netfs.stat(localPath)).size; }
+    catch (e) { return { result: "unverifiable", evidence: "the local file could not be read: " + e.message }; }
+  }
+  let listed = false, remote = null, lastError = null;
+  for (let i = 0; i < attempts && !remote; i++) {
+    if (i) await new Promise(r => setTimeout(r, retryMs));
+    try {
+      const { ok, status, json } = await fetchJSONTimeout(baseUrl(p) + "/server/files/directory?path=gcodes&extended=false", listTimeoutMs);
+      if (!ok) { lastError = "Moonraker " + status; continue; }
+      const files = json && json.result && json.result.files;
+      if (!Array.isArray(files)) { lastError = "the printer's answer is not a file listing"; continue; }
+      listed = true;
+      remote = files.find(f => f && f.filename === name) || null;
+    } catch (e) { lastError = e.message; }
+  }
+  if (!remote) {
+    return listed
+      ? { result: "absent", evidence: `${name} is not in the printer's file list` }
+      : { result: "unverifiable", evidence: "the printer's file list could not be read" + (lastError ? ": " + lastError : "") };
+  }
+  if (localSize == null) return { result: "acknowledged", basis: "name", evidence: `${name} is in the printer's file list` };
+  if (!Number.isFinite(remote.size)) return { result: "unverifiable", evidence: `the printer lists ${name} without a size` };
+  if (!localPath) {
+    if (remote.size === localSize) return { result: "acknowledged", basis: "size", evidence: `${name} is on the printer at ${localSize} bytes` };
+    if (await rewritesUploads(p, listTimeoutMs)) return { result: "acknowledged", basis: "name", evidence: `${name} is on the printer; it rewrites uploads (object processing), so its size cannot be compared` };
+    return { result: "mismatch", basis: "size", evidence: `the printer's ${name} is ${remote.size} bytes, ${localSize} were sent` };
+  }
+  const same = remote.size === localSize ? await compareWindows(p, name, localPath, localSize, rangeTimeoutMs) : "different";
+  const differs = remote.size !== localSize ? `the printer's ${name} is ${remote.size} bytes, the file sent is ${localSize}`
+    : same === "different" ? `the printer's ${name} has other content than the file sent` : null;
+  if (differs) {
+    // A printer whose Moonraker rewrites every upload ([file_manager]
+    // enable_object_processing) holds a changed copy by design. Not seen on
+    // the reference fleet (all off, 2026-10-27), but a setting a user can turn on.
+    if (await rewritesUploads(p, listTimeoutMs)) return { result: "acknowledged", basis: "name", evidence: `${name} is on the printer; it rewrites uploads (object processing), so its copy cannot be compared` };
+    return { result: "mismatch", basis: remote.size !== localSize ? "size" : "content", evidence: differs };
+  }
+  if (same === "unverifiable") return { result: "acknowledged", basis: "size", evidence: `${name} is on the printer at ${localSize} bytes; its content could not be read back` };
+  return { result: "verified", basis: "content", evidence: `${name} is on the printer at ${localSize} bytes, and its head, middle and end match` };
 }
 
 // `file` is the real filename as reported by the printer (with its actual
@@ -367,6 +581,24 @@ async function queryRecentlyPrintedFiles(base, sinceSec) {
   if (!ok) throw new Error("Moonraker " + status);
   const jobs = (json.result || {}).jobs || [];
   return new Set(jobs.map(j => j.filename));
+}
+// One page of the printer's job history (fleet utilization, Phase 2). Read
+// only: a single GET, bounded by a timeout. `since`/`before` are UNIX seconds
+// on the PRINTER's clock; `start` is Moonraker's offset for paging. Not every
+// Moonraker build honours every parameter (the Virtual U1 answers with the
+// newest `limit` jobs whatever was asked), so callers filter and de-duplicate
+// themselves. Returns { count, jobs } exactly as the printer sent them; a
+// printer without the history component answers 404, reported as
+// { unavailable: true }.
+async function fetchJobHistory(p, { since = null, before = null, start = 0, limit = 50, order = "asc", timeoutMs = 8000 } = {}) {
+  const q = new URLSearchParams({ limit: String(Math.max(1, Math.min(100, limit | 0))), start: String(Math.max(0, start | 0)), order: order === "desc" ? "desc" : "asc" });
+  if (Number.isFinite(since)) q.set("since", String(since));
+  if (Number.isFinite(before)) q.set("before", String(before));
+  const { ok, status, json } = await fetchJSONTimeout(baseUrl(p) + "/server/history/list?" + q, timeoutMs);
+  if (status === 404) return { unavailable: true, count: 0, jobs: [] };
+  if (!ok) throw new Error("Moonraker " + status);
+  const result = (json && json.result) || {};
+  return { count: Number.isFinite(result.count) ? result.count : null, jobs: Array.isArray(result.jobs) ? result.jobs : [] };
 }
 async function deleteRemoteFile(base, root, relPath) {
   const res = await fetchTimeout(base + "/server/files/" + encodeURIComponent(root) + "/" + encodeRemotePath(relPath), 8000, { method: "DELETE" });
@@ -758,11 +990,11 @@ function pickIface(net) {
 }
 
 module.exports = {
-  baseUrl, fetchTimeout, fetchJSONTimeout, klipperFault, moonrakerPost, sendGcode,
-  uploadWithProgress, uploadFile,
+  baseUrl, websocketUrl, fetchTimeout, fetchJSONTimeout, fetchBufferTimeout, klipperFault, moonrakerPost, sendGcode,
+  uploadWithProgress, uploadFile, sendMultipartUpload, uploadError, UPLOAD_TIMEOUTS, uploadTimeoutsFor,
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile,
   getPlate, excludeObject,
-  listFiles, getThumbnail, getFileMetadata, compareRemoteFile,
+  listFiles, getThumbnail, getFileMetadata, compareRemoteFile, verifyUpload, fetchJobHistory,
   queryFirmwareInfo, queryHealth, pickIface,
   queryRemoteFileList, downloadRemoteFile, deleteRemoteFile, queryRecentlyPrintedFiles,
   querySyncFiles, downloadSyncFile, deleteSyncFile, deleteFile,

@@ -145,3 +145,21 @@ test("an operation queued before the outage is known fails as soon as it is, wit
   assert.equal(q.error.code, "NAS_UNREACHABLE");
   assert.ok(q.ms < 800, `queued op failed after ${q.ms} ms`);
 });
+
+test("identity (§37 A4): size, nanosecond times, inode and device — and an in-place edit of the same size changes it", async t => {
+  const nf = make(t, { opTimeoutMs: 5000 });
+  const d = tmp(); t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const f = path.join(d, "a.gcode");
+  fs.writeFileSync(f, "A".repeat(3000));
+  const before = await nf.identity(f);
+  assert.equal(before.size, 3000);
+  const real = fs.statSync(f, { bigint: true });
+  for (const k of ["mtimeNs", "ctimeNs", "ino", "dev"]) assert.equal(before[k], String(real[k]), k + " is the file's own, at full precision");
+  assert.deepEqual(await nf.identity(f), before, "unchanged: the same identity");
+  await new Promise(r => setTimeout(r, 20));
+  const fd = fs.openSync(f, "r+"); fs.writeSync(fd, Buffer.from("B"), 0, 1, 1000); fs.closeSync(fd);
+  const after = await nf.identity(f);
+  assert.equal(after.size, 3000);
+  assert.notEqual(after.mtimeNs + after.ctimeNs, before.mtimeNs + before.ctimeNs, "the edit shows");
+  await assert.rejects(nf.identity(path.join(d, "gone.gcode")));
+});

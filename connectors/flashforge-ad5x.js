@@ -33,6 +33,8 @@ exports.capabilities = {
   camera: true, cameraSnapshot: true, filamentHeads: true, excludeObject: false, autoLevel: false,
   unloadFilament: true, firmwareInfo: false, inventory: false, discovery: false,
   webUi: false, setColor: true,
+  // IFS ports and the tools applyHeadMappingMoonraker accepts.
+  maxMapTools: 16, maxMapHeads: 4,
   // See snapmaker-u1-klipper.js's capabilities comment: true here because
   // this connector's applyHeadMapping (the useMatlStation branch below)
   // really does send the picked slot mapping to the printer.
@@ -541,6 +543,9 @@ async function setFilamentColor(p, extruderIndex, hex) {
 exports.setFilamentColor = setFilamentColor;
 
 exports.listFiles = byMode(ff.listFiles, http.listFiles);
+// Read back after an upload (docs/TODO.md §37 P2): by name on the stock API,
+// by content over Moonraker.
+exports.verifyUpload = byMode(ff.verifyUpload, http.verifyUpload);
 exports.getThumbnail = byMode(ff.getThumbnail, http.getThumbnail);
 // Reads /gcodeList's gcodeListDetail for multi-material jobs — real palette
 // + print-time data when useMatlStation was used, an empty palette otherwise.
@@ -567,7 +572,19 @@ exports.getCameraSnapshot = async p => {
 // control the backend then refuses as "not supported".
 exports.getPlate = moonrakerOnly("Exclude-object", http.getPlate);
 exports.excludeObject = moonrakerOnly("Exclude-object", http.excludeObject);
-exports.getHealth = moonrakerOnly("Health", http.queryHealth);
+// Health (docs/TODO.md §50) answers expected states instead of throwing —
+// a throw here left GET /api/health unanswered. Offline first, before any
+// transport detection (an unreachable printer has nothing to detect, and the
+// detection's fallback would otherwise call it "stock firmware"); then stock
+// firmware, which has no Health data; then ZMOD's Moonraker Health as before.
+// The offline answer is queryHealth()'s own, plus a reasonCode.
+exports.getHealth = async (p, st) => {
+  if (!st || !st.online) return { online: false, skipped: true, reason: (st && st.error) || "offline", reasonCode: "offline" };
+  if ((await currentMode(p)) !== "moonraker") {
+    return { online: true, skipped: true, reason: "Health is not available on this printer's stock firmware", reasonCode: "unsupported_firmware" };
+  }
+  return http.queryHealth(asMoon(p), st);
+};
 exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo);
 exports.querySyncFiles = moonrakerOnly("File sync", http.querySyncFiles);
 exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadSyncFile);

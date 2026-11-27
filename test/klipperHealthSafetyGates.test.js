@@ -55,7 +55,10 @@ const IDLE_SRC = () => extractFn("isPrinterIdle");
 const IDLE_SET = () => extractConst("DISPATCH_IDLE_STATES") + "\n" + extractConst("STARTING")
   // It also consults the firmware-deploy guard now; always false here for the
   // same reason (see test/firmwareTargetingAndRejects.test.js).
-  + "\nfunction firmwareUpdating(){ return false; }";
+  + "\nfunction firmwareUpdating(){ return false; }"
+  // And whether the queue is sending to the printer (TODO §28); never here
+  // (see test/queueDispatchUpload.test.js).
+  + "\nfunction queueDispatchJob(){ return null; }";
 const idle = st => withProbe(IDLE_SRC(), IDLE_SET(), st).isPrinterIdle({ name: "P", url: "http://x" });
 const blocked = st => withProbe(extractFn("firmwareDeployBlockedBy"), null, st)
   .firmwareDeployBlockedBy({ name: "U1 Black", url: "http://x" });

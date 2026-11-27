@@ -1,0 +1,468 @@
+/* UI-REFRESH: the design refresh preview (docs/ui-refresh-changes.md).
+   Loaded after style.css. Every selector here is scoped under html.ui-refresh,
+   which index.html's first-paint script sets from localStorage "snapcon-ui"
+   or ?ui=refresh, so with the preview off nothing in this file applies.
+   Removing the refresh: delete this file and its <link>. Keeping it: fold the
+   rules into style.css without the html.ui-refresh prefix. */
+
+/* ---- UI-REFRESH Part 1: colour tokens --------------------------------------
+   Owner's values (2026-11-05). Only the tokens listed change; every other
+   token keeps its classic value in Dark and Light. --ink-faint stays a text
+   colour, at values that reach 4.5:1 on chassis, panel and panel-2.
+   Top-bar tokens are derived from the same theme's new tokens; --offline
+   equals --idle; --brand / --brand-ink are new (primary actions and focus,
+   used from Part 3). Dark is also the fallback without data-theme. */
+html.ui-refresh,
+html.ui-refresh[data-theme="dark"]{
+  --chassis:#0D0D0D;
+  --panel:#18161C;
+  --panel-2:#221F27;
+  --line:#2D2933;
+  --line-soft:#26222B;
+  --line-2:#26222B;
+  --ink:#EDE9F3;
+  --ink-dim:#A49DB0;
+  --ink-faint:#8C859A;
+  --busy:#D9B8FF;
+  --ok:#7FD9A8;
+  --complete:#7FD9A8;
+  --paused:#F2C66D;
+  --bad:#FF8A8A;
+  --idle:#8E879A;
+  --signal:#F2C66D;
+  --offline:var(--idle);
+  --brand:#D9B8FF;
+  --brand-ink:#1B1325;
+  --tb-bg:#18161C;
+  --tb-accent:#D9B8FF;
+  --tb-active-bg:rgba(217,184,255,0.16);
+  --tb-active-text:#EBD9FF;
+  --tb-badge-text:#1B1325;
+  --tb-text:var(--ink);
+  --tb-text-2:var(--ink-dim);
+  --tb-muted:var(--ink-dim);
+  --tb-divider:var(--line);
+  --tb-divider-strong:#4B4652;
+  --tb-hover:rgba(217,184,255,0.08);
+  --tb-menu:var(--panel);
+  --tb-menu-border:var(--line);
+  --tb-menu-shadow:0 14px 36px rgba(0,0,0,0.5);
+  --tb-scrim:rgba(0,0,0,0.5);
+  color-scheme:dark;
+}
+html.ui-refresh[data-theme="light"]{
+  --chassis:#FFF4D6;
+  --panel:#FFFBEF;
+  --panel-2:#FFFFFF;
+  --line:#EFE2BC;
+  --line-soft:#F3E8C8;
+  --line-2:#F3E8C8;
+  --ink:#1D1B2C;
+  --ink-dim:#6A6248;
+  --ink-faint:#766E52;
+  --busy:#263BAA;
+  --ok:#1B6E46;
+  --complete:#1B6E46;
+  --paused:#8A5300;
+  --bad:#B42318;
+  --idle:#6A6248;
+  --signal:#8A5300;
+  --offline:var(--idle);
+  --brand:#263BAA;
+  --brand-ink:#FFFFFF;
+  --tb-bg:#FFFBEF;
+  --tb-accent:#263BAA;
+  --tb-active-bg:rgba(38,59,170,0.10);
+  --tb-active-text:#263BAA;
+  --tb-badge-text:#FFFFFF;
+  --tb-text:var(--ink);
+  --tb-text-2:var(--ink-dim);
+  --tb-muted:var(--ink-dim);
+  --tb-divider:var(--line);
+  --tb-divider-strong:#CEC29F;
+  --tb-hover:rgba(38,59,170,0.05);
+  --tb-menu:var(--panel);
+  --tb-menu-border:var(--line);
+  --tb-menu-shadow:0 12px 32px rgba(15,18,24,0.14);
+  --tb-scrim:rgba(15,18,24,0.28);
+  color-scheme:light;
+}
+
+/* ---- UI-REFRESH Part 1: Awareness, a light theme --------------------------
+   GENERATED from style.css: a copy of every [data-theme="light"] rule, with
+   [data-theme="light"] replaced by html.ui-refresh[data-theme="awareness"],
+   so Awareness gets everything Light has because its surface is light (the
+   light token block itself included, which gives it Light's values for the
+   tokens the owner did not list: --rr-*, --storage-*, --type-*, --violet*,
+   --uz-*). style.css is not edited. test/uiRefreshTokens.test.js fails if a
+   light rule in style.css changes without its copy here. Awareness's own
+   values follow the copies, so they win. Selectable from Part 2. */
+html.ui-refresh[data-theme="awareness"]{--chassis:#EEF1F5; --panel:#FFFFFF; --panel-2:#F6F8FA; --line:#E1E5EA; --line-soft:#E1E5EA; --line-2:#CBD2DA; --ink:#171A1D; --ink-dim:#4A525C; --ink-faint:#686E76; --busy:#1D66BF; --ok:#157644; --bad:#B92B2B; --signal:#8A6508; --paused:#8A6508; --complete:#0F766E; --idle:#5B6472; --offline:#756A52; --violet:#5B3FC4; --violet-soft:#6D4FD1; --type-3mf:#7A5BDA; --type-3mf-ink:#5B3FC4; --type-gcode-ink:#1858A8; --type-neutral:#171A1D; --type-base:var(--panel); --type-tint:12%; --accent:var(--busy); --warn:var(--signal); --tb-bg:var(--panel); --tb-divider:var(--line); --tb-divider-strong:#C5CCD4; --tb-text:var(--ink); --tb-text-2:var(--ink-dim); --tb-muted:var(--ink-faint); --tb-accent:#1F6FD0; --tb-active-bg:rgba(31,111,208,0.10); --tb-active-text:#1858A8; --tb-hover:rgba(23,26,29,0.04); --tb-menu:var(--panel); --tb-menu-border:var(--line); --tb-menu-shadow:0 12px 32px rgba(15,18,24,0.14); --tb-badge-text:#171A1D; --tb-scrim:rgba(15,18,24,0.28); --tb-warn:var(--warn); --rr-card-bg:var(--panel); --rr-card-border:var(--line); --rr-title:var(--ink); --rr-desc:var(--ink-dim); --rr-label:var(--ink); --rr-healthy:var(--ok); --rr-warning:var(--signal); --rr-critical:var(--bad); --rr-neutral:var(--idle); --rr-value-healthy:var(--ink-dim); --rr-bar-track:rgba(23,26,29,0.08); --storage-gcode:#1F6FD0; --storage-camera:#6D4FD1; --storage-logs:#13846B; --storage-track:rgba(23,26,29,0.08); color-scheme:light; --scroll-thumb:color-mix(in srgb, var(--ink-faint) 45%, transparent); --scroll-thumb-hover:var(--ink-dim);}
+html.ui-refresh[data-theme="awareness"] .pcard{box-shadow:0 1px 2px rgba(16,24,40,.06);}
+html.ui-refresh[data-theme="awareness"] .hdr-brand{color:var(--ink-dim);}
+html.ui-refresh[data-theme="awareness"] .hdr-name{color:var(--ink);}
+html.ui-refresh[data-theme="awareness"] .printer-icon-sm.err-icon,
+html.ui-refresh[data-theme="awareness"] .printer-icon-sm.cancelled-icon{background:color-mix(in srgb,var(--bad) 10%,var(--panel)); border-color:color-mix(in srgb,var(--bad) 35%,transparent); color:var(--bad); box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .printer-icon-sm.pause-icon{background:color-mix(in srgb,var(--paused) 10%,var(--panel)); border-color:color-mix(in srgb,var(--paused) 35%,transparent); color:var(--paused); box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .printer-icon-sm.complete-icon{box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .prism-line{height:3px;margin-top:-3px;background:var(--busy);box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .prism-line.err-line,
+html.ui-refresh[data-theme="awareness"] .prism-line.cancelled-line{background:var(--bad);}
+html.ui-refresh[data-theme="awareness"] .prism-line.pause-line{background:var(--paused);}
+html.ui-refresh[data-theme="awareness"] .prism-line.complete-line{background:var(--complete);}
+html.ui-refresh[data-theme="awareness"] .status-badge{background:color-mix(in srgb,var(--status-color) 14%,var(--panel));border-color:color-mix(in srgb,var(--status-color) 22%,transparent);box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .spool{filter:drop-shadow(0 2px 4px rgba(16,24,40,.26));}
+html.ui-refresh[data-theme="awareness"] .spool.is-active{filter:drop-shadow(0 3px 6px rgba(16,24,40,.32));}
+html.ui-refresh[data-theme="awareness"] .btn-cancel,
+html.ui-refresh[data-theme="awareness"] .btn-estop{background:color-mix(in srgb,var(--bad) 8%,transparent); border-color:color-mix(in srgb,var(--bad) 40%,transparent); color:var(--bad);}
+html.ui-refresh[data-theme="awareness"] .btn-cancel:hover,
+html.ui-refresh[data-theme="awareness"] .btn-estop:hover{background:color-mix(in srgb,var(--bad) 16%,transparent); box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .platesvg .po.ex{fill:var(--line-2); stroke:var(--ink-faint); opacity:.7;}
+html.ui-refresh[data-theme="awareness"] .progress-section{border-top-color:var(--line);background:transparent;}
+html.ui-refresh[data-theme="awareness"] .prog-file,
+html.ui-refresh[data-theme="awareness"] .prog-file-name,
+html.ui-refresh[data-theme="awareness"] .prog-time-label{color:var(--ink-dim);}
+html.ui-refresh[data-theme="awareness"] .prog-pct.cyan{color:var(--busy);filter:none;}
+html.ui-refresh[data-theme="awareness"] .prog-pct.amber{color:var(--paused);filter:none;}
+html.ui-refresh[data-theme="awareness"] .prog-pct.red{color:var(--bad);filter:none;}
+html.ui-refresh[data-theme="awareness"] .prog-fill.cyan,
+html.ui-refresh[data-theme="awareness"] .prog-fill.green{box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .prog-fill.amber{background:var(--paused); box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .prog-fill.red{background:var(--bad); box-shadow:none;}
+html.ui-refresh[data-theme="awareness"] .prog-time-val{color:var(--ink);}
+html.ui-refresh[data-theme="awareness"] .prog-time-sep{background:var(--line);}
+html.ui-refresh[data-theme="awareness"] .tb-health .health-badge{color:#fff;}
+html.ui-refresh[data-theme="awareness"] .tb-menu-btn .health-badge{color:#fff;}
+html.ui-refresh[data-theme="awareness"] .tb-sheet-count{color:#fff;}
+html.ui-refresh[data-theme="awareness"] .topbar-icon,
+html.ui-refresh[data-theme="awareness"] .side-icon{filter:saturate(1.2) brightness(.7);}
+html.ui-refresh[data-theme="awareness"] .gear:hover{filter:none;}
+html.ui-refresh[data-theme="awareness"] .gear:hover .topbar-icon{filter:saturate(1.2) brightness(.42);}
+html.ui-refresh[data-theme="awareness"] .klipper-err-code,
+html.ui-refresh[data-theme="awareness"] .klipper-err-link{color:var(--signal);}
+html.ui-refresh[data-theme="awareness"] .klipper-err-divider{background:var(--line);}
+html.ui-refresh[data-theme="awareness"] .klipper-err-body{color:var(--ink-dim);}
+html.ui-refresh[data-theme="awareness"] body.compact .cc-error{color:var(--bad);}
+html.ui-refresh[data-theme="awareness"] body.compact .cc-upload-cancel{color:var(--bad);}
+html.ui-refresh[data-theme="awareness"] .cam-shot{border:1px solid var(--line); background:var(--panel-2);}
+html.ui-refresh[data-theme="awareness"] .cam-shot-slot,
+html.ui-refresh[data-theme="awareness"] .cam-shot-placeholder{background:var(--panel-2); border:1px solid var(--line);}
+html.ui-refresh[data-theme="awareness"] .list-progress-pct.cyan{color:var(--busy);}
+html.ui-refresh[data-theme="awareness"] .list-progress-pct.amber{color:var(--paused);}
+html.ui-refresh[data-theme="awareness"] .list-progress-pct.red{color:var(--bad);}
+html.ui-refresh[data-theme="awareness"]{--uz-printing:#2a78d6; --uz-running:#1baf7a; --uz-failed:#eb6834; --uz-unknown:#6250d6; --uz-paused:#eda100; --uz-offline:#8a8f98; --uz-idle:#008300; --uz-error:#e34948; --uz-gap:color-mix(in srgb, var(--ink-dim) 60%, transparent); --uz-none-line:color-mix(in srgb, var(--ink-faint) 45%, transparent);}
+html.ui-refresh[data-theme="awareness"] .uz-date{color-scheme:light;}
+html.ui-refresh[data-theme="awareness"]{
+  --chassis:#F9DEDF;
+  --panel:#FFF6F6;
+  --panel-2:#FFFFFF;
+  --line:#F0C9CB;
+  --line-soft:#F5D7D9;
+  --line-2:#F5D7D9;
+  --ink:#2A1A1F;
+  --ink-dim:#7A5560;
+  --ink-faint:#7F5C66;
+  --busy:#6B2FA0;
+  --ok:#1B6E46;
+  --complete:#1B6E46;
+  --paused:#8A5300;
+  --bad:#9E0F24;
+  --idle:#7A5560;
+  --signal:#8A5300;
+  --offline:var(--idle);
+  --brand:#E3123A;
+  --brand-ink:#FFFFFF;
+  --tb-bg:#FFF6F6;
+  --tb-accent:#FF173D;
+  --tb-active-bg:rgba(255,23,61,0.12);
+  --tb-active-text:#B80D2C;
+  --tb-badge-text:#FFFFFF;
+  --tb-text:var(--ink);
+  --tb-text-2:var(--ink-dim);
+  --tb-muted:var(--ink-dim);
+  --tb-divider:var(--line);
+  --tb-divider-strong:#D2ACB0;
+  --tb-hover:rgba(255,23,61,0.06);
+  --tb-menu:var(--panel);
+  --tb-menu-border:var(--line);
+  --tb-menu-shadow:0 12px 32px rgba(15,18,24,0.14);
+  --tb-scrim:rgba(15,18,24,0.28);
+  color-scheme:light;
+}
+
+/* ---- UI-REFRESH Part 1: owner decisions after the contrast review -------- */
+/* Awareness: --violet-soft is the theme's --violet, so violet text (the
+   Maintenance status badge, the Library's "decision" chip) reaches 4.5:1 on
+   its tinted background. */
+html.ui-refresh[data-theme="awareness"]{
+  --violet-soft:#5B3FC4;
+}
+/* Awareness: a G-code tag's tint comes from its own text colour, not --busy
+   (plum there), at the shared --type-tint. 3MF and source tags keep theirs. */
+html.ui-refresh[data-theme="awareness"] .lib-type:not(.is-3mf):not(.is-source){--c:var(--type-gcode-ink);}
+/* All themes: a family chip that fits a fleet printer is semibold, so it does
+   not depend on dim vs faint text, which the refresh brings close together. */
+html.ui-refresh .lib-fam.is-fit{font-weight:600;}
+
+/* ---- UI-REFRESH Part 3: buttons ------------------------------------------
+   Four roles (owner, 2026-11-05), applied to the existing classes, so no
+   markup changes: PRIMARY (one main action: Print, Resume, Save, a dialog's
+   main action), SECONDARY (everything else), GHOST (low-stakes: dialog
+   close, small inline actions), DANGER outlined (Stop, cancel print, delete,
+   clear queue and the other destructive actions) and DANGER-STRONG (filled,
+   ONLY E-Stop and its hold-to-confirm button). Presses move by translate
+   only (never box-shadow), so they run on the GPU without repainting. */
+html.ui-refresh,
+html.ui-refresh[data-theme="dark"]{
+  --btn-p-top:#E6CFFF; --btn-p-bottom:#C9A0FF; --btn-p-ink:#1B1325; --btn-p-hi:#ffffff80; --btn-p-glow:#C9A0FF66;
+  --btn-ds-top:#5C1C25; --btn-ds-bottom:#3D1218; --btn-ds-ink:#FFC2C2; --btn-ds-border:#8A2B33;
+  --btn-s-hi:rgba(255,255,255,0.06); --btn-s-hover:color-mix(in srgb,var(--panel-2) 94%,#fff);
+}
+html.ui-refresh[data-theme="light"]{
+  --btn-p-top:#3A50C4; --btn-p-bottom:#1F319A; --btn-p-ink:#FFFFFF; --btn-p-hi:#ffffff40; --btn-p-glow:#1F319A59;
+  --btn-ds-top:#C8352A; --btn-ds-bottom:#9E1D14; --btn-ds-ink:#FFFFFF; --btn-ds-border:transparent;
+  --btn-s-hi:rgba(255,255,255,0.70); --btn-s-hover:color-mix(in srgb,var(--panel-2) 95%,var(--ink));
+}
+html.ui-refresh[data-theme="awareness"]{
+  --btn-p-top:#E3123A; --btn-p-bottom:#B80D2C; --btn-p-ink:#FFFFFF; --btn-p-hi:#ffffff47; --btn-p-glow:#FF173D66;
+  --btn-ds-top:#A3122A; --btn-ds-bottom:#7A0A1D; --btn-ds-ink:#FFFFFF; --btn-ds-border:transparent;
+  --btn-s-hi:rgba(255,255,255,0.70); --btn-s-hover:color-mix(in srgb,var(--panel-2) 95%,var(--ink));
+}
+
+/* SECONDARY: the default for every button below that is not one of the others. */
+html.ui-refresh .btn-chip,
+html.ui-refresh .btn.ghost:not(.btn-sm),
+html.ui-refresh .btn.ghost#libSelMove,
+html.ui-refresh .btn.ghost#libSelSplit,
+html.ui-refresh #pfilecancel,
+html.ui-refresh #plateSkip{
+  background:var(--panel-2); color:var(--ink); border:1px solid var(--line);
+  box-shadow:inset 0 1px 0 var(--btn-s-hi); transition:translate 60ms ease-out, background-color 120ms ease-out;
+}
+html.ui-refresh .btn-chip:hover:not(:disabled),
+html.ui-refresh .btn.ghost:not(.btn-sm):hover:not(:disabled),
+html.ui-refresh #pfilecancel:hover:not(:disabled),
+html.ui-refresh #plateSkip:hover:not(:disabled){
+  background:var(--btn-s-hover); border-color:color-mix(in srgb,var(--line) 70%,var(--ink-dim)); transform:none;
+}
+html.ui-refresh .btn-chip:active:not(:disabled),
+html.ui-refresh .btn.ghost:not(.btn-sm):active:not(:disabled),
+html.ui-refresh #pfilecancel:active:not(:disabled),
+html.ui-refresh #plateSkip:active:not(:disabled){ translate:0 1px; box-shadow:none; transform:none; }
+/* A chosen option chip (bulk heat presets, milestone chips) stays marked. */
+html.ui-refresh .btn-chip.active{border-color:var(--brand); box-shadow:0 0 0 1px var(--brand);}
+
+/* PRIMARY */
+html.ui-refresh .btn.primary,
+html.ui-refresh .btn.purple,
+html.ui-refresh #pfilego,
+html.ui-refresh .btn-chip[data-start="1"],
+html.ui-refresh .btn-chip[data-act="resume"]{
+  /* A transparent border, not none, so a primary chip is the same size as its neighbours. */
+  background:linear-gradient(var(--btn-p-top),var(--btn-p-bottom)); color:var(--btn-p-ink); border:1px solid transparent;
+  box-shadow:inset 0 1px 0 var(--btn-p-hi), inset 0 -2px 0 #0000002e, 0 1px 2px #0006;
+  transition:translate 60ms ease-out, filter 120ms ease-out;
+}
+html.ui-refresh .btn.primary:hover:not(:disabled),
+html.ui-refresh .btn.purple:hover:not(:disabled),
+html.ui-refresh #pfilego:hover:not(:disabled),
+html.ui-refresh .btn-chip[data-start="1"]:hover:not(:disabled),
+html.ui-refresh .btn-chip[data-act="resume"]:hover:not(:disabled){ filter:brightness(1.06); background:linear-gradient(var(--btn-p-top),var(--btn-p-bottom)); transform:none; }
+html.ui-refresh .btn.primary:active:not(:disabled),
+html.ui-refresh .btn.purple:active:not(:disabled),
+html.ui-refresh #pfilego:active:not(:disabled),
+html.ui-refresh .btn-chip[data-start="1"]:active:not(:disabled),
+html.ui-refresh .btn-chip[data-act="resume"]:active:not(:disabled){ translate:0 1px; box-shadow:inset 0 2px 4px #0005; transform:none; }
+/* The hero glow: each dialog's main action only, never on a printer card. */
+html.ui-refresh :is(#groupsModalSave,#tagsSave,#langEditorSave,#bedmodalset,#bulkheatGo,#subnetModalScan,#rediscoverAll,
+  #newFolderModalCreate,#maintSave,#browseok,#elecApply,#pfilego,#doUploadPrint,#sendQueueAddStart,#qpPrint):not(:disabled){
+  box-shadow:inset 0 1px 0 var(--btn-p-hi), inset 0 -2px 0 #0000002e, 0 1px 2px #0006, 0 8px 24px -6px var(--btn-p-glow);
+}
+
+/* GHOST: dialog close and the small inline actions. */
+html.ui-refresh .modalx,
+html.ui-refresh .btn.ghost.btn-sm:not(#libSelMove):not(#libSelSplit){
+  background:transparent; border-color:transparent; color:var(--ink-dim); box-shadow:none;
+}
+html.ui-refresh .modalx:hover,
+html.ui-refresh .btn.ghost.btn-sm:not(#libSelMove):not(#libSelSplit):hover:not(:disabled){ background:var(--tb-hover); color:var(--ink); border-color:transparent; }
+
+/* DANGER, outlined: destructive actions that are not E-Stop. */
+html.ui-refresh .btn-chip.danger:not([data-estop]),
+html.ui-refresh .btn.danger,
+html.ui-refresh .btn.ghost.danger,
+html.ui-refresh .btn.danger-filled:not(.hc-hold-btn){
+  background:transparent; color:var(--bad); border:1px solid var(--bad); box-shadow:none;
+  transition:translate 60ms ease-out, background-color 120ms ease-out;
+}
+html.ui-refresh .btn-chip.danger:not([data-estop]):hover:not(:disabled),
+html.ui-refresh .btn.danger:hover:not(:disabled),
+html.ui-refresh .btn.ghost.danger:hover:not(:disabled),
+html.ui-refresh .btn.danger-filled:not(.hc-hold-btn):hover:not(:disabled){ background:color-mix(in srgb,var(--bad) 10%,transparent); border-color:var(--bad); transform:none; }
+html.ui-refresh .btn-chip.danger:not([data-estop]):active:not(:disabled),
+html.ui-refresh .btn.danger:active:not(:disabled),
+html.ui-refresh .btn.ghost.danger:active:not(:disabled),
+html.ui-refresh .btn.danger-filled:not(.hc-hold-btn):active:not(:disabled){ translate:0 1px; transform:none; }
+
+/* DANGER-STRONG: E-Stop and its hold-to-confirm button only. Same bevel and
+   press as primary, no glow; the octagon icon and the hold stay as they are. */
+html.ui-refresh .btn-chip[data-estop],
+html.ui-refresh .hc-hold-btn{
+  background:linear-gradient(var(--btn-ds-top),var(--btn-ds-bottom)); color:var(--btn-ds-ink); border:1px solid var(--btn-ds-border);
+  box-shadow:inset 0 1px 0 #ffffff2e, inset 0 -2px 0 #0000002e, 0 1px 2px #0006;
+  transition:translate 60ms ease-out, filter 120ms ease-out;
+}
+html.ui-refresh .btn-chip[data-estop]:hover:not(:disabled),
+html.ui-refresh .hc-hold-btn:hover:not(:disabled){ filter:brightness(1.08); border-color:var(--btn-ds-border); background:linear-gradient(var(--btn-ds-top),var(--btn-ds-bottom)); transform:none; }
+html.ui-refresh .btn-chip[data-estop]:active:not(:disabled),
+html.ui-refresh .hc-hold-btn:active:not(:disabled){ translate:0 1px; box-shadow:inset 0 2px 4px #0005; transform:none; }
+
+/* ALL: a visible focus ring (the bevels hide the default outline), and one
+   disabled look: 45% opacity, no shadow, no press. */
+html.ui-refresh :is(.btn,.btn-chip,.btn-base,.modalx,.hc-hold-btn):focus-visible{ outline:2px solid var(--brand); outline-offset:2px; }
+html.ui-refresh :is(.btn,.btn-chip,.btn-base,.hc-hold-btn):disabled{ opacity:.45; box-shadow:none; filter:none; translate:none; transform:none; cursor:not-allowed; }
+/* 44px for dialog, settings and page buttons; not on printer cards (chips
+   keep ~32px, compact pills 28px), the file card, or small inline actions. */
+html.ui-refresh .btn:not(.btn-sm):not(.uz-small):not(.jcard-del){ min-height:44px; }
+html.ui-refresh :is(.pcard,.multiselect-bar,.card-note) .btn{ min-height:0; }
+
+/* Progress bars: the status tokens instead of fixed colours. Printing keeps
+   its moving sheen, in shades of --busy; Paused and Error are --paused and
+   --bad. The glow stays where classic has it (Night); the light themes keep
+   classic's flat bar. */
+html.ui-refresh .prog-fill.cyan::after{ background:linear-gradient(90deg,var(--busy),color-mix(in srgb,var(--busy) 55%,var(--ink)),var(--busy)); background-size:50% 100%; background-repeat:repeat-x; }
+html.ui-refresh .prog-fill.amber{ background:var(--paused); }
+html.ui-refresh .prog-fill.red{ background:var(--bad); }
+html.ui-refresh[data-theme="dark"] .prog-fill.cyan{ box-shadow:0 0 10px color-mix(in srgb,var(--busy) 45%,transparent); }
+html.ui-refresh[data-theme="dark"] .prog-fill.amber{ box-shadow:0 0 10px color-mix(in srgb,var(--paused) 40%,transparent); }
+html.ui-refresh[data-theme="dark"] .prog-fill.red{ box-shadow:0 0 10px color-mix(in srgb,var(--bad) 40%,transparent); }
+
+/* ---- UI-REFRESH: the Delete dialog's method radios ------------------------
+   In the refresh the selected method takes --brand (primary actions and
+   focus), as the buttons do; classic uses --accent (style.css). */
+html.ui-refresh .delete-mode-row input[type=radio]{accent-color:var(--brand);}
+
+/* ---- UI-REFRESH Part 4: printer cards in Error ----------------------------
+   A printer whose state is "error" gets a faint static red outline; until
+   someone acknowledges it (selects that printer on the Health page, or
+   clicks its card), a red light also sweeps around the border. The sweep is
+   a dedicated inner element, .err-sweep, added by syncErrorSweep() in
+   app.js: masked to a 3px ring at the card's edge, ignoring the pointer, so
+   the card keeps its own background (tag tints), its overflow (the Compact
+   "···" menu) and every click. The light is a rotating pseudo-element
+   (transform, on the GPU), never an animated gradient. */
+html.ui-refresh .pcard.is-error-active,
+html.ui-refresh .pcard.is-error-ack{
+  position:relative;
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--bad) 30%,transparent);
+}
+/* Unacknowledged only: a soft static glow around the card (owner, 2026-11-06).
+   Not animated; an acknowledged card keeps the outline alone. */
+html.ui-refresh .pcard.is-error-active{
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--bad) 30%,transparent), 0 0 24px -8px var(--bad);
+}
+html.ui-refresh .pcard > .err-sweep{
+  position:absolute; inset:-1px; z-index:1; border-radius:inherit; pointer-events:none;
+  padding:3px; overflow:hidden;
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor; mask-composite:exclude;
+}
+html.ui-refresh .pcard > .err-sweep::before{
+  /* Twice the card's width, square: it covers the corners as it turns (the
+     diagonal of every card shape SnapCon draws is under twice its width),
+     and stays a small layer even when many printers fail at once. */
+  content:""; position:absolute; left:50%; top:50%; width:200%; aspect-ratio:1; translate:-50% -50%;
+  background:conic-gradient(transparent 0deg, var(--bad) 60deg, transparent 150deg);
+  animation:snc-error-sweep 2.5s linear infinite;
+}
+@keyframes snc-error-sweep{ to{ transform:rotate(1turn); } }
+/* Reduced motion: no light at all; the static outline still marks the card. */
+@media (prefers-reduced-motion: reduce){
+  html.ui-refresh .pcard > .err-sweep{ display:none; }
+}
+
+/* ---- UI-REFRESH Part 5: equal rows, spool lanes and chips -----------------
+   Cards already fill their grid row (grid items stretch); the action bar is
+   pinned to the bottom so every card's buttons share a baseline. The lanes
+   (Full) and tiles (Compact) are a 2-column grid: column-first for a
+   Snapmaker U1 with up to 4 lanes, row-first otherwise (afcLanesHtmlRefresh
+   and compactSpoolTilesHtmlRefresh in app.js). Materials wrap inside the
+   chip, never an ellipsis. */
+html.ui-refresh .pcard .foot{margin-top:auto;}
+html.ui-refresh .rf-lanes{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-auto-flow:row; gap:6px;}
+html.ui-refresh .rf-lanes.col-first{grid-auto-flow:column; grid-template-rows:repeat(var(--rf-rows),auto);}
+html.ui-refresh .rf-lanes.single{grid-template-columns:minmax(0,1fr);}
+/* Camera view shows no lanes, as in classic (style.css hides .afc-lanes
+   there): the camera is the point of that view. Full and Compact keep them. */
+html.ui-refresh body.camview .rf-lanes{display:none;}
+/* Full view: each lane horizontal, the spool on the left (spoolSvg and
+   emptySpoolSvg as they are, at 40px), the label and material beside it, its
+   state under them. The active lane's border and glow, the dashed empty lane
+   and click-to-unload are the classic ones. */
+html.ui-refresh .afc-lane-card.rf-lane{flex-direction:row; align-items:center; gap:8px; padding:6px 8px; min-width:0;}
+html.ui-refresh .rf-lane-spool{flex:none; display:flex;}
+html.ui-refresh .rf-lane-spool svg{width:40px; height:40px; display:block;}
+html.ui-refresh .rf-lane-text{min-width:0; display:flex; flex-direction:column; gap:2px;}
+html.ui-refresh .rf-lane-name{font-size:11.5px; line-height:1.3; color:var(--ink); overflow-wrap:anywhere;}
+html.ui-refresh .rf-lane-name b{font-weight:700;}
+html.ui-refresh .rf-lane-state{font-size:10.5px; font-weight:600; color:var(--ink-faint);}
+/* Compact: a rounded chip per lane, a colour swatch on the left. */
+html.ui-refresh body.compact .cc-tile.rf-chip{display:flex; align-items:center; gap:6px; height:auto; min-height:24px; padding:3px 8px;
+  border:1px solid var(--line); border-radius:10px; background:var(--panel-2); color:var(--ink);
+  font:600 11px/1.25 var(--sans); text-align:left; white-space:normal; overflow:visible; text-overflow:clip;}
+html.ui-refresh body.compact .cc-tile.rf-chip.empty{border-style:dashed; color:var(--ink-faint); background:transparent;}
+html.ui-refresh body.compact .cc-tile.rf-chip.active{outline:2px solid var(--brand); outline-offset:1px;}
+html.ui-refresh .rf-swatch{flex:none; width:12px; height:12px; border-radius:3px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.25);}
+html.ui-refresh .rf-swatch.empty{background:transparent; border:1px dashed var(--ink-faint); box-shadow:none;}
+html.ui-refresh .rf-chip-text{min-width:0; overflow-wrap:anywhere;}
+
+/* ---- UI-REFRESH remediation (owner, 2026-11-06): readability ------------
+   Focus rings: one colour per theme, --brand. style.css colours its rings
+   with --accent, --signal, --tb-accent or --status-color, which differ in
+   Awareness. Each selector below is a style.css focus rule that sets a ring
+   colour, prefixed with html.ui-refresh so it wins by specificity; only the
+   colour changes, never the width, offset or shape. Generated from
+   style.css; test/uiRefreshReadability.test.js fails if a new coloured
+   focus rule there is not listed here. */
+html.ui-refresh a:focus-visible,
+html.ui-refresh button:focus-visible,
+html.ui-refresh input:focus-visible,
+html.ui-refresh select:focus-visible,
+html.ui-refresh textarea:focus-visible,
+html.ui-refresh summary:focus-visible,
+html.ui-refresh [tabindex]:focus-visible,
+html.ui-refresh .pstatus-cancel:focus-visible,
+html.ui-refresh .tb-search:has(.fleet-search:focus-visible),
+html.ui-refresh .queue-chip.qchip-actionable:focus-visible,
+html.ui-refresh .switch-input:focus-visible,
+html.ui-refresh .checkbox-input:focus-visible,
+html.ui-refresh .upload-strip-btn:focus-visible,
+html.ui-refresh body.compact .cc-upload-cancel:focus-visible,
+html.ui-refresh body.compact button.cc-tile:focus-visible,
+html.ui-refresh body.compact .cc-more:focus-visible,
+html.ui-refresh body.compact .cc-menu-item:focus-visible,
+html.ui-refresh .lib-card:focus-visible,
+html.ui-refresh .lib-rescan:focus-visible,
+html.ui-refresh .lib-tree-pick:focus-visible,
+html.ui-refresh .lib-tree-tw:focus-visible,
+html.ui-refresh .lib-thumb:focus-visible,
+html.ui-refresh .lib-cover-opt:has(input:focus-visible) .lib-well-sm,
+html.ui-refresh .uz-seg-opt input:focus-visible + span,
+html.ui-refresh .uz-bar:focus-visible,
+html.ui-refresh .uz-sort:focus-visible{ outline-color:var(--brand); }
+/* Spool lanes: the filament colour stays in the active lane's border, glow
+   and tint (and the spool itself); the words are always theme ink. Empty
+   lanes keep the dashed border but not the classic 55% opacity, which made
+   their text unreadable. */
+html.ui-refresh .afc-lane-card.rf-lane.empty{ opacity:1; }
+html.ui-refresh .afc-lane-card.rf-lane.empty .rf-lane-spool{ opacity:.55; }
+html.ui-refresh .afc-lane-card.rf-lane.empty .rf-lane-name{ color:var(--ink-dim); }
+html.ui-refresh .afc-lane-card.rf-lane.active .rf-lane-state{ color:var(--ink); font-weight:700; }
+/* "(Virtual)" in the card header: theme ink instead of 62% opacity. */
+html.ui-refresh .hdr-transport{ opacity:1; color:var(--ink-faint); }
+/* Awareness: the brand's "Con" in a deeper rose that reads on the top bar. */
+html.ui-refresh[data-theme="awareness"] .tb-name-con{ color:color-mix(in srgb, var(--tb-accent) 72%, var(--ink)); }
+/* UI-REFRESH (owner, 2026-11-06): Camera view's missing-thumbnail "—".
+   Classic draws it at 30% opacity (style.css .stats-thumb-empty), about
+   2:1; under the switch it is theme faint ink at full opacity. */
+html.ui-refresh body.camview .stats-thumb-empty{ opacity:1; color:var(--ink-faint); }

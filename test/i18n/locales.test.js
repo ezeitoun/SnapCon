@@ -222,6 +222,72 @@ test("seedDefaultLocales: NEVER overwrites an existing runtime (non-English) loc
   assert.deepEqual(onDisk, translatorEdited, "an upgrade must never silently destroy a runtime locale file, per the explicit product decision");
 });
 
+// ---- addMissingBundledKeys ----
+// seedDefaultLocales copies a translation once; strings added to SnapCon
+// after that never reached an existing install (on one long-running install, 24 Spanish
+// strings — the Compact card, Virtual printers — showed in English for that
+// reason). This adds what's missing and changes nothing that's there.
+
+function addMissingFixture(runtime, bundled) {
+  const base = scratchDir();
+  const runtimeDir = path.join(base, "locales");
+  const bundledDir = path.join(base, "bundled");
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(bundledDir);
+  writeLocale(bundledDir, "en.json", EN);
+  if (bundled) writeLocale(bundledDir, "es.json", bundled);
+  if (runtime !== undefined) fs.writeFileSync(path.join(runtimeDir, "es.json"), typeof runtime === "string" ? runtime : JSON.stringify(runtime));
+  return { runtimeDir, bundledDir, read: () => JSON.parse(fs.readFileSync(path.join(runtimeDir, "es.json"), "utf8")), raw: () => fs.readFileSync(path.join(runtimeDir, "es.json"), "utf8") };
+}
+
+test("addMissingBundledKeys: adds the keys an installed translation lacks, whole new sections included", () => {
+  const f = addMissingFixture(
+    { _meta: { locale: "es", version: 92 }, common: { save: "Guardar" } },
+    { _meta: { locale: "es", version: 100 }, common: { save: "Guardar", cancel: "Cancelar" }, settings: { title: "Ajustes", greet: "Hola {name}" } });
+  locales.addMissingBundledKeys(f.runtimeDir, f.bundledDir);
+  assert.deepEqual(f.read(), { _meta: { locale: "es", version: 92 }, common: { save: "Guardar", cancel: "Cancelar" }, settings: { title: "Ajustes", greet: "Hola {name}" } });
+});
+
+test("addMissingBundledKeys: never changes a value that is there — a translator's wording, an empty (untranslated) one, or a key the bundle no longer has — nor _meta", () => {
+  const runtime = { _meta: { locale: "es", version: 92, updated: "2026-10-09" }, common: { save: "TRANSLATOR EDITED", cancel: "" }, old: { gone: "Viejo" } };
+  const f = addMissingFixture(runtime, { _meta: { locale: "es", version: 100, updated: "2026-10-23" }, common: { save: "Guardar", cancel: "Cancelar", close: "Cerrar" } });
+  locales.addMissingBundledKeys(f.runtimeDir, f.bundledDir);
+  assert.deepEqual(f.read(), { ...runtime, common: { save: "TRANSLATOR EDITED", cancel: "", close: "Cerrar" } });
+});
+
+test("addMissingBundledKeys: a file with nothing missing is not rewritten at all", () => {
+  const raw = '{"_meta":{"locale":"es"},"common":{"save":"Guardar","extra":"x"}}';
+  const f = addMissingFixture(raw, { _meta: { locale: "es" }, common: { save: "Otro" } });
+  locales.addMissingBundledKeys(f.runtimeDir, f.bundledDir);
+  assert.equal(f.raw(), raw);
+});
+
+test("addMissingBundledKeys: a section where the installed file has a plain value is left alone", () => {
+  const f = addMissingFixture({ _meta: { locale: "es" }, common: "oops" }, { _meta: { locale: "es" }, common: { save: "Guardar" }, more: "Más" });
+  locales.addMissingBundledKeys(f.runtimeDir, f.bundledDir);
+  assert.deepEqual(f.read(), { _meta: { locale: "es" }, common: "oops", more: "Más" });
+});
+
+test("addMissingBundledKeys: an installed file that doesn't parse is left exactly as it is", () => {
+  const f = addMissingFixture("{ not json", { _meta: { locale: "es" }, common: { save: "Guardar" } });
+  locales.addMissingBundledKeys(f.runtimeDir, f.bundledDir);
+  assert.equal(f.raw(), "{ not json");
+});
+
+test("addMissingBundledKeys: no installed file is seedDefaultLocales' case, and English is never touched", () => {
+  const f = addMissingFixture(undefined, { _meta: { locale: "es" }, common: { save: "Guardar" } });
+  writeLocale(f.runtimeDir, "en.json", { _meta: { locale: "en", version: 0 } });
+  locales.addMissingBundledKeys(f.runtimeDir, f.bundledDir);
+  assert.equal(fs.existsSync(path.join(f.runtimeDir, "es.json")), false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.runtimeDir, "en.json"), "utf8")), { _meta: { locale: "en", version: 0 } });
+});
+
+test("server.js runs it at startup, after seeding and the English sync", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "..", "server.js"), "utf8");
+  const seed = src.indexOf("locales.seedDefaultLocales(LOCALES_DIR"), en = src.indexOf("locales.syncCanonicalEnglish(LOCALES_DIR"), add = src.indexOf("locales.addMissingBundledKeys(LOCALES_DIR");
+  assert.ok(seed > 0 && en > seed && add > en);
+});
+
 // ---- syncCanonicalEnglish ----
 
 test("syncCanonicalEnglish: first run (no runtime en.json) seeds it from the bundle", () => {

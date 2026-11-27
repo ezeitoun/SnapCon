@@ -35,6 +35,10 @@ exports.capabilities = {
   // connector can have one without the other (AD5X writes colour only), and
   // because it needs data setColor doesn't — see filamentMaterials below.
   webUi: true, setColor: true, setMaterial: true, singleToolhead: false,
+  // Moonraker's job history, read for fleet utilization (fetchJobHistory).
+  jobHistory: true,
+  // A file's logical colors and the physical heads they map to (server.js checkToolMap).
+  maxMapTools: 32, maxMapHeads: 4,
   // filamentHeads means "show per-slot status" (colors/materials/active
   // lane); headMapping means "assigning a model color to a slot in the
   // print/send UI actually does something" — only true here because
@@ -236,6 +240,11 @@ function withPrefFallback(prefValue, printerDefault) {
   return prefValue !== undefined ? !!prefValue : !!printerDefault;
 }
 async function applyHeadMapping(p, tools, map, prefs = {}) {
+  // These reach G-code. Requests are checked on arrival (server.js checkToolMap);
+  // this also covers what was saved before that, such as a queue item's map.
+  for (const t of tools) {
+    if (!/^\d+$/.test(String(t)) || Number(t) > 31 || !/^[0-3]$/.test(String(map[t]))) throw new Error(`That toolhead mapping is not valid for ${p.name}: colors are 0-31 and heads 0-3.`);
+  }
   const lines = tools.map(t => `SET_PRINT_EXTRUDER_MAP CONFIG_EXTRUDER=${t} MAP_EXTRUDER=${map[t]}`);
   if (tools.length) {
     const usedHeads = [...new Set(tools.map(t => map[t]))];
@@ -454,6 +463,9 @@ exports.listFiles = http.listFiles;
 // implementation for every connector that stores files through it, so the
 // identity rules cannot drift between them.
 exports.compareRemoteFile = http.compareRemoteFile;
+// Read back after an upload, before a start (docs/TODO.md §37 P2).
+exports.verifyUpload = http.verifyUpload;
+exports.fetchJobHistory = http.fetchJobHistory;
 exports.getThumbnail = http.getThumbnail;
 exports.getFileMetadata = http.getFileMetadata;
 
@@ -489,10 +501,7 @@ function cameraRpc(p, method, params = {}) {
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(); } };
     try {
-      const ip   = new URL(http.baseUrl(p)).hostname;
-      const token = p.token || "";
-      const wsUrl = `ws://${ip}/websocket${token ? "?token=" + encodeURIComponent(token) : ""}`;
-      const ws   = new WebSocket(wsUrl);
+      const ws   = new WebSocket(http.websocketUrl(p));
       const payload = JSON.stringify({ id: Date.now(), jsonrpc: "2.0", method, params });
       const timer = setTimeout(() => { try { ws.close(); } catch {} finish(); }, 3000);
       ws.onopen    = () => ws.send(payload);

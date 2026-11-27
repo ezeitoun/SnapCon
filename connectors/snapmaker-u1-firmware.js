@@ -73,17 +73,9 @@ const DEFAULT_ROOT = "gcodes";
 // MQTT bridge over Moonraker's WebSocket
 // ---------------------------------------------------------------------------
 
-// Addressed exactly like cameraRpc in snapmaker-u1-klipper.js: same URL, same
-// optional token, so a printer configured once works everywhere.
-// Deliberate difference from cameraRpc: `.host` rather than `.hostname`, so a
-// printer configured with an explicit port (http://ip:7125, which is where
-// Moonraker also listens) reaches that port instead of silently falling back
-// to 80. For the normal port-80 config the two are identical.
-function wsUrlFor(p) {
-  const host = new URL(http.baseUrl(p)).host;
-  const token = p.token || "";
-  return `ws://${host}/websocket${token ? "?token=" + encodeURIComponent(token) : ""}`;
-}
+// The same address the status socket and cameraRpc use (http.websocketUrl):
+// same host and port, same optional token.
+const wsUrlFor = p => http.websocketUrl(p);
 
 // One websocket, one unisrv call, matched by id.
 //

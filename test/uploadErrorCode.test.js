@@ -13,7 +13,7 @@ test("/api/print keeps the error's code and the phase it failed in, and /api/pri
   const src = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
   assert.match(src, /job\.errorCode = \(e && e\.code\) \|\| null; job\.failedPhase = job\.phase;\n      job\.error = e\.message; job\.done = true; job\.phase = "error";/,
     "recorded before the phase becomes \"error\"");
-  assert.match(src, /errorCode: job\.errorCode \|\| null, failedPhase: job\.failedPhase \|\| null \};/);
+  assert.match(src, /errorCode: job\.errorCode \|\| null, failedPhase: job\.failedPhase \|\| null,/);
 });
 
 function refusingPrinter(t, body) {

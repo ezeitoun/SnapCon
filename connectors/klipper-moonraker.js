@@ -16,6 +16,10 @@ exports.capabilities = {
   // the same host — a reasonable default, though a bare Moonraker-only setup
   // with no frontend installed would have nothing to actually show here.
   webUi: true, setColor: false, singleToolhead: false,
+  // Moonraker's [history] component, read for fleet utilization. Optional on
+  // a generic install: without it the printer answers 404, which
+  // fetchJobHistory reports as unavailable.
+  jobHistory: true,
   // Real hardware is unknown for a generic Klipper box — matches the
   // server's own hard ceiling on POST /api/bedtemp rather than guessing low.
   maxBedTemp: 120
@@ -117,6 +121,9 @@ exports.listFiles = http.listFiles;
 // implementation for every connector that stores files through it, so the
 // identity rules cannot drift between them.
 exports.compareRemoteFile = http.compareRemoteFile;
+// Read back after an upload, before a start (docs/TODO.md §37 P2).
+exports.verifyUpload = http.verifyUpload;
+exports.fetchJobHistory = http.fetchJobHistory;
 exports.getThumbnail = http.getThumbnail;
 exports.getFileMetadata = http.getFileMetadata;
 

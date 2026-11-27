@@ -79,7 +79,11 @@ test("C-1: Dockerfile COPYs every local module server.js transitively requires",
   const missing = [];
   for (const dep of deps) {
     const top = topLevelComponent(dep);
-    if (!copied.has(top)) missing.push(path.relative(ROOT, dep) + " (needs a COPY covering '" + top + "')");
+    // A COPY of a subfolder covers what is under it (fixtures/virtual-u1:
+    // the Virtual U1's simulator, without the rest of fixtures/).
+    const rel = path.relative(ROOT, dep).split(path.sep).join("/");
+    const covered = copied.has(top) || [...copied].some(src => rel.startsWith(src + "/"));
+    if (!covered) missing.push(path.relative(ROOT, dep) + " (needs a COPY covering '" + top + "')");
   }
   assert.deepEqual(missing, [], "Dockerfile is missing a COPY for: " + missing.join(", "));
 });
@@ -102,7 +106,7 @@ function composeHostVolumePaths() {
 
 test("H-3: docker-compose.yml persists users.json and remote-access-data, not just config.json/gcode", () => {
   const hosts = composeHostVolumePaths();
-  assert.ok(hosts.includes("./config.json"), "sanity: the pre-existing config.json mount must still be there");
+  assert.ok(hosts.includes("./config"), "the settings folder must be mounted (config.json lives in it)");
   assert.ok(hosts.includes("./gcode"), "sanity: the pre-existing gcode mount must still be there");
   assert.ok(hosts.includes("./users.json"), "users.json must be mounted or User Access Management accounts are wiped by recreating the container");
   assert.ok(hosts.includes("./remote-access-data"), "remote-access-data must be mounted or Remote Access's identity/token is orphaned by recreating the container");
@@ -131,4 +135,25 @@ test("i18n: docker-compose.yml mounts the locales directory, or admin-added/edit
 test("i18n: Dockerfile COPYs locales-default (bundled originals, read via fs not require() so the C-1 require-graph check above can't catch a missing COPY here)", () => {
   const copied = dockerfileCopySources();
   assert.ok(copied.has("locales-default"), "locales-default must be COPYd or the container has nothing to seed BASE_DIR/locales/ from on first run");
+});
+
+// config.json is replaced as a whole by some routes (configLoader.js
+// replaceConfigFile), which a file that is itself a mount point refuses. So
+// the compose file mounts the FOLDER and tells SnapCon where it is; the image
+// itself must not set the variable, or an installation on an older compose
+// file (single-file mount at /app/config.json) would stop reading its file.
+test("Config: docker-compose.yml mounts a settings folder and points SNAPCON_CONFIG_DIR at it, not config.json as a single file", () => {
+  const text = fs.readFileSync(path.join(ROOT, "docker-compose.yml"), "utf8");
+  const active = text.split(/\r?\n/).filter(l => !/^\s*#/.test(l)).join("\n");
+  assert.ok(!/config\.json\s*:\s*\/app\/config\.json/.test(active), "config.json must not be mounted as a single file");
+  const mount = active.match(/^\s*-\s*\.\/config:(\S+)/m);
+  assert.ok(mount, "the ./config folder mount is missing");
+  const env = active.match(/^\s*SNAPCON_CONFIG_DIR:\s*(\S+)/m);
+  assert.ok(env, "SNAPCON_CONFIG_DIR is not set");
+  assert.equal(env[1], mount[1], "SNAPCON_CONFIG_DIR must be the folder the mount provides");
+});
+
+test("Config: the Dockerfile does not set SNAPCON_CONFIG_DIR (older compose files keep working after an image update)", () => {
+  const text = fs.readFileSync(path.join(ROOT, "Dockerfile"), "utf8");
+  assert.ok(!/^\s*ENV\s+.*SNAPCON_CONFIG_DIR/m.test(text));
 });

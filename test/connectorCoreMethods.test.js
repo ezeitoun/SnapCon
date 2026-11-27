@@ -26,7 +26,7 @@ const OPTIONAL_METHODS = [
   "discoverAt", "applyHeadMapping", "getCameraSnapshot", "openCameraStream", "getFirmwareInfo"
 ];
 
-const serverSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "server.js"), "utf8");
+const serverSrc = ["server.js", "routes/health.js", "routes/discover.js", "routes/firmwareInventory.js"].map(f => require("fs").readFileSync(require("path").join(__dirname, "..", f), "utf8")).join("\n");
 
 for (const method of OPTIONAL_METHODS) {
   // Both shapes count: a connector held in a local (`c.listFiles(p)`) and one

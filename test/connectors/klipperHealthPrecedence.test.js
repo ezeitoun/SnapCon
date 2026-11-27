@@ -67,9 +67,9 @@ async function probeWith(conn, p, status) {
 }
 
 const CASES = [
-  ["creality-klipper", creality, { name: "i7", url: "http://192.168.4.240:7125" }],
-  ["klipper-moonraker", moonraker, { name: "Generic", url: "http://192.168.4.99:7125" }],
-  ["snapmaker-u1-klipper", u1, { name: "U1 Black", url: "http://192.168.4.191" }]
+  ["creality-klipper", creality, { name: "i7", url: "http://192.168.40.240:7125" }],
+  ["klipper-moonraker", moonraker, { name: "Generic", url: "http://192.168.40.99:7125" }],
+  ["snapmaker-u1-klipper", u1, { name: "U1 Black", url: "http://192.168.40.191" }]
 ];
 
 for (const [label, conn, printer] of CASES) {
@@ -110,7 +110,7 @@ test("creality-klipper: the sdActive override never outranks a shutdown", async 
   const status = shutdownStatus();
   status.print_stats.state = "standby";
   status.virtual_sdcard.is_active = true;
-  const { st } = await probeWith(creality, { name: "i7", url: "http://192.168.4.240:7125" }, status);
+  const { st } = await probeWith(creality, { name: "i7", url: "http://192.168.40.240:7125" }, status);
   assert.equal(st.state, "error",
     "standby+is_active would otherwise be promoted to 'printing' on a dead machine");
 });
@@ -121,7 +121,7 @@ test("creality-klipper: the sdActive override never outranks a shutdown", async 
 test("snapmaker-u1-klipper: a real Snapmaker error code outranks the generic Klipper one", async () => {
   const status = shutdownStatus();
   status.print_stats.exception = { level: 3, id: 522, index: 0, code: 2, message: "System Anomaly" };
-  const { st } = await probeWith(u1, { name: "U1 Black", url: "http://192.168.4.191" }, status);
+  const { st } = await probeWith(u1, { name: "U1 Black", url: "http://192.168.40.191" }, status);
   assert.equal(st.state, "error", "still an error either way");
   assert.equal(st.errorCode, "0003-0522-0000-0002",
     "the printer's own specific code is better diagnostics than KLIPPER_SHUTDOWN");

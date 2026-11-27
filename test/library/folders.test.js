@@ -1,5 +1,5 @@
 // test/library/folders.test.js — folder classification (§6.4), on the shape
-// of the owner's real library, and the rule that a folder never decides a
+// of a real library, and the rule that a folder never decides a
 // file's printer.
 const test = require("node:test");
 const assert = require("node:assert/strict");

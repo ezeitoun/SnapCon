@@ -1,0 +1,166 @@
+{
+  "comment": "Targeted contract for GET /api/discover (docs/refactoring-policy.md). Runs in the isolated container: the only network interface is lo and nothing leaves the machine. Users: admin; viewer. The fake printers (127.0.0.2 and 127.0.0.3, port 7125) answer 404 to the two fingerprint requests a sweep makes (/machine/system_info, /printer/info); their request logs are compared like every other side effect. NDJSON answers are compared record by record, in order. Record counts for a sweep of N addresses (batches of 40): 1 initial record + ceil(N/40) progress records + 1 done record — /30: 4 addresses = 1 + 1 + 1 = 3 records; a bare x.x.x.0: 254 addresses = 1 + 7 + 1 = 9 records. Nothing here is declared volatile. One sweep runs with a printer to find: Bravo is told to answer the U1 fingerprint (/machine/system_info) for that step only, and is switched back afterwards. Every request declares what the fixture must produce (\"expect\"): the status, and for the sweeps the record count and the exact found list — the enabled sweep must find Bravo, the sweep after the switch-off must find nothing. A miss, or a control step the fake printer does not acknowledge, is an error of the run and fails verification.",
+  "trackDelays": [
+    300
+  ],
+  "steps": [
+    {
+      "do": "login",
+      "user": "admin",
+      "password": "admin-pass-1"
+    },
+    {
+      "do": "login",
+      "user": "viewer",
+      "password": "viewer-pass-1"
+    },
+    {
+      "do": "request",
+      "id": "discover-anon-401",
+      "path": "/api/discover?subnet=127.0.0.0/30",
+      "expect": {
+        "status": 401
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-viewer-403",
+      "path": "/api/discover?subnet=127.0.0.0/30",
+      "as": "viewer",
+      "expect": {
+        "status": 403
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-invalid-400",
+      "path": "/api/discover?subnet=nonsense",
+      "as": "admin",
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-too-large-400",
+      "path": "/api/discover?subnet=10.0.0.0/8",
+      "as": "admin",
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-bad-mask-400",
+      "path": "/api/discover?subnet=127.0.0.0/255.0.255.0",
+      "as": "admin",
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-no-subnet-no-lan-400",
+      "path": "/api/discover",
+      "as": "admin",
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-loopback-30-3-records",
+      "path": "/api/discover?subnet=127.0.0.0/30",
+      "as": "admin",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 3,
+        "found": []
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-loopback-legacy-24-9-records",
+      "path": "/api/discover?subnet=127.0.0.0",
+      "as": "admin",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 9,
+        "found": []
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-no-subnet-again-400",
+      "path": "/api/discover",
+      "as": "admin",
+      "expect": {
+        "status": 400
+      }
+    },
+    {
+      "do": "printer",
+      "printer": "bravo",
+      "body": {
+        "systemInfo": {
+          "product_info": {
+            "device_name": "Bravo U1",
+            "machine_type": "Snapmaker U1",
+            "serial_number": "SN-BRAVO-0001"
+          },
+          "network": {
+            "eth0": {
+              "mac_address": "aa:bb:cc:dd:ee:03",
+              "ip_addresses": [
+                {
+                  "family": "ipv4",
+                  "address": "127.0.0.3",
+                  "is_link_local": false
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-loopback-30-finds-bravo",
+      "path": "/api/discover?subnet=127.0.0.0/30",
+      "as": "admin",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 3,
+        "found": [
+          {
+            "ip": "127.0.0.3",
+            "url": "http://127.0.0.3:7125",
+            "device_name": "Bravo U1",
+            "machine_type": "Snapmaker U1",
+            "serial": "SN-BRAVO-0001",
+            "mac": "aa:bb:cc:dd:ee:03",
+            "connector": "snapmaker-u1-klipper-ws"
+          }
+        ]
+      }
+    },
+    {
+      "do": "printer",
+      "printer": "bravo",
+      "body": {
+        "systemInfo": null
+      }
+    },
+    {
+      "do": "request",
+      "id": "discover-admin-loopback-30-after-switch-off",
+      "path": "/api/discover?subnet=127.0.0.0/30",
+      "as": "admin",
+      "expect": {
+        "status": 200,
+        "ndjsonRecords": 3,
+        "found": []
+      }
+    }
+  ]
+}

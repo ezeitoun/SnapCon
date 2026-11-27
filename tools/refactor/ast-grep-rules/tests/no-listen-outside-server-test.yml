@@ -1,0 +1,8 @@
+id: no-listen-outside-server
+valid:
+  - 'server.on("listening", () => {});'
+  - 'const listen = 1;'
+  - 'emitter.listener(x);'
+invalid:
+  - 'app.listen(4545);'
+  - 'http.createServer(app).listen(port, host, cb);'

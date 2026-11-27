@@ -17,6 +17,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const vm = require("node:vm");
+const { loadUploadOutcomeHelpers } = require("./helpers/uploadOutcomeHelpers");
 const { createQueueStore } = require("../queue/QueueStore");
 const QueueEngine = require("../queue/QueueEngine");
 const { isPathWithinFolder, resolveWithinFolder } = require("../pathSafety");
@@ -40,6 +41,7 @@ function harness(t) {
     exists: async p => { if (disk.mode === "timeout") throw down(); if (disk.mode === "vanished") return false; return p === FOLDER || (p === FILE && disk.mode === "up"); },
     realpath: async p => p,
     stat: async () => ({ size: 10, mtimeMs: 1 }),
+    identity: async () => ({ size: 10, mtimeMs: 1, mtimeNs: "1000000", ctimeNs: "1000000", ino: "3", dev: "1" }),
   };
   const queueStore = createQueueStore({ baseDir: base, fileIO: {
     stat: async () => ({ size: 10, mtimeMs: 1 }),
@@ -48,19 +50,21 @@ function harness(t) {
   const printer = { id: "pr1", name: "U1", url: "http://u1", printerPoolId: "pool", connector: "x" };
   const started = [], rescans = [], audits = [];
   const env = {
-    console: { log() {}, error() {} }, path, Date, Error, LibraryError, QueueEngine, isPathWithinFolder, resolveWithinFolder,
-    PRINTERS: [printer], pendingLoad: new Map(), isPrinterIdle: async () => true, FOLDER, GCODE_ROOT: "gcode",
+    console: { log() {}, error() {} }, path, Date, Error, Math, Number, Object, Array, LibraryError, QueueEngine, isPathWithinFolder, resolveWithinFolder, CFG: {},
+    PRINTERS: [printer], pendingLoad: new Map(), queuedFile: new Map(), JOBS: new Map(), STARTING: new Map(), isPrinterIdle: async () => true, FOLDER, GCODE_ROOT: "gcode",
     safePath: sub => resolveWithinFolder(sub, FOLDER), fileExists: p => netfs.exists(p), netfs, queueStore,
     library: { available: true, rescan: async id => { rescans.push(id); }, locateContent: () => [], printLocation: () => { throw new Error("no Library roots here"); }, recordPrintStart: () => {} },
-    getConnector: () => ({ uploadFile: async () => {}, startPrintFile: async (p, name) => { started.push(name); } }),
+    getConnector: () => ({ uploadFile: async () => {}, verifyUpload: async () => ({ result: "verified", evidence: "the test printer has it" }), startPrintFile: async (p, name) => { started.push(name); } }),
     assertNotActiveJobFile: async () => {}, decideUpload: async () => ({ action: "upload" }), whileUploading: fn => fn(), withStartSequence: (p, fn) => fn(),
     printerHasAnyDefaultPref: () => false, wantsAnyPref: () => false, ROUTE_STARTED_PRINT: new Set(),
     auditLog: { log: e => { audits.push(e.event); return 1; } }, libraryAudit: x => x,
   };
   vm.createContext(env);
+  try { loadUploadOutcomeHelpers(env, serverSrc); } catch {}
   vm.runInContext("const relOf = ref => path.relative(ref.dir, ref.fp).split(path.sep).join('/');", env);
-  vm.runInContext("const ROOT_DOWN = new Map();", env);
-  for (const name of ["async function resolveFileRef(", "async function locationAnswers(", "function noteRootDown(", "async function relocateQueuedFile(", "async function attemptQueueDispatch("]) {
+  vm.runInContext("const ROOT_DOWN = new Map(); let jobN = 0; const newJobId = () => 'j' + (++jobN);", env);
+  for (const name of ["async function resolveFileRef(", "async function locationAnswers(", "function noteRootDown(", "async function relocateQueuedFile(", "async function attemptQueueDispatch(",
+    "function queueDispatchJob(", "function otherSendInFlight(", "function queueStillDispatching("]) {
     const at = serverSrc.indexOf(name);
     assert.ok(at > 0, name);
     const end = serverSrc.slice(at).search(/\r?\n\}\r?\n/);

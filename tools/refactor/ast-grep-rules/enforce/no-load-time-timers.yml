@@ -1,0 +1,18 @@
+id: no-load-time-timers
+language: javascript
+severity: error
+message: A route module must not start timers when it is loaded (initialization timing must not change).
+files: ["**/routes/**"]
+ignores: ["test/**", "tools/**", "**/test/**", "**/tools/**", "**/node_modules/**"]
+rule:
+  any:
+    - pattern: setInterval($$$)
+    - pattern: setTimeout($$$)
+  not:
+    inside:
+      any:
+        - kind: function_declaration
+        - kind: function_expression
+        - kind: arrow_function
+        - kind: method_definition
+      stopBy: end

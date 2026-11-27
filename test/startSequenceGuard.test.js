@@ -55,6 +55,9 @@ function sandbox(probeResult) {
   // guard, and the firmware interaction has its own file
   // (test/firmwareTargetingAndRejects.test.js).
   vm.runInContext("function firmwareUpdating(){ return false; }", env);
+  // And whether the queue is sending to the printer (TODO §28); never here
+  // (see test/queueDispatchUpload.test.js).
+  vm.runInContext("function queueDispatchJob(){ return null; }", env);
   vm.runInContext(extract("isPrinterIdle", "async"), env);
   vm.runInContext(extract("withStartSequence", "async"), env);
   // A `const` declared inside a vm context is NOT a property of the sandbox
@@ -212,6 +215,9 @@ test("a probe failure still fails closed, guard or no guard", async () => {
   // guard, and the firmware interaction has its own file
   // (test/firmwareTargetingAndRejects.test.js).
   vm.runInContext("function firmwareUpdating(){ return false; }", env);
+  // And whether the queue is sending to the printer (TODO §28); never here
+  // (see test/queueDispatchUpload.test.js).
+  vm.runInContext("function queueDispatchJob(){ return null; }", env);
   vm.runInContext(extract("isPrinterIdle", "async"), env);
   assert.equal(await env.isPrinterIdle({ id: "x" }), false);
 });

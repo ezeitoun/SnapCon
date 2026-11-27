@@ -24,7 +24,7 @@ const CONNECTORS = [
 
 // p.id is the cache key the mode module uses, so each test gets its own.
 let n = 0;
-const printer = (over = {}) => Object.assign({ id: "ff" + (++n), name: "5M PRO", url: "http://192.168.4.31" }, over);
+const printer = (over = {}) => Object.assign({ id: "ff" + (++n), name: "5M PRO", url: "http://192.168.40.31" }, over);
 
 test.beforeEach(() => mode._resetAll());
 

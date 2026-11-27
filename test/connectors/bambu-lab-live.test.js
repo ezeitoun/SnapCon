@@ -13,8 +13,8 @@ const bambu = require("../../connectors/bambu-lab");
 const { createFakeBambuBroker } = require("../helpers/fakeBambuBroker");
 const { IDLE_REPORT } = require("../fixtures/bambu-p2s-report");
 
-const SERIAL = "22E8AJ5C2001188";
-const CODE = "603db0db";
+const SERIAL = "00T0ES0T0000001";
+const CODE = "123ab4cd";
 const VERSION = [{ name: "ota", product_name: "Bambu Lab P2S", sw_ver: "01.02.00.00" }];
 
 // Each test gets its own broker, its own printer id (so connections never

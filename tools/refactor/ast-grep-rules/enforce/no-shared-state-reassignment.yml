@@ -1,0 +1,11 @@
+id: no-shared-state-reassignment
+language: javascript
+severity: error
+message: CFG / PRINTERS / FOLDER are owned and reassigned by server.js only; modules read them through injected getters.
+files: ["**/routes/**", "**/library/**", "**/queue/**", "**/transfers/**", "**/sync/**", "**/audit/**", "**/utilization/**", "**/netfs/**", "**/remote-access/**", "**/connectors/**"]
+ignores: ["test/**", "tools/**", "**/test/**", "**/tools/**", "**/node_modules/**"]
+rule:
+  kind: assignment_expression
+  has:
+    field: left
+    regex: "^(CFG|PRINTERS|FOLDER)$"

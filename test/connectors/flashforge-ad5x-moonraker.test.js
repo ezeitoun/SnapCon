@@ -32,7 +32,9 @@ function zmodPrinter(opts = {}) {
     if (req.method === "POST" && (u.pathname === "/detail" || u.pathname === "/printGcode")) {
       if (!native) { res.statusCode = 404; return res.end(); }
       res.setHeader("content-type", "application/json");
-      return res.end(JSON.stringify({ code: 0, detail: { status: "ready" } }));
+      // Printing once sent a start, so its confirmation ends at once.
+      const started = seen.all.some(x => x.endsWith("/printGcode"));
+      return res.end(JSON.stringify({ code: 0, detail: { status: started ? "printing" : "ready" } }));
     }
     if (u.pathname === "/printer/info") return json(res, { result: { state: "ready" } });
     if (u.pathname === "/server/webcams/list") return json(res, { result: { webcams: [] } });

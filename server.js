@@ -1,24 +1,21 @@
-// server.js — SnapCon  ·  v0.8.0
+// server.js — SnapCon  ·  v2026.11.0
 // Watches a folder of sliced gcode, shows the toolhead/color map per file,
 // and pushes the chosen file to the chosen printer via Moonraker (server-side,
 // so no browser CORS headaches).
 
-const VERSION = "0.8.0";
+const VERSION = "2026.11.0";
 
 const express = require("express");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const os = require("os");
-// Used only to ask the OS which adapter carries the default route (see
-// defaultRouteAddress) — no packets are ever sent.
-const dgram = require("dgram");
 const crypto = require("crypto");
 const readline = require("readline");
 const { parseGcodeMap, parseGcodeMapLines } = require("./parser");
 const threemf = require("./threemf");
 const auth = require("./auth");
-const { getConnector, listConnectorTypes, getCapabilities, getAddress, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
+const { getConnector, listConnectorTypes, isVirtualType, getCapabilities, getAddress, CONNECTOR_TYPES, DEFAULT_TYPE: DEFAULT_CONNECTOR_TYPE } = require("./connectors");
 const { isValidHost, normalizePort, parseAddressUrl, composeAddressUrl } = require("./connectors/address");
 const connHttp = require("./connectors/http-utils");
 // Firmware flashing lives outside the connector interface on purpose (see
@@ -29,6 +26,7 @@ const u1Firmware = require("./connectors/snapmaker-u1-firmware");
 const firmwareImage = require("./connectors/firmwareImage");
 const { createRemoteAccessService } = require("./remote-access/RemoteAccessService");
 const { createAuditLog } = require("./audit/AuditLog");
+const { createUtilization } = require("./utilization");
 const { createLibraryService, LibraryError, GCODE_ROOT } = require("./library/LibraryService");
 const { checkReachable, netfsFsp } = require("./library/locations");
 // Every filesystem call that can touch the G-code folder (often a NAS share)
@@ -42,14 +40,17 @@ let UPLOADS_ACTIVE = 0;
 async function whileUploading(fn) { UPLOADS_ACTIVE++; try { return await fn(); } finally { UPLOADS_ACTIVE--; } }
 const { registerLibraryRoutes } = require("./library/routes");
 const { createSyncEngine } = require("./sync/SyncEngine");
-const { loadConfigFile } = require("./configLoader");
+const { loadConfigFile, replaceConfigFile, resolveConfigLocation, checkConfigDir, readConfigStrict, isMountPoint } = require("./configLoader");
 const locales = require("./locales");
-const { readNotifyToken, ensureNotifyToken, timingSafeTokenEqual } = require("./notifyToken");
+const { ensureNotifyToken, timingSafeTokenEqual } = require("./notifyToken");
 const { isPathWithinFolder, resolveWithinFolder } = require("./pathSafety");
+const fileTrash = require("./fileTrash");
+const { createFleetProbe, keyOf: fleetProbeKeyOf } = require("./fleetProbe");
 const { sendWebhook, redactUrls } = require("./webhookNotify");
 // Shared with the browser (served from public/): the one place slicer metadata
 // and connector knowledge become a printer identity.
 const PrinterIdentity = require("./public/printer-identity.js");
+const Rediscover = require("./public/rediscover.js");
 
 // Defense in depth, not a substitute for fixing the actual bug: an unhandled
 // promise rejection anywhere (a bare setTimeout callback with no .catch(), a
@@ -80,11 +81,33 @@ const ASSET_DIR = __dirname;
 // would just kill the app for good.
 const IS_DOCKER = (() => { try { return fs.existsSync("/.dockerenv"); } catch { return false; } })();
 
-const CONFIG_PATH = path.join(BASE_DIR, "config.json");
+// config.json sits beside the application unless SNAPCON_CONFIG_DIR names a
+// folder for it (the Docker layout: a mounted folder, so config.json can be
+// replaced as a whole — configLoader.js). With a settings folder, a
+// config.json that cannot be used, or a missing one on an installation that
+// has been used before, stops the start here, before anything is loaded,
+// written or served: starting with defaults would switch user accounts off.
+// The settings read by that check are the ones the first loadConfig() below
+// starts with (CONFIG_START_LOAD) — the file is not read a second time.
+// This applies to the --load process too.
+const CONFIG_LOCATION = resolveConfigLocation({ baseDir: BASE_DIR });
+const CONFIG_PATH = CONFIG_LOCATION.configPath;
+const CONFIG_DEFAULTS = { gcodeFolder: "./gcode", port: 4545, printers: [] };
+let CONFIG_START_LOAD = null;
+if (CONFIG_LOCATION.configDir) {
+  const check = checkConfigDir({ ...CONFIG_LOCATION, baseDir: BASE_DIR, defaultCfg: CONFIG_DEFAULTS });
+  if (!check.ok) {
+    console.error("[config] " + check.message.split("\n").join("\n[config] "));
+    process.exit(78);   // EX_CONFIG
+  }
+  CONFIG_START_LOAD = check.load;
+} else if (isMountPoint(CONFIG_PATH)) {
+  console.warn("[config] " + CONFIG_PATH + " is mounted as a single file. SnapCon runs, but changing a printer's pool and switching Queue Management on or off cannot be saved in this layout. Mount a settings folder instead: see docs/docker-config-migration.md.");
+}
 const USERS_PATH = path.join(BASE_DIR, "users.json");
 const QUEUED_FILE_PATH = path.join(BASE_DIR, "queued-files.json");
 const NOTIFY_TOKEN_PATH = path.join(BASE_DIR, "notify-token.json");
-const DEFAULT_CFG = { gcodeFolder: "./gcode", port: 4545, printers: [] };
+const DEFAULT_CFG = CONFIG_DEFAULTS;
 // Runtime, writable, per-install (BASE_DIR) — never the bundled read-only
 // tree. LOCALES_DEFAULT_DIR ships the canonical originals and is only ever
 // read from, to seed LOCALES_DIR on first run (see locales.seedDefaultLocales).
@@ -95,6 +118,17 @@ function refreshLocaleRegistry() { LOCALE_REGISTRY = locales.scanLocales(LOCALES
 
 // Live config — editable from the Settings page, no restart needed.
 let CFG, FOLDER, PRINTERS;
+// PRINTERS is the printers SnapCon runs: every one in config.json, except
+// virtual printers (the Simulator, the Virtual U1) while Settings › General ›
+// Enable virtual printers is off. Those stay in CFG.printers untouched and
+// come back unchanged when it is turned on; nothing else sees them — no
+// fleet row, no probe, no route, no pool, no queue dispatch. A new array,
+// the same printer objects: an edit to a printer reaches CFG.printers too,
+// and a save keeps the hidden ones (POST /api/config).
+function activePrinters(cfg) {
+  const all = Array.isArray(cfg.printers) ? cfg.printers : [];
+  return cfg.virtualPrintersEnabled === true ? all : all.filter(p => !isVirtualType(p.connector));
+}
 // Set fresh on every loadConfig() call (including the reload after a
 // successful POST /api/config save, which naturally clears these again by
 // loading the just-written, definitely-valid file) — see P0-1 in
@@ -105,12 +139,30 @@ let CFG, FOLDER, PRINTERS;
 let CONFIG_LOAD_FAILED = false;
 let CONFIG_LOAD_QUARANTINE_PATH = null;
 function loadConfig() {
-  const result = loadConfigFile(CONFIG_PATH, DEFAULT_CFG);
+  let result = CONFIG_START_LOAD;
+  CONFIG_START_LOAD = null;
+  if (!result) {
+    if (CONFIG_LOCATION.configDir) {
+      // With a settings folder a reload never falls back to defaults and
+      // never sets the file aside: if config.json is missing or unusable the
+      // settings in memory stay and CONFIG_LOAD_FAILED is set. That flag is
+      // not a write lock: only the paths that consult it (the ensure*Schema
+      // migrations, the queue and pool saves, a few routes) refuse to write;
+      // the other Settings write sites still write the file.
+      const read = readConfigStrict(CONFIG_PATH);
+      if (read.state !== "ok") {
+        console.error("[config] " + CONFIG_PATH + " could not be reloaded (" + (read.why || "it is missing") + "); keeping the settings in memory and leaving the file as it is");
+        CONFIG_LOAD_FAILED = true;
+        return;
+      }
+      result = { cfg: read.cfg, loadFailed: false, quarantinePath: null };
+    } else result = loadConfigFile(CONFIG_PATH, DEFAULT_CFG);
+  }
   CFG = result.cfg;
   CONFIG_LOAD_FAILED = result.loadFailed;
   CONFIG_LOAD_QUARANTINE_PATH = result.quarantinePath;
   FOLDER = path.resolve(BASE_DIR, CFG.gcodeFolder || "./gcode");
-  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  PRINTERS = activePrinters(CFG);
   // The G-code folder is its own availability root (netfs/NetFs.js): known
   // unreachable, its routes answer 503 at once instead of each hanging.
   netfs.registerRoot("gcode", FOLDER);
@@ -135,11 +187,14 @@ const PORT = CFG.port || 4545;
 // Seed-once, never-overwrite for every locale except English (see
 // locales.seedDefaultLocales), then English's own version-gated sync (see
 // locales.syncCanonicalEnglish — safe specifically because the Language
-// Editor never lets anyone write en.json), then an initial scan — same
+// Editor never lets anyone write en.json), then the strings each installed
+// translation is missing from its bundled copy (locales.addMissingBundledKeys
+// — adds only, never changes a value), then an initial scan — same
 // "load at startup, Refresh re-scans" lifecycle as every other cached
 // registry in this file.
 try { locales.seedDefaultLocales(LOCALES_DIR, LOCALES_DEFAULT_DIR); } catch (e) { console.error("[locales] seeding failed:", e.message); }
 try { locales.syncCanonicalEnglish(LOCALES_DIR, LOCALES_DEFAULT_DIR); } catch (e) { console.error("[locales] English sync failed:", e.message); }
+try { locales.addMissingBundledKeys(LOCALES_DIR, LOCALES_DEFAULT_DIR); } catch (e) { console.error("[locales] adding new strings failed:", e.message); }
 refreshLocaleRegistry();
 
 const newPrinterId = () => "p_" + crypto.randomBytes(6).toString("hex");
@@ -188,6 +243,19 @@ function ensureNotificationSchema() {
 }
 ensureNotificationSchema();
 
+// One-time rename: the Simulator printer type became "Test printer" on
+// 2026-10-15. A printer's brand is stored when it is saved (buildPrinterRecord),
+// so a Simulator saved before keeps showing the old name until it is renamed
+// here. Every printer, hidden virtual ones included (CFG.printers).
+function renameSimulatorBrand() {
+  let changed = false;
+  for (const p of CFG.printers || []) {
+    if (p && p.connector === "simulator" && p.brand === "Simulator") { p.brand = getConnector("simulator").brand; changed = true; }
+  }
+  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+}
+renameSimulatorBrand();
+
 // One-time migration: the old openCompact boolean (just compact-or-not) is
 // superseded by defaultView (a full view-mode choice, including Print Farm)
 // — preserves whatever behavior an existing install already had, then the
@@ -220,7 +288,7 @@ const { migratePrinterPoolConfig } = require("./queue/migratePrinterPool");
 (function migratePrinterPoolOnStartup() {
   const { cfg, changed } = migratePrinterPoolConfig(CFG);
   CFG = cfg;
-  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  PRINTERS = activePrinters(CFG);
   if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 })();
 // Retires the original U1 connector in favor of the WebSocket one (see
@@ -234,7 +302,7 @@ const { migrateU1ConnectorConfig } = require("./connectors/migrateU1Connector");
 (function migrateU1ConnectorOnStartup() {
   const { cfg, changed } = migrateU1ConnectorConfig(CFG);
   CFG = cfg;
-  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  PRINTERS = activePrinters(CFG);
   if (changed && !CONFIG_LOAD_FAILED) {
     try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
     console.log("[config] migrated printers from the retired snapmaker-u1-klipper connector to snapmaker-u1-klipper-ws");
@@ -251,7 +319,7 @@ const { migratePrinterAddressConfig } = require("./connectors/migratePrinterAddr
 (function migratePrinterAddressOnStartup() {
   const { cfg, changed, issues } = migratePrinterAddressConfig(CFG);
   CFG = cfg;
-  PRINTERS = Array.isArray(CFG.printers) ? CFG.printers : [];
+  PRINTERS = activePrinters(CFG);
   // Reported, never rewritten: a URL this migration can't take apart
   // keeps working exactly as it did, and the admin can fix the address in
   // Settings when they choose to.
@@ -280,12 +348,16 @@ ensureGroupsSchema();
 // predating the feature entirely.
 const QueueEngine = require("./queue/QueueEngine");
 const { createQueueStore, defaultPrinterState: defaultQueuePrinterState } = require("./queue/QueueStore");
+const { changePrinterPool, enableQueueManagement, disableQueueManagement } = require("./queue/poolChange");
+const { createTransferResults, RESULT_LIMITS } = require("./transfers/TransferResults");
+const { createDeferredStore, LIMITS: DEFERRED_LIMITS, ID_SHAPE } = require("./transfers/DeferredStore");
 const newPrinterPoolId = () => "pp_" + crypto.randomBytes(6).toString("hex");
 // Id kept as its original literal value across the Printer Pool rename —
 // see queue/migratePrinterPool.js: existing pool ids are preserved verbatim,
 // only field/key names ("queueProfiles"/"printerPoolId") were renamed.
 const PRINTER_POOL_DEFAULT_MANUAL_ID = "qp_default_manual";
-function ensurePrinterPoolSchema() {
+// save: false — the caller saves config.json itself and checks the result.
+function ensurePrinterPoolSchema({ save = true } = {}) {
   if (!CFG.queueManagement || typeof CFG.queueManagement !== "object") CFG.queueManagement = { enabled: false, mode: "per-printer" };
   if (!Array.isArray(CFG.printerPools)) CFG.printerPools = [];
   let changed = false;
@@ -294,11 +366,24 @@ function ensurePrinterPoolSchema() {
     CFG.printerPools.unshift({ id: PRINTER_POOL_DEFAULT_MANUAL_ID, name: "Unassigned", type: "manual", isDefault: true, bedClearOnDispatchFailure: false, createdAt: now, updatedAt: now });
     changed = true;
   }
-  if (changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
+  if (save && changed && !CONFIG_LOAD_FAILED) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
 }
 ensurePrinterPoolSchema();
+// Created here, LOADED only after the CLI block below returns — for the same
+// reason as the two stores that follow: loading acts on the folder (a leftover
+// temporary file, a corrupt primary beside a good backup), and a --load call
+// is a second process next to the running server.
 const queueStore = createQueueStore({ baseDir: BASE_DIR, fileIO: { stat: p => netfs.stat(p), hashFile: p => netfs.hashFile(p) } });
-queueStore.load();
+// Sends waiting for a busy printer (§37 P3), and the final outcome of each
+// transfer (§37 P4). Created here, LOADED only at startup below (before
+// deferredStartup), never in the CLI block: a --load call is a second
+// process, and loading tidies files (a leftover temporary file, a corrupt
+// list) the running server may be writing at that moment.
+const deferredStore = createDeferredStore({ baseDir: BASE_DIR });
+// A result an unresolved send still needs is never expired (owner, P4 item 6).
+// While the send list cannot be read (or is held after a recovery), nothing
+// is known to be resolved, so nothing expires (P4 backend review R3).
+const transferResults = createTransferResults({ baseDir: BASE_DIR, isProtected: tid => { const st = deferredStore.status(); return st.readOnly || st.recoveryRequired || deferredStore.holdsTransfer(tid); } });
 
 // Users for the optional User Access Management feature. No file exists until
 // the first user is actually created — CFG.usersEnabled being true with zero
@@ -314,85 +399,22 @@ function saveUsers() {
 loadUsers();
 
 // ---- CLI notify mode ----
-// `SnapCon --load "C:\file.gcode" --printer "U1 White" --outputname "Nicer Name"`
-// pings an ALREADY-RUNNING instance's HTTP API and exits — it never starts the
-// web server itself. A plain top-level `return` (valid — CommonJS wraps each
-// file in a function) stops the rest of this file, Express setup included,
-// from ever running. --outputname is cosmetic + the upload filename only —
-// the file read from disk is always the --load path.
-// `--snapcon <host[:port]>` targets a SnapCon instance on a DIFFERENT machine
-// (e.g. the slicing PC isn't the one hosting SnapCon). Since that instance
-// can't read a path off this machine's disk, this mode reads the file itself
-// and streams its bytes over HTTP instead of sending a path reference — the
-// server materializes them into a temp file on its own side (see
-// /api/notify-load below). Omit --snapcon to keep the original same-machine,
-// zero-copy path-reference flow.
+// `SnapCon --load "C:\file.gcode" --printer "U1 White" [--outputname "Nicer
+// Name"] [--snapcon host[:port]] [--wait [seconds]]` pings an ALREADY-RUNNING
+// instance and exits — see notifyCli.js. A plain top-level `return` (valid —
+// CommonJS wraps each file in a function) stops the rest of this file,
+// Express setup and every store load included, from ever running.
 const CLI_LOAD_ARG = process.argv.indexOf("--load");
 if (CLI_LOAD_ARG !== -1) {
-  const file = process.argv[CLI_LOAD_ARG + 1];
-  const printerArgI = process.argv.indexOf("--printer");
-  const printer = printerArgI !== -1 ? process.argv[printerArgI + 1] : "";
-  const outputArgI = process.argv.indexOf("--outputname");
-  const outputname = outputArgI !== -1 ? process.argv[outputArgI + 1] : "";
-  const snapconArgI = process.argv.indexOf("--snapcon");
-  const snapconTarget = snapconArgI !== -1 ? process.argv[snapconArgI + 1] : "";
-  if (!file) { console.error("--load requires a file path"); process.exit(1); }
-  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) { console.error("File not found: " + file); process.exit(1); }
-
-  if (snapconTarget) {
-    // "host", "host:port", "[ipv6]", or "[ipv6]:port" — bracket form first so
-    // a bare colon inside an IPv6 address is never mistaken for a port split.
-    const s = String(snapconTarget);
-    const bracketed = s.match(/^\[([^\]]+)\](?::(\d+))?$/);
-    let hostname, port;
-    if (bracketed) {
-      hostname = bracketed[1]; port = bracketed[2] ? parseInt(bracketed[2], 10) : 4545;
-    } else {
-      const i = s.lastIndexOf(":");
-      const tail = i !== -1 ? s.slice(i + 1) : "";
-      if (i !== -1 && /^\d+$/.test(tail)) { hostname = s.slice(0, i); port = parseInt(tail, 10); }
-      else { hostname = s; port = 4545; }
-    }
-    const stat = fs.statSync(file);
-    const qs = "printer=" + encodeURIComponent(printer) + "&outputname=" + encodeURIComponent(outputname) + "&filename=" + encodeURIComponent(path.basename(file));
-    const req = http.request({
-      hostname, port, path: "/api/notify-load?" + qs, method: "POST",
-      headers: { "Content-Type": "application/octet-stream", "Content-Length": stat.size }
-    }, res => {
-      let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
-      res.on("end", () => {
-        if (res.statusCode >= 300) { console.error("SnapCon: " + b); process.exit(1); }
-        console.log("SnapCon: " + b); process.exit(0);
-      });
-    });
-    req.on("error", e => { console.error("Could not reach SnapCon at " + hostname + ":" + port + " (" + e.message + ")"); process.exit(1); });
-    fs.createReadStream(file).pipe(req);
-    return;
-  }
-
-  // Reads (never generates) the local notify token the running server
-  // already established at its own startup — see notifyToken.js's header
-  // comment for why the CLI must never be the one to create this value.
-  const notifyToken = readNotifyToken(NOTIFY_TOKEN_PATH);
-  if (!notifyToken) {
-    console.error("SnapCon: no local notify token found at " + NOTIFY_TOKEN_PATH + " — is SnapCon running (has it started at least once)? If it logged a token-persistence failure, this feature is unavailable until that's fixed.");
-    process.exit(1);
-  }
-  const body = JSON.stringify({ file: path.resolve(file), printer, outputname });
-  const req = http.request({
-    hostname: "127.0.0.1", port: PORT, path: "/api/notify-load", method: "POST",
-    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), "X-SnapCon-Local-Token": notifyToken }
-  }, res => {
-    let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
-    res.on("end", () => {
-      if (res.statusCode >= 300) { console.error("SnapCon: " + b); process.exit(1); }
-      console.log("SnapCon: " + b); process.exit(0);
-    });
-  });
-  req.on("error", e => { console.error("Could not reach SnapCon on port " + PORT + " — is it running? (" + e.message + ")"); process.exit(1); });
-  req.write(body); req.end();
+  require("./notifyCli").runNotifyCli({ argv: process.argv, port: PORT, tokenPath: NOTIFY_TOKEN_PATH })
+    .then(code => process.exit(code), e => { console.error("SnapCon: " + (e && e.message)); process.exit(1); });
   return;
 }
+
+// Genuine server startup from here on. The queue store is loaded first, before
+// anything below can read or change queue state (it was loaded just above the
+// CLI block until the queue durability fix; nothing in between used it).
+queueStore.load();
 
 // Established once here, at genuine server startup (never in CLI mode,
 // which returns above before reaching this line) — the ONE writer for this
@@ -401,10 +423,9 @@ if (CLI_LOAD_ARG !== -1) {
 // that case rather than fall back to trusting isLoopback() alone.
 const NOTIFY_TOKEN = ensureNotifyToken(NOTIFY_TOKEN_PATH);
 
-// Temp staging area for files pushed from a remote --snapcon CLI call (see
-// /api/notify-load) — the server can't reference a path on the CLI's own
-// machine, so it writes the pushed bytes here first. Wiped on every startup
-// to drop anything orphaned by a crash mid-transfer.
+// Where files pushed from a remote --snapcon CLI call used to wait, deleted at
+// every startup. They are kept in data/deferred-files/ now (§37 P3); an old
+// leftover directory is still removed.
 const NOTIFY_TMP_DIR = path.join(BASE_DIR, ".notify-tmp");
 try { fs.rmSync(NOTIFY_TMP_DIR, { recursive: true, force: true }); } catch {}
 
@@ -436,6 +457,23 @@ const updateChecker = createUpdateChecker({ baseDir: BASE_DIR, version: VERSION,
 // silent no-op on a Node runtime too old for node:sqlite (see AuditLog.js);
 // never blocks or crashes any request either way.
 const auditLog = createAuditLog({ baseDir: BASE_DIR, retentionDaysFn: () => CFG.auditRetentionDays });
+// Fleet utilization (Phase 1: recording only). Fed by notifyTick's readings;
+// cannot throw, and a failure only stops the recording.
+const utilization = createUtilization({
+  baseDir: BASE_DIR, isVirtual: isVirtualType,
+  // Phase 2: the printer's job history, read only, where its connector has one.
+  // Read only when config.json utilization.readPrinterHistory says so (true, or
+  // a list of printer ids for a pilot); off when absent. Live: a config change
+  // applies at the next poll.
+  historySetting: () => CFG.utilization ? CFG.utilization.readPrinterHistory : undefined,
+  historyFor: p => {
+    const c = getConnector(p.connector);
+    return c && c.capabilities && c.capabilities.jobHistory && typeof c.fetchJobHistory === "function" ? opts => c.fetchJobHistory(p, opts) : null;
+  },
+  // The nightly backup runs on its worker: its failure is reported here.
+  onBackupFailed: e => auditLog.log({ category: "admin", event: "backup-failed", detail: { database: "utilization.db", message: e.message } }),
+});
+utilization.start();
 setInterval(() => auditLog.prune(CFG.auditRetentionDays), 24 * 60 * 60 * 1000).unref();
 auditLog.prune(CFG.auditRetentionDays);
 
@@ -468,6 +506,7 @@ function backupStoreIfDue(name, store, category) {
 function backupDatabasesIfDue() {
   backupStoreIfDue("audit", auditLog, "admin");
   backupStoreIfDue("sync", syncEngine.store, "sync");
+  backupStoreIfDue("utilization", utilization, "admin");
 }
 setTimeout(backupDatabasesIfDue, 60 * 1000).unref();
 setInterval(backupDatabasesIfDue, 60 * 60 * 1000).unref();
@@ -540,6 +579,15 @@ app.get("/", (req, res) => {
   try { res.type("html").send(fs.readFileSync(path.join(ASSET_DIR, "public", "index.html"), "utf8")); }
   catch (e) { res.status(500).send("index.html not found"); }
 });
+// Third-party notices (THIRD_PARTY_NOTICES.md: the theme icons, the bundled
+// font). The file goes with every copy of SnapCon — the Docker image copies it
+// and the packaged binaries embed it (package.json pkg.assets) — and it is
+// served here so that whoever has a copy can read it: a file inside a binary
+// cannot be opened any other way. No sign-in, like the page and its assets.
+app.get("/THIRD_PARTY_NOTICES.md", (req, res) => {
+  try { res.type("text/plain").send(fs.readFileSync(path.join(ASSET_DIR, "THIRD_PARTY_NOTICES.md"), "utf8")); }
+  catch (e) { res.status(404).type("text/plain").send("THIRD_PARTY_NOTICES.md not found"); }
+});
 // /orca/<printer name> (case-insensitive, "_" = space) — same page; the client
 // reads the path and filters the fleet down to just that one printer's card.
 app.get(/^\/orca\/.+$/i, (req, res) => {
@@ -562,6 +610,13 @@ app.get(/^\/library(\/(m\/[0-9a-f-]{36}|attention)?)?\/?$/i, (req, res) => {
   catch (e) { res.status(500).send("index.html not found"); }
 });
 
+// /utilization — Fleet utilization (read only), same page, like /library; its
+// filters are in the query string, read by public/utilization.js.
+app.get(/^\/utilization\/?$/i, (req, res) => {
+  try { res.type("html").send(fs.readFileSync(path.join(ASSET_DIR, "public", "index.html"), "utf8")); }
+  catch (e) { res.status(500).send("index.html not found"); }
+});
+
 // fetchTimeout/fetchJSONTimeout/baseUrl/pickIface are generic HTTP helpers
 // (not printer-protocol-specific) shared with connectors/ — see
 // connectors/http-utils.js. Everything printer-protocol-specific now lives
@@ -571,8 +626,12 @@ const { fetchTimeout, fetchJSONTimeout, baseUrl } = connHttp;
 // Resolve a requested path safely INSIDE the watched folder (no traversal).
 // See pathSafety.js for the actual containment logic and why it's not a
 // bare startsWith() check.
+// Never a path in the trash (fileTrash.js): every route that names a G-code
+// folder file comes through here or resolveFileRef(), so none can read, send,
+// queue or overwrite a deleted file. The trash's own routes use fileTrash.
 function safePath(sub) {
-  return resolveWithinFolder(sub, FOLDER);
+  const fp = resolveWithinFolder(sub, FOLDER);
+  return fp && !fileTrash.isInTrash(fp, FOLDER) ? fp : null;
 }
 
 // The extensions the file browser lists as printable files.
@@ -594,6 +653,12 @@ function replyIfNasDown(res, e) {
 // (NAS_UNREACHABLE), never a quiet "no". Checked on every use: the breaker
 // only short-circuits a known outage, it never stands in for this check.
 const fileExists = fp => netfs.exists(fp);
+// The G-code folder's trash (fileTrash.js) reaches the folder through netfs too.
+const TRASH_IO = {
+  stat: p => netfs.stat(p), exists: p => netfs.exists(p), readdir: p => netfs.readdir(p),
+  mkdir: (p, o) => netfs.mkdir(p, o), rename: (a, b) => netfs.rename(a, b), moveNoReplace: (a, b) => netfs.moveNoReplace(a, b), unlinkFile: (p, expect) => netfs.unlinkFile(p, expect), identity: p => netfs.identity(p),
+  readFile: (p, max) => netfs.readFile(p, max), writeFileExclusive: (p, data) => netfs.writeFileExclusive(p, data),
+};
 
 // M7 (docs/library-design.md §12): a file named by a Library location and its
 // path inside it. No root, or "gcode", is the G-code folder exactly as before
@@ -684,14 +749,15 @@ app.get("/api/printers", requireAuth, (req, res) => {
 app.get("/api/files", requireAuth, async (req, res) => {
   const sub = req.query.sub || "";
   const dir = sub ? safePath(sub) : FOLDER;
-  if (!dir) return res.status(400).json({ error: "Invalid path" });
+  // The trash (fileTrash.js) is not a folder to browse.
+  if (!dir || fileTrash.isInTrash(dir, FOLDER)) return res.status(400).json({ error: "Invalid path" });
   try {
     // One netfs round trip: the directory plus a stat of each listed file.
     // .gx/.3mf are FlashForge's slicer output (.3mf specifically for
     // multi-material/IFS jobs on the AD5X) — without these, a FlashForge
     // user's sliced files never show up here at all.
     const entries = await netfs.listDir(dir, SLICED_FILE_RE);
-    const folders = entries.filter(e => e.isDirectory).map(e => e.name).sort();
+    const folders = entries.filter(e => e.isDirectory && !(dir === FOLDER && fileTrash.isTrashRel(e.name))).map(e => e.name).sort();
     const files = [];
     for (const e of entries.filter(x => x.isFile)) {
       const fp = path.join(dir, e.name);
@@ -1282,6 +1348,27 @@ app.post("/api/firmware-options", requireAdmin, (req, res) => {
   res.json({ ok: true, skipCurrent: CFG.firmwareSkipCurrent !== false, verify: CFG.firmwareVerify !== false });
 });
 
+// The fleet's non-blocking offline display path (docs/TODO.md §48). On unless
+// config.json says "fleetFastOffline": false. Turning it off makes GET
+// /api/fleet probe every printer the authoritative way again, at once, with
+// no restart; probes already running finish and are recorded normally (they
+// are real results about the printer as configured). Admin-only, saved, and
+// audited, like the firmware options above.
+app.get("/api/fleet-fast-offline", requireAdmin, (req, res) => {
+  res.json({ enabled: CFG.fleetFastOffline !== false, stats: FLEET_PROBE.stats() });
+});
+app.post("/api/fleet-fast-offline", requireAdmin, (req, res) => {
+  const b = req.body || {};
+  if (typeof b.enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });
+  if (CONFIG_LOAD_FAILED) return res.status(409).json({ error: "Config could not be read; not overwriting it" });
+  const prev = CFG.fleetFastOffline, before = prev !== false;
+  CFG.fleetFastOffline = b.enabled;
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { CFG.fleetFastOffline = prev; return res.status(500).json({ error: "Could not save: " + e.message }); }
+  if (before !== b.enabled) auditLog.log({ category: "admin", event: "fleet-fast-offline-changed", ...actorFromReq(req), detail: { enabled: b.enabled } });
+  res.json({ ok: true, enabled: b.enabled });
+});
+
 // Stop the queue after the printer currently being flashed finishes. Never
 // interrupts a flash in progress — see FW_STOP_REQUESTED.
 app.post("/api/firmware-stop", requireAdmin, (req, res) => {
@@ -1354,14 +1441,35 @@ app.get("/api/firmware-deploy-status", requireAdmin, (req, res) => {
 // /api/files uses — `relSub` is the "/"-joined relative path the client
 // already speaks (CURRENT_SUB), built independently of the OS path separator
 // so it round-trips straight back into safePath()/loadFiles() unchanged.
-// File search walks the whole G-code folder; done in a netfs worker so a large
-// or slow share costs this request, not the server. Hidden folders (.thumbs)
-// are skipped, as before.
+// File search walks the folder the file browser is showing (`sub`) and
+// everything below it — the whole G-code folder only when the browser is at
+// its top. Done in a netfs worker so a large or slow share costs this request,
+// not the server. Hidden folders (.thumbs) are skipped, as before. Each
+// result's `sub` stays relative to the G-code folder, whatever was searched.
+//
+// safePath() only compares path text, and the walk reads the folder it is
+// given, following a link. So the starting folder is also resolved here: where
+// it really is must be inside the real G-code folder and outside its trash —
+// whether the link is the folder itself or a folder on the way to it. A link
+// to another folder inside the G-code folder is allowed (it reaches nothing
+// the browser cannot). Links met below the starting folder are not followed by
+// the walk, as before. This is a check at the time of the request, not a
+// guarantee against a folder being swapped for a link while the walk runs.
 app.get("/api/files/search", requireAuth, async (req, res) => {
   const q = String(req.query.q || "").trim().toLowerCase();
   if (!q) return res.json({ files: [] });
+  const sub = String(req.query.sub || "");
+  const dir = sub ? safePath(sub) : FOLDER;
+  if (!dir) return res.status(400).json({ error: "Invalid folder" });
+  const base = path.relative(FOLDER, dir).split(path.sep).filter(Boolean).join("/");
   try {
-    const results = await netfs.walk(FOLDER, { query: q, filter: SLICED_FILE_RE, limit: 300 });
+    if (base) {
+      // A folder that is not there throws here and gives no results below.
+      const [real, realRoot] = await Promise.all([netfs.realpath(dir), netfs.realpath(FOLDER)]);
+      if (!isPathWithinFolder(real, realRoot) || fileTrash.isInTrash(real, realRoot)) return res.status(400).json({ error: "Invalid folder" });
+    }
+    const results = await netfs.walk(dir, { query: q, filter: SLICED_FILE_RE, limit: 300 });
+    if (base) for (const r of results) r.sub = r.sub ? base + "/" + r.sub : base;
     results.sort((a, b) => b.mtime - a.mtime);
     res.json({ files: results });
   } catch (e) {
@@ -1380,7 +1488,7 @@ app.post("/api/files/mkdir", requireRegular, async (req, res) => {
       return res.status(400).json({ error: "Invalid folder name" });
     }
     const target = path.join(dir, clean);
-    if (!isPathWithinFolder(target, FOLDER)) return res.status(400).json({ error: "Invalid folder name" });
+    if (!isPathWithinFolder(target, FOLDER) || fileTrash.isInTrash(target, FOLDER)) return res.status(400).json({ error: "Invalid folder name" });
     if (await fileExists(target)) return res.status(409).json({ error: "Already exists" });
     await netfs.mkdir(target);
     res.json({ ok: true });
@@ -1397,7 +1505,7 @@ app.post("/api/files/move", requireRegular, async (req, res) => {
   if (!Array.isArray(files) || !files.length) return res.status(400).json({ error: "No files given" });
   const targetDir = targetSub ? safePath(targetSub) : FOLDER;
   try {
-    if (!targetDir || !(await fileExists(targetDir)) || !(await netfs.stat(targetDir)).isDirectory) {
+    if (!targetDir || fileTrash.isInTrash(targetDir, FOLDER) || !(await fileExists(targetDir)) || !(await netfs.stat(targetDir)).isDirectory) {
       return res.status(400).json({ error: "Invalid target folder" });
     }
     const results = [];
@@ -1405,7 +1513,7 @@ app.post("/api/files/move", requireRegular, async (req, res) => {
       const name = String((f || {}).name || "");
       const rel = ((f || {}).sub ? f.sub + "/" : "") + name;
       const srcPath = safePath(rel);
-      if (!name || !srcPath || !(await fileExists(srcPath)) || !(await netfs.stat(srcPath)).isFile) {
+      if (!name || !srcPath || fileTrash.isInTrash(srcPath, FOLDER) || !(await fileExists(srcPath)) || !(await netfs.stat(srcPath)).isFile) {
         results.push({ name, ok: false, error: "Not found" }); continue;
       }
       const destPath = path.join(targetDir, name);
@@ -1415,6 +1523,71 @@ app.post("/api/files/move", requireRegular, async (req, res) => {
       catch (e) { if (e.code === "NAS_UNREACHABLE") throw e; results.push({ name, ok: false, error: e.message }); }
     }
     res.json({ results });
+  } catch (e) {
+    if (replyIfNasDown(res, e)) return;
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Signed in, accounts on, Admin: the only user who may delete permanently.
+const permanentDeleteAllowed = user => !!(CFG.usersEnabled && user && !user.implicit && user.role === "admin");
+
+// Delete one or more files ({sub, name} each, like move): each is moved into
+// the G-code folder's .snapcon-trash and kept 30 days (fileTrash.js), never
+// removed. A file an upload, a waiting send or a queue item still needs is
+// refused (gcodeFileInUse, asked again right before its rename). Every file
+// gets its own result; one that fails never stops the others, except when the
+// folder stops answering, which leaves the rest untouched.
+app.post("/api/files/delete", requireRegular, async (req, res) => {
+  const { files } = req.body || {};
+  const mode = (req.body || {}).mode == null ? "trash" : (req.body || {}).mode;
+  if (!fileTrash.MODES.has(mode)) return res.status(400).json({ error: "Unknown delete mode" });
+  // Permanent delete: only a signed-in Admin, and never while accounts are
+  // off (then everyone is an implicit admin). Refused before anything is read.
+  if (mode === "permanent" && !permanentDeleteAllowed(req.user)) {
+    return res.status(403).json({ error: CFG.usersEnabled ? "Only an Admin can delete files permanently." : "Deleting permanently needs user accounts to be switched on.", code: "permanent_delete_not_allowed" });
+  }
+  if (!Array.isArray(files) || !files.length) return res.status(400).json({ error: "No files given" });
+  if (files.length > fileTrash.MAX_FILES) return res.status(400).json({ error: `At most ${fileTrash.MAX_FILES} files at once` });
+  const actor = actorFromReq(req);
+  let out;
+  try {
+    out = await fileTrash.deleteFiles({ io: TRASH_IO, folder: FOLDER, files, mode, inUse: fp => gcodeFileInUse(fp, req.user), reserve: reserveGcodeDelete, release: releaseGcodeDelete, allowed: SLICED_FILE_RE, actor });
+  } catch (e) {
+    if (replyIfNasDown(res, e)) return;
+    return res.status(500).json({ error: e.message });
+  }
+  for (const r of out.results.filter(x => x.ok || x.code === "unknown")) {
+    const rel = r.ok ? r.path : (r.sub ? r.sub + "/" : "") + r.name;
+    try { auditLog.log({ category: "job", event: r.ok ? "file-deleted" : "file-delete-unconfirmed", ...actor, detail: { file: rel, method: mode, ...(mode === "trash" ? { trash: out.batch } : {}) } }); } catch {}
+  }
+  if (out.manifestError) console.warn(`[files] trash ${out.batch}: manifest not written (${out.manifestError}); the files are in it, by their own paths`);
+  if (out.unreachable && !out.results.some(r => r.ok)) {
+    const maybe = out.results.some(r => r.code === "unknown");
+    return res.status(503).json({ error: maybe ? "The G-code folder stopped answering during the delete. One file may already be in the trash; refresh to check." : "The G-code folder is unreachable. Nothing was deleted.", code: "gcode_folder_unreachable", results: out.results });
+  }
+  res.json({ results: out.results, batch: out.batch, ...(out.unreachable ? { code: "gcode_folder_unreachable" } : {}) });
+});
+
+// What is in the trash, by deletion, newest first. Restore has no screen yet:
+// this and /api/files/trash/restore are how a file is recovered.
+app.get("/api/files/trash", requireRegular, async (req, res) => {
+  try { res.json({ retentionDays: fileTrash.RETENTION_DAYS, deletions: await fileTrash.listTrash({ io: TRASH_IO, folder: FOLDER }) }); }
+  catch (e) {
+    if (replyIfNasDown(res, e)) return;
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Puts one file back where it was deleted from; never over a file now there.
+app.post("/api/files/trash/restore", requireRegular, async (req, res) => {
+  const { batch, file } = req.body || {};
+  try {
+    const r = await fileTrash.restoreFile({ io: TRASH_IO, folder: FOLDER, batch, file });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, code: r.code });
+    try { auditLog.log({ category: "job", event: "file-restored", ...actorFromReq(req), detail: { file: r.path, trash: batch, ...(r.sourceKept ? { sourceKept: true } : {}) } }); } catch {}
+    // visible: false only means the share has not shown it yet (see restoreFile).
+    res.json({ ok: true, path: r.path, visible: r.visible });
   } catch (e) {
     if (replyIfNasDown(res, e)) return;
     res.status(500).json({ error: e.message });
@@ -1437,7 +1610,7 @@ app.post("/api/files/upload", requireRegular, rawGcodeBody, async (req, res) => 
   if (!name || /["\r\n]/.test(name) || !SLICED_FILE_RE.test(name)) {
     return res.status(400).json({ error: "Only sliced files (.gcode/.gco/.g/.gx/.3mf) can be uploaded here" });
   }
-  if (!dir) return res.status(400).json({ error: "Invalid folder" });
+  if (!dir || fileTrash.isInTrash(dir, FOLDER)) return res.status(400).json({ error: "Invalid folder" });
   const target = path.join(dir, name);
   if (!isPathWithinFolder(target, FOLDER)) return res.status(400).json({ error: "Invalid file name" });
   if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "Empty upload" });
@@ -1587,30 +1760,225 @@ app.get("/api/local-thumbnail", requireAuth, async (req, res) => {
 
 const JOBS = new Map();   // jobId -> { phase, sent, total, done, error, result, ts }
 const newJobId = () => "j" + Date.now() + Math.random().toString(16).slice(2, 6);
+// When this process started: a page polling a job this server does not know
+// can tell "SnapCon restarted since" from "no longer kept" (§37 P1).
+const SERVER_STARTED_AT = Date.now();
+
+// Upload deadlines (docs/TODO.md §37 P1). The connectors' defaults (10 s to
+// connect, 60 s without the printer taking data, 120 s from the last byte to
+// its answer) unless config.json's uploadTimeouts overrides one, in seconds:
+//   "uploadTimeouts": { "connect": 10, "inactivity": 60, "confirm": 120 }
+// No Settings UI. A value that is not a number is ignored; one outside its
+// limits is held to the nearest limit. Each warning is logged once.
+const UPLOAD_TIMEOUT_LIMITS = { connect: [2, 60], inactivity: [10, 600], confirm: [30, 1800] };
+const UPLOAD_TIMEOUT_WARNED = new Set();
+function uploadTimeoutsFromConfig(cfg) {
+  const src = cfg && cfg.uploadTimeouts;
+  const out = {};
+  if (src == null) return out;
+  const warn = msg => { if (!UPLOAD_TIMEOUT_WARNED.has(msg)) { UPLOAD_TIMEOUT_WARNED.add(msg); console.log("[config] uploadTimeouts: " + msg); } };
+  if (typeof src !== "object" || Array.isArray(src)) { warn("not an object; the defaults apply"); return out; }
+  for (const [key, [lo, hi]] of Object.entries(UPLOAD_TIMEOUT_LIMITS)) {
+    if (src[key] == null) continue;
+    const v = Number(src[key]);
+    if (typeof src[key] === "boolean" || !Number.isFinite(v)) { warn(`${key} is not a number of seconds; its default applies`); continue; }
+    const held = Math.min(hi, Math.max(lo, v));
+    if (held !== v) warn(`${key} ${v} s is outside ${lo}–${hi} s; ${held} s is used`);
+    out[key + "Ms"] = Math.round(held * 1000);
+  }
+  return out;
+}
+
+// Limits for the files kept for a busy printer (§37 P3), in MB, from
+// config.json's deferredSends unless set there:
+//   "deferredSends": { "maxFileMB": 512, "maxTotalMB": 4096, "freeMarginMB": 256 }
+// maxFileMB cannot exceed 2048 (the push body limit). Held to the limits and
+// warned once, as uploadTimeouts above.
+const DEFERRED_LIMIT_KEYS = { maxFileMB: ["maxFileBytes", 1, 2048], maxTotalMB: ["maxTotalBytes", 64, 1048576], freeMarginMB: ["freeMarginBytes", 0, 1048576] };
+function deferredLimitsFromConfig(cfg) {
+  const src = cfg && cfg.deferredSends;
+  const out = {};
+  if (src == null || typeof src !== "object" || Array.isArray(src)) return out;
+  for (const [key, [field, lo, hi]] of Object.entries(DEFERRED_LIMIT_KEYS)) {
+    if (src[key] == null) continue;
+    const v = Number(src[key]);
+    if (typeof src[key] === "boolean" || !Number.isFinite(v)) { warnOnce(`[config] deferredSends: ${key} is not a number of MB; its default applies`); continue; }
+    const held = Math.min(hi, Math.max(lo, v));
+    if (held !== v) warnOnce(`[config] deferredSends: ${key} ${v} MB is outside ${lo}–${hi} MB; ${held} MB is used`);
+    out[field] = Math.round(held * 1024 * 1024);
+  }
+  return out;
+}
+// How long finished transfers' results are kept (§37 P4), from config.json:
+//   "transferResults": { "retentionHours": 24, "maxCount": 1000 }
+// Held to 1–720 hours and 100–10000 results, warned once.
+function transferResultLimitsFromConfig(cfg) {
+  const src = cfg && cfg.transferResults;
+  const out = { retentionHours: RESULT_LIMITS.retentionHours, maxCount: RESULT_LIMITS.maxCount };
+  if (src == null || typeof src !== "object" || Array.isArray(src)) return out;
+  for (const [key, lo, hi] of [["retentionHours", RESULT_LIMITS.retentionHoursMin, RESULT_LIMITS.retentionHoursMax], ["maxCount", RESULT_LIMITS.maxCountMin, RESULT_LIMITS.maxCountMax]]) {
+    if (src[key] == null) continue;
+    const v = Number(src[key]);
+    if (typeof src[key] === "boolean" || !Number.isFinite(v)) { warnOnce(`[config] transferResults: ${key} is not a number; its default applies`); continue; }
+    const held = Math.round(Math.min(hi, Math.max(lo, v)));
+    if (held !== v) warnOnce(`[config] transferResults: ${key} ${v} is outside ${lo}–${hi}; ${held} is used`);
+    out[key] = held;
+  }
+  return out;
+}
+function warnOnce(msg) { if (!UPLOAD_TIMEOUT_WARNED.has(msg)) { UPLOAD_TIMEOUT_WARNED.add(msg); console.log(msg); } }
 
 // The upload a printer's fleet row reports while it is going out, so every
 // tab — not only the one that started it — shows the card's upload strip
-// (TODO §24). Only /api/print jobs carry printerId; only their upload phase
-// counts (mapping/starting/done are the starting tab's business), and the
-// newest wins if two overlap. Who may see it is the row's own visibility;
+// (TODO §24). Jobs that carry printerId are /api/print's, /api/printfile's
+// and the queue's dispatches (§28); only an upload phase counts (the others
+// are not transfers; the read-back that follows one is), and the newest wins if two overlap. Who may see it is the row's own visibility;
 // cancelling stays behind /api/print-cancel's role and printer checks.
+//
+// An upload stays in phase "upload" until the printer answers. Once its last
+// byte is out it is confirming (job.confirmingSince): the printer may have the
+// whole file, and a cancel then only stops what would follow (§37 P1).
 function activeUploadFor(printerId) {
   let best = null, bestId = null;
   for (const [id, job] of JOBS) {
-    if (job.printerId !== printerId || job.done || job.phase !== "upload") continue;
+    if (job.printerId !== printerId || job.done || (job.phase !== "upload" && job.phase !== "verifying")) continue;
     if (!best || job.ts > best.ts) { best = job; bestId = id; }
   }
-  return best ? { jobId: bestId, file: best.file || "", sent: best.sent || 0, total: best.total || 0, cancellable: !!best.cancelUpload } : null;
+  // verifying (§37 P2): the printer has answered and its copy is read back;
+  // still this upload's strip, nothing left to cancel.
+  if (best && best.phase === "verifying") return { jobId: bestId, file: best.file || "", sent: best.total || 0, total: best.total || 0, cancellable: false, verifying: true, startsPrint: !!best.startsPrint };
+  return best ? { jobId: bestId, file: best.file || "", sent: best.sent || 0, total: best.total || 0, cancellable: !!best.cancelUpload,
+    ...(best.confirmingSince ? { confirming: true, startCancelled: !!best.cancelRequested, startsPrint: !!best.startsPrint } : {}) } : null;
+}
+// What became of the transfer itself, kept on the job apart from whatever
+// followed it (mapping, the start): "sent" (the printer accepted it),
+// "failed" (it did not complete — not evidence of what the printer holds),
+// "unknown" (every byte sent, no definite answer). Reported by
+// /api/print-status; Unknown never starts a print and is never retried.
+function noteUploadFailure(job, e) {
+  if (!job.outcome) job.outcome = (e && e.outcome) || "failed";
+  if (e && e.reason) job.errorReason = e.reason;
+  if (e && e.seconds) job.errorSeconds = e.seconds;
+  if (e && e.printerPrompt) job.printerPrompt = true;
+}
+// The upload went through but a cancel came while the printer was confirming
+// it: nothing that follows is done (§37 P1, decision Q1).
+function cancelledAfterSending(job, p) {
+  return Object.assign(new Error(`Cancelled. ${p.name} confirmed it received the file; nothing more was done with it.`), { code: "UPLOAD_CANCELLED", outcome: job.outcome || "sent" });
+}
+
+// After the printer accepted a file, what it actually holds under that name,
+// read back before anything may start it (§37 P2). The connector's
+// verifyUpload answers; only "verified" (content checked) and "acknowledged"
+// (the printer lists it, at the right size where it reports one) let the
+// caller go on. "mismatch" is proof of other content under that name: Failed.
+// "absent" and "unverifiable" leave what the printer holds unknown: Unknown,
+// which never starts a print. A connector with no verifyUpload is
+// unverifiable. Nothing is deleted on any answer (D6).
+//
+// The printer has answered for the upload by now, so Cancel is already
+// disarmed, as in P1: the check runs to its end. The answer stays on the job
+// (job.verification) for /api/print-status and for what is staged.
+const START_OK_VERIFICATIONS = new Set(["verified", "acknowledged"]);
+// earlier: the file was uploaded before this run (a queue item staged with
+// alreadyUploaded), not just now, which only changes what is said.
+// job.localStat: the source's identity (netfs.identity) taken before its
+// bytes were read for this upload. It is taken again after the read-back,
+// whatever the printer said (§37 A4, owner 2026-10-29): the read-back samples
+// the file (exact size plus its start, middle and end), so an edit of the
+// same size elsewhere during the send would otherwise pass. A source that
+// changed is Unknown, "changed on this computer" — never Verified, never
+// Loaded; one whose identity was not taken, or cannot be taken again, is
+// Unknown too (fail closed). earlier: nothing was sent in this run.
+const SOURCE_IDENTITY_KEYS = ["size", "mtimeNs", "ctimeNs", "ino", "dev"];
+const sameSource = (a, b) => !!a && !!b && SOURCE_IDENTITY_KEYS.every(k => a[k] != null && a[k] === b[k]);
+const sourceIdentityNow = fp => netfs.identity(fp).catch(() => null);
+async function verifyOnPrinter(p, c, name, fp, job, { earlier = false } = {}) {
+  job.phase = "verifying";
+  let v;
+  try { v = c.verifyUpload ? await c.verifyUpload(p, name, fp) : { result: "unverifiable", evidence: "this printer type cannot read files back" }; }
+  catch (e) { v = { result: "unverifiable", evidence: e.message }; }
+  let result = (v && v.result) || "unverifiable";
+  if (!earlier && (START_OK_VERIFICATIONS.has(result) || result === "mismatch")) {
+    const now = job.localStat ? await sourceIdentityNow(fp) : null;
+    if (!job.localStat || !now) {
+      result = "local-unreadable";
+      v = { result, evidence: `the file on this computer could not be checked again after it was sent` };
+    } else if (!sameSource(job.localStat, now)) {
+      result = "local-changed";
+      v = { result, evidence: `the local ${name} changed while it was being sent, so the printer's copy cannot be compared` };
+    }
+  }
+  job.verification = { result, ...(v && v.basis ? { basis: v.basis } : {}), evidence: (v && v.evidence) || null, at: Date.now() };
+  console.log(`[verify] ${p.name}: "${name}" ${result}${job.verification.evidence ? " — " + job.verification.evidence : ""}`);
+  if (START_OK_VERIFICATIONS.has(result)) return job.verification;
+  if (result === "mismatch") {
+    job.outcome = "failed";
+    throw Object.assign(new Error(`${p.name} accepted ${name}, but the file it holds under that name is not the one sent (${job.verification.evidence}).`), { code: "UPLOAD_MISMATCH", outcome: "failed" });
+  }
+  job.outcome = "unknown";
+  const reason = result === "absent" ? (earlier ? "gone-from-printer" : "not-on-printer") : result === "local-changed" || result === "local-unreadable" ? result : "verify-unreadable";
+  const message = reason === "gone-from-printer" ? `${name} was uploaded to ${p.name} earlier, but it is no longer in the printer's file list.`
+    : reason === "not-on-printer" ? `All of ${name} was sent and ${p.name} accepted it, but it is not in the printer's file list.`
+    : reason === "local-changed" ? `${name} changed on this computer while it was being sent, so SnapCon cannot tell whether ${p.name} has the right copy.`
+    : reason === "local-unreadable" ? `${name} could not be checked again on this computer after it was sent, so SnapCon cannot tell whether ${p.name} has the right copy.`
+    : `All of ${name} was sent and ${p.name} accepted it, but SnapCon could not check the printer's copy (${job.verification.evidence}).`;
+  throw Object.assign(new Error(message), { code: "UPLOAD_UNCONFIRMED", outcome: "unknown", reason });
+}
+// What a staged ("Loaded") entry keeps of the check, for P5 and the card.
+const stagedVerification = v => v ? { verification: v.result, verifiedAt: v.at } : {};
+// The queue's dispatch to this printer while one runs (TODO §28): it has a
+// JOBS entry from its claim to its end, marked by queueItemId. While it runs
+// the printer is taken: manual sends and starts are refused.
+function queueDispatchJob(printerId) {
+  for (const job of JOBS.values()) if (job.queueItemId && job.printerId === printerId && !job.done) return job;
+  return null;
+}
+const queueSendingRefusal = (p, job) => `${p.name} is receiving its next queued job ("${job.file}"). Try again once it has started.`;
+// Anything other than the queue sending to or starting on this printer: a
+// send or start of its own in JOBS, a deferred file going out, or a start
+// sequence. The queue does not claim the printer while one runs (§28).
+function otherSendInFlight(p) {
+  if (STARTING.has(p.id)) return true;
+  for (const job of JOBS.values()) if (!job.queueItemId && job.printerId === p.id && !job.done) return true;
+  const qf = queuedFile.get(p.id);
+  return !!(qf && qf.status === "uploading");
+}
+
+// The one per-printer transfer lock (§37 P3): a start, any send (manual,
+// deferred, CLI) or a queue dispatch in progress. Every path that sends a file
+// checks it with nothing awaited before registering its job, so no two
+// transfers to one printer overlap. Jobs stay registered through the P2
+// read-back, so the lock is held until the check is done.
+const transferBusy = p => otherSendInFlight(p) || !!queueDispatchJob(p.id);
+function transferBusyRefusal(p) {
+  const qj = queueDispatchJob(p.id);
+  if (qj) return queueSendingRefusal(p, qj);
+  if (STARTING.has(p.id)) return `${p.name} is starting a print. Try again once it has started.`;
+  const j = [...JOBS.values()].find(x => !x.done && x.printerId === p.id);
+  return `${p.name} is receiving another file${j && j.file ? " (" + j.file + ")" : ""}. Try again once it has finished.`;
 }
 
 // Normal cleanup happens when /api/print-status reads a finished job — but if
 // the tab closed mid-upload nobody ever polls, so sweep abandoned finished
 // jobs too. Every completion path (success or error) sets done.
+//
+// Kept for JOB_MAX_AGE after the job FINISHED, not after it was created: a job
+// that ran longer than that (a slow upload, a long leveling) was otherwise
+// deleted within a minute of finishing, and a tab whose timers the browser had
+// slowed read "No such job" for a job that succeeded (docs/TODO.md §37 P0-3).
+// The sweep notes when it first sees a job done, so this covers every
+// completion path without each one keeping a time: a job is kept at least
+// JOB_MAX_AGE after it finished, and at most one sweep longer.
 const JOB_MAX_AGE = 10 * 60 * 1000;
-setInterval(() => {
-  const cutoff = Date.now() - JOB_MAX_AGE;
-  for (const [id, job] of JOBS) if (job.done && job.ts < cutoff) JOBS.delete(id);
-}, 60 * 1000).unref();
+function sweepFinishedJobs(now) {
+  for (const [id, job] of JOBS) {
+    if (!job.done) continue;
+    if (job.doneSeenAt == null) { job.doneSeenAt = now; continue; }
+    if (now - job.doneSeenAt >= JOB_MAX_AGE) JOBS.delete(id);
+  }
+}
+setInterval(() => sweepFinishedJobs(Date.now()), 60 * 1000).unref();
 
 // Per-print checkboxes (Flow Calibration / Time-Lapse / Auto-Leveling —
 // currently only meaningful to snapmaker-u1-klipper's applyHeadMapping,
@@ -1623,6 +1991,43 @@ const wantsAnyPref = prefs => !!(prefs && (prefs.autoLevel || prefs.flowCalibrat
 // used so applyHeadMapping still fires when a printer has e.g.
 // flowCalibrate:true by default and the caller sent no override for it.
 const printerHasAnyDefaultPref = p => !!(p.autoLevel || p.flowCalibrate || p.timelapse);
+// A toolhead map, { color: head }, from a request or from disk: its values reach
+// G-code (the U1's MAP_EXTRUDER=), so it is whole numbers within what this printer
+// addresses (capabilities.maxMapTools, maxMapHeads; 32 where a connector states no
+// less), or it is refused whole: part of a map would print on the wrong heads.
+function checkToolMap(map, p) {
+  if (map == null) return { map: {} };
+  const caps = getCapabilities(p.connector, p) || {};
+  const tools = caps.maxMapTools || 32, heads = caps.maxMapHeads || 32;
+  const error = `That toolhead mapping is not valid for ${p.name}: colors are 0-${tools - 1} and heads 0-${heads - 1}.`;
+  if (typeof map !== "object" || Array.isArray(map)) return { error };
+  const out = {};
+  for (const [k, v] of Object.entries(map)) {
+    const n = typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : NaN;
+    if (!/^\d+$/.test(k) || Number(k) >= tools || !Number.isInteger(n) || n < 0 || n >= heads) return { error };
+    out[k] = n;
+  }
+  return { map: out };
+}
+// What a person chose with a send that does not start (TODO §38): the toolhead
+// map, and the print options they ticked. Nothing is sent to the printer until
+// the print starts, so the Loaded file keeps them for its Print. An option left
+// unticked is no choice: the Send dialog always sends all three, false unless
+// ticked, and those falses are overrides only for a print starting now. Later,
+// the printer's own default decides (withPrefFallback). Also reads
+// queued-files.json: someone chose a map, so one that does not check out there
+// stops the Print (mapInvalid) rather than print on the printer's own mapping. A
+// record that never had a map has none to doubt.
+function stagedChoices(map, prefs, p) {
+  const out = {};
+  const checked = map === null ? { error: true } : checkToolMap(map, p);
+  if (checked.error) { out.mapInvalid = true; console.warn(`[queued-files] ${p.name}: a saved toolhead mapping is not valid; its Print is refused`); }
+  else if (Object.keys(checked.map).length) out.map = checked.map;
+  const ticked = {};
+  for (const k of ["autoLevel", "flowCalibrate", "timelapse"]) if (prefs && prefs[k] === true) ticked[k] = true;
+  if (Object.keys(ticked).length) out.prefs = ticked;
+  return out;
+}
 
 // Which file types a connector accepts. Declared as capabilities.fileTypes;
 // ABSENT means the whole set SnapCon's library has always offered, so no
@@ -1695,6 +2100,87 @@ function printerFileDeleteRefusal({ printerName, file, state, activeFilename, st
   return null;
 }
 
+// G-code folder files a delete is moving to the trash right now (reserved by
+// fileTrash in the same step as its last gcodeFileInUse check). An upload,
+// waiting send or queue item about to start using one refuses at the moment
+// it registers, so neither side can pass its check while the other is past
+// its own. Kept for a while after a rename whose result is unknown (the share
+// stopped answering): it may still happen.
+const DELETING = new Map();
+const FILE_UNKNOWN_HOLD_MS = 10 * 60 * 1000;
+const fileKey = s => { const r = path.resolve(String(s)); return process.platform === "win32" ? r.toLowerCase() : r; };
+function reserveGcodeDelete(fp) { const k = fileKey(fp); DELETING.set(k, (DELETING.get(k) || 0) + 1); }
+function releaseGcodeDelete(fp, outcome) {
+  const done = () => { const k = fileKey(fp), n = (DELETING.get(k) || 0) - 1; if (n > 0) DELETING.set(k, n); else DELETING.delete(k); };
+  if (outcome === "unknown") setTimeout(done, FILE_UNKNOWN_HOLD_MS).unref(); else done();
+}
+const gcodeFileBeingDeleted = fp => !!fp && DELETING.has(fileKey(fp));
+// A queue item's file, if it is one of those (Library locations never are).
+function queueFileBeingDeleted(file) {
+  if (!file || (file.root && file.root !== GCODE_ROOT)) return false;
+  return gcodeFileBeingDeleted(resolveWithinFolder((file.sub ? file.sub + "/" : "") + file.name, FOLDER));
+}
+const BEING_DELETED = name => `${name} is being deleted.`;
+
+// Per-file "being prepared" holds (owner review, 2026-11-05): a send takes one
+// on its file synchronously, before its first file-dependent await (the
+// existence check, the hash), and keeps it until its request handler has
+// finished — by then it is recorded (an upload job, a waiting send, a queue
+// item), which gcodeFileInUse sees for as long as the file is needed. A file
+// being deleted is refused here; a held file is refused by the delete. Each
+// side marks and checks in one synchronous step, so both can never pass.
+// Released when the handler's promise settles (withGcodeHolds), never on the
+// HTTP response closing: a client that hangs up mid-hash leaves the handler
+// running, and still needing the file.
+const PREPARING = new Map();
+function holdGcodeFile(req, fp) {
+  if (!fp) return true;
+  const k = fileKey(fp);
+  if (DELETING.has(k)) return false;
+  PREPARING.set(k, (PREPARING.get(k) || 0) + 1);
+  (req.gcodeHolds || (req.gcodeHolds = [])).push(k);
+  return true;
+}
+function releaseGcodeHolds(req) {
+  for (const k of req.gcodeHolds || []) { const n = (PREPARING.get(k) || 0) - 1; if (n > 0) PREPARING.set(k, n); else PREPARING.delete(k); }
+  req.gcodeHolds = [];
+}
+const withGcodeHolds = handler => async (req, res, next) => {
+  try { return await handler(req, res, next); } finally { releaseGcodeHolds(req); }
+};
+
+// Why the G-code folder file at fp must not be deleted now, or null: an
+// upload of it in progress, a waiting send that will read it, or a queue item
+// that names it (pending or current). Synchronous, so fileTrash can ask it
+// with nothing awaited before the rename. Fails closed when the waiting sends
+// or the queue could not be read: a reference we cannot see may exist.
+// A printer `user` may not see is named only as "a printer".
+function gcodeFileInUse(fp, user) {
+  const key = fileKey;
+  const k = key(fp);
+  if (DELETING.has(k)) return "Another delete of this file is in progress.";
+  if (PREPARING.has(k)) return "It is being prepared for a send. Try again in a moment.";
+  const nameOf = id => { const p = PRINTERS.find(x => x.id === id); return p && printerVisibleTo(user, p) ? p.name : "a printer"; };
+  for (const job of JOBS.values()) {
+    if (!job.done && job.sourcePath && key(job.sourcePath) === k) return `It is being sent to ${nameOf(job.printerId)}.`;
+  }
+  const ds = deferredStore.status();
+  if (ds.recoveryRequired || ds.dropped) return "The list of waiting sends can't be fully read right now, so a send may still need this file.";
+  for (const r of deferredStore.list({ states: ["queued", "uploading", "interrupted", "attention"] })) {
+    if (!r.bytes && r.source && r.source.path && key(r.source.path) === k) return `A send to ${nameOf(r.printerId)} is waiting for it. Cancel that send first.`;
+  }
+  if (queueStore.getGlobalStatus().queueStoreRecoveryRequired) return "The print queue can't be read right now, so a queue item may still need this file.";
+  for (const p of PRINTERS) {
+    const qs = queueStore.getPrinterState(p.id) || {};
+    for (const item of [...(qs.queue || []), ...(qs.currentItem ? [qs.currentItem] : [])]) {
+      if (!item || !item.file || (item.file.root && item.file.root !== GCODE_ROOT)) continue;
+      const ifp = resolveWithinFolder((item.file.sub ? item.file.sub + "/" : "") + item.file.name, FOLDER);
+      if (ifp && key(ifp) === k) return printerVisibleTo(user, p) ? `It is in ${p.name}'s queue. Remove it from the queue first.` : "It is in a printer's queue.";
+    }
+  }
+  return null;
+}
+
 // Throws a 409 when sending `name` to `p` would disturb its running job.
 // probeCached() re-probes an online printer on every call (it caches only
 // OFFLINE results), so this reads current state rather than a stale snapshot —
@@ -1755,65 +2241,46 @@ function queueFileRef(fp, folder) {
   return { name, sub: parts.join("/") };
 }
 
-// ---- Don't re-send a file the printer already has, byte for byte ----
-// Measured on real hardware: confirming a 65MB job took 309ms and moved 192KB
-// (see connectors/http-utils.js compareRemoteFile). The upload it replaces
-// moves the whole file.
+// ---- Replacing a file the printer already has ----
+// Every accepted send uploads the file (owner, 2026-10-29): no comparison
+// SnapCon can make proves a printer's copy is identical — Moonraker publishes
+// no checksum, and the read-back only samples the size, start, middle and
+// end — so a matching sample is never taken as reason not to send.
 //
-// Every uncertain answer falls through to uploading, because a wrong "yes"
-// would start a print from the wrong bytes while a wrong "no" only costs the
-// transfer SnapCon performs today. So: the setting must be on, the connector
-// must support the comparison, it must not throw, and it must report exactly
-// true. Defaults ON when absent, like allowMapping and suggestMatching.
-// One comparison answers both questions, so the printer is asked once:
-//   "skip"    — it already has these exact bytes
-//   "refuse"  — it has a DIFFERENT file of this name and the operator has
-//               asked not to overwrite those
-//   "upload"  — everything else, which is what SnapCon has always done
-//
-// Both settings default ON, and both directions fail towards uploading.
-// Refusing is only ever returned for a difference actually PROVEN: a copy that
-// could not be verified (an old Moonraker, a refused Range read) reads as
-// unknown, not as different, because blocking every send to such a printer
-// would be far worse than the clobber it is guarding against.
-async function decideUpload(p, name, localPath) {
-  const skipIdentical = CFG.skipIdenticalUploads !== false;
-  const guardDifferent = CFG.overwriteDifferentFiles === false;
-  // Nothing either setting could change — don't spend a round trip finding out.
-  if (!skipIdentical && !guardDifferent) return { action: "upload" };
-
+// With "replace a file the printer already has" off (overwriteDifferentFiles
+// false), a file is sent only when the printer is known NOT to hold one at
+// that exact name. One holding it, or a printer that cannot say (an
+// unreadable list, FlashForge's ten-newest list when full), is refused: the
+// guard fails closed rather than overwriting on incomplete evidence.
+async function decideUpload(p, name) {
+  if (CFG.overwriteDifferentFiles !== false) return { action: "upload" };
   const c = getConnector(p.connector);
-  if (!c.compareRemoteFile) return { action: "upload" };
-
-  let cmp;
-  try { cmp = await c.compareRemoteFile(p, name, localPath); }
-  catch { return { action: "upload" }; }
-  if (!cmp) return { action: "upload" };
-
-  if (cmp.identical === true) return skipIdentical ? { action: "skip" } : { action: "upload" };
-
-  const provenDifferent = cmp.present === true && !cmp.unverified;
-  if (guardDifferent && provenDifferent) {
-    return {
-      action: "refuse",
-      reason: `${p.name} already has a different file called "${name}". ` +
-        `Overwriting files that differ is switched off in Settings — turn it on, or send this one under a different name.`,
-    };
+  let v = null;
+  if (c.verifyUpload) {
+    try { v = await c.verifyUpload(p, name, null, { attempts: 1 }); }
+    catch (e) { v = { result: "unverifiable", evidence: e.message }; }
   }
-  return { action: "upload" };
+  if (v && v.result === "absent") return { action: "upload" };
+  const off = "Replacing files on the printer is switched off in Settings";
+  if (v && v.result !== "unverifiable") return { action: "refuse", present: true, reason: `${p.name} already has a file called "${name}". ${off}, and SnapCon can't prove the two are the same, so it doesn't replace it. Turn replacing on, or send this one under a different name.` };
+  return { action: "refuse", reason: `SnapCon couldn't check whether ${p.name} already has a file called "${name}"${v && v.evidence ? ` (${v.evidence})` : ""}. ${off}, so it isn't sent. Try again, turn replacing on, or send it under a different name.` };
 }
 
-app.post("/api/print", requireRegular, async (req, res) => {
+app.post("/api/print", requireRegular, withGcodeHolds(async (req, res) => {
   // root (M7, §12): the Library location the file is in; absent = the G-code
   // folder. library: { key, plate } — the Variant chosen on a Model page.
-  const { file, printer, start, map, prefs, root, library: lib, plate: plateAsked } = req.body || {};
+  const { file, printer, start, map: mapAsked, prefs, root, library: lib, plate: plateAsked } = req.body || {};
   const p = PRINTERS[printer];
   if (!p) return res.status(400).json({ error: "Unknown printer" });
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
+  const { map, error: mapError } = checkToolMap(mapAsked, p);
+  if (mapError) return res.status(400).json({ error: mapError, code: "bad_tool_map" });
   let ref, ident = null, plate = null;
   try {
     ref = await resolveFileRef(req.user, root, file);
+    // Held before anything reads it (holdGcodeFile).
+    if (ref && !holdGcodeFile(req, ref.fp)) return res.status(409).json({ error: BEING_DELETED(path.basename(ref.fp)), code: "file_being_deleted" });
     if (!ref || !(await fileExists(ref.fp))) return res.status(404).json({ error: "File not found" });
     const pl = await resolvePrintPlate(p, ref.fp, plateAsked);
     if (pl.error) return res.status(pl.status).json({ error: pl.error, code: pl.code });
@@ -1848,6 +2315,10 @@ app.post("/api/print", requireRegular, async (req, res) => {
 
   const c = getConnector(p.connector);
   const name = path.basename(fp);
+  // Another transfer to this printer (a queue dispatch, a deferred or CLI
+  // send, another Upload): no connector is known to take two at once, so this
+  // is refused, Upload as well as Print (TODO §28, §37 P3).
+  if (transferBusy(p)) return res.status(409).json({ error: transferBusyRefusal(p), code: "printer_receiving" });
 
   // What this click actually does to a printer that is already busy, and
   // whether it also schedules a print — see uploadDisposition's own comment.
@@ -1873,6 +2344,9 @@ app.post("/api/print", requireRegular, async (req, res) => {
     try { hash = await queueStore.computeFileHash(fp); } catch { return false; }
     if (!hash) return false;
     if (ident && hash.sha256 !== ident.sha256) return false;
+    // A file being deleted is not queued (gcodeFileBeingDeleted); nothing is
+    // awaited from here to the item being stored.
+    if (gcodeFileBeingDeleted(fp)) return false;
     const result = queueStore.applyIntent(p.id, (state) => ({
       ...state,
       queue: [...state.queue, {
@@ -1894,24 +2368,33 @@ app.post("/api/print", requireRegular, async (req, res) => {
   // there yet.
   if (disposition.action === "defer") {
     if (disposition.queue && await addQueueItem(false)) return res.json({ ok: true, mode: "queued", printer: p.name });
-    pendingLoad.set(printer, { file: fp, name, ts: Date.now(), tools, map, prefs, actor: actorFromReq(req), plate, send: sendRef(ref, ident, plate) });
-    return res.json({ ok: true, mode: "pending", printer: p.name });
+    // Kept on disk, in order, before the answer (§37 P3).
+    let rec;
+    try { rec = await acceptDeferredSend(p, { name, kind: ident ? "library" : "folder", file: fp, tools, map, prefs, plate, actor: actorFromReq(req), send: sendRef(ref, ident, plate) }); }
+    catch (e) { return res.status(e.status || 500).json({ error: e.message, ...(e.code ? { code: e.code } : {}) }); }
+    return res.json({ ok: true, mode: "pending", printer: p.name, transferId: tidOf(rec) });
   }
 
   // Decided BEFORE the job id is handed out, so a refusal is a plain HTTP
   // error the user sees immediately rather than a job that fails a moment
   // later. Costs one sub-second round trip, and only when a setting could act
   // on the answer.
-  let plan;
-  try { plan = await decideUpload(p, name, fp); }
-  catch { plan = { action: "upload" }; }
-  if (plan.action === "refuse") return res.status(409).json({ error: plan.reason });
+  const plan = await decideUpload(p, name);
+  if (plan.action === "refuse") return res.status(409).json({ error: plan.reason, code: "printer_has_file" });
+  // Again where the job is registered, with nothing awaited in between: the
+  // queue or another send may have taken the printer while decideUpload
+  // asked it (§28, §37 P3).
+  if (transferBusy(p)) return res.status(409).json({ error: transferBusyRefusal(p), code: "printer_receiving" });
 
   // Kick the work off in the background and hand the client a job id to poll.
   const jobId = newJobId();
   // printerId/file: which printer the upload is going to and under what name,
   // so deleting that file from the printer is refused while it is in flight.
-  const job = { phase: "upload", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now(), printerId: p.id, file: name };
+  // sourcePath: the file it reads, so deleting that file here is refused too.
+  // Not while that file is being deleted (gcodeFileBeingDeleted), checked with
+  // nothing awaited before the job is registered.
+  if (gcodeFileBeingDeleted(fp)) return res.status(409).json({ error: BEING_DELETED(name), code: "file_being_deleted" });
+  const job = { phase: "upload", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now(), printerId: p.id, file: name, sourcePath: fp, timeouts: uploadTimeoutsFromConfig(CFG), startsPrint: !!start };
   JOBS.set(jobId, job);
   res.json({ jobId });
   const actor = actorFromReq(req);
@@ -1920,22 +2403,43 @@ app.post("/api/print", requireRegular, async (req, res) => {
     try {
       // What the Library compares a plain send against (content_fp, §9): the
       // file's size and modified time as it went out.
-      let sentStat = null;
-      if (start && !ident) { try { const s = await netfs.stat(fp); sentStat = { size: s.size, mtimeMs: s.mtimeMs }; } catch {} }
-      if (plan.action === "skip") {
-        job.skippedUpload = true;
-        console.log(`[print] ${p.name}: "${name}" already on the printer, upload skipped`);
-      } else {
-        await whileUploading(() => c.uploadFile(p, fp, name, job));   // 1) upload (with progress)
-        console.log(`[print] ${p.name}: upload resolved for "${name}" (start=${start})`);
+      // The file's own size is also what a staged copy is checked against
+      // later (checkStagedCopy): never job.total, which is the whole
+      // upload body, multipart framing included, on Moonraker and FlashForge.
+      let sentStat = null, fileSize = null;
+      // The source's identity before its bytes are read (verifyOnPrinter).
+      job.localStat = null;
+      try {
+        const s = await netfs.identity(fp);
+        fileSize = s.size;
+        job.localStat = s;
+        if (start && !ident) sentStat = { size: s.size, mtimeMs: s.mtimeMs };
+      } catch {}
+      // A Library send: the file is still the one the Library read (A4 review R3).
+      if (ident && job.localStat && Number.isFinite(ident.size) && (job.localStat.size !== ident.size || Math.abs(job.localStat.mtimeMs - ident.mtimeMs) >= 1)) {
+        library.rescan(ref.root).catch(() => {});
+        throw Object.assign(new Error(`${name} changed since the Library last read it; nothing was sent. Try again in a moment.`), { code: "LIBRARY_FILE_CHANGED", outcome: "failed" });
       }
-      // 2) toolhead mapping + print-preference macros (connector-optional) —
-      // still needed with no mapping chosen (tools=[]) when the printer has
-      // its own preferences (auto-level/flow-calibrate/timelapse) to send
-      // before print start.
+      await whileUploading(() => c.uploadFile(p, fp, name, job));   // 1) upload (with progress)
+      console.log(`[print] ${p.name}: upload resolved for "${name}" (start=${start})`);
+      job.outcome = "sent";
+      // Cancelled while the printer was confirming: it has the file, and
+      // nothing more happens — no check, no mapping, no start, no staging.
+      // Checked with nothing awaited since the upload settled, which disarmed
+      // Cancel in the same step, so a cancel lands either before this (nothing
+      // starts) or after it (refused: the file is on the printer).
+      if (job.cancelRequested) throw cancelledAfterSending(job, p);
+      // 2) what the printer holds under that name, read back (§37 P2). Throws
+      // Unknown or Failed; only a verified or acknowledged copy goes on.
+      await verifyOnPrinter(p, c, name, fp, job);
+      // 2) toolhead mapping + print-preference macros (connector-optional),
+      // only for a print that starts here: an upload changes nothing on the
+      // printer but its files (TODO §38). Still needed with no mapping chosen
+      // (tools=[]) when the printer has its own preferences
+      // (auto-level/flow-calibrate/timelapse) to send before print start.
       // Guarded from here: applyHeadMapping is where the long waits live.
       await withStartSequence(p, async () => {
-        if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) {
+        if (start && c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs))) {
           job.phase = "mapping";
           console.log(`[print] ${p.name}: applyHeadMapping starting (tools=${tools.length}, prefs=${JSON.stringify(prefs)}, printer defaults autoLevel=${!!p.autoLevel} flowCalibrate=${!!p.flowCalibrate} timelapse=${!!p.timelapse})`);
           await c.applyHeadMapping(p, tools, map, prefs, { file: name, plate });
@@ -1944,30 +2448,31 @@ app.post("/api/print", requireRegular, async (req, res) => {
         if (start) {
           job.phase = "starting";
           console.log(`[print] ${p.name}: startPrintFile starting for "${name}"${plate != null ? " (plate " + plate + ")" : ""}`);
-          await c.startPrintFile(p, name, { plate });
+          await c.startPrintFile(p, name, { plate, prefs });
           console.log(`[print] ${p.name}: startPrintFile resolved`);
         }
       });
       if (!start) {
         // The file is on the printer now. Surface it the same "ready to
-        // print" way uploadNotifiedFile does once a deferred upload lands:
+        // print" way a deferred send does once it lands (applyDeferredCompleted):
         // one click away, not silently just stored. It keeps what was sent
-        // (plate, Library Variant) for when it is started from there.
-        queuedFile.set(printer, { name, status: "ready", ts: Date.now(), plate, send: sendRef(ref, ident, plate), size: job.total || null });
+        // (plate, Library Variant) and what was chosen (map, ticked options)
+        // for when it is started from there.
+        queuedFile.set(p.id, { name, status: "ready", ts: Date.now(), plate, send: sendRef(ref, ident, plate), size: fileSize, sizeOf: "file", ...stagedVerification(job.verification), ...stagedChoices(map, prefs, p) });
         saveQueuedFiles();
-      } else if (queuedFile.get(printer) && queuedFile.get(printer).name === name) {
+      } else if (queuedFile.get(p.id) && queuedFile.get(p.id).name === name) {
         // This upload replaced the printer's copy of a file staged earlier.
-        queuedFile.delete(printer); saveQueuedFiles();
+        queuedFile.delete(p.id); saveQueuedFiles();
         // "Upload into queue": the item is added only after the bytes are
         // actually there, and carries alreadyUploaded so dispatch does not
         // send the same file a second time.
         if (disposition.queue) await addQueueItem(true);
       }
-      job.result = { printer: p.name, started: !!start, mapped: tools.length };
+      job.result = { printer: p.name, started: !!start, mapped: start ? tools.length : 0, verification: job.verification ? job.verification.result : null };
       job.phase = "done"; job.done = true;
       if (start) ROUTE_STARTED_PRINT.add(p.url);
       const auditRef = auditLog.log({ category: "job", event: start ? "print-started" : "file-uploaded", ...actor, printerId: p.id, printerName: p.name,
-        detail: { file: name, ...(ident ? { library: libraryAudit(ident) } : {}) } });
+        detail: { file: name, ...(job.verification ? { verification: job.verification.result } : {}), ...(ident ? { library: libraryAudit(ident) } : {}) } });
       // Print history (M7): this job, as the Variant chosen in the Library or
       // as the file sent from where it is.
       if (start) {
@@ -1978,45 +2483,75 @@ app.post("/api/print", requireRegular, async (req, res) => {
         });
       }
     } catch (e) {
+      // Already recorded as done (an audit or history write failed after a
+      // successful start): the result stands; this is only logged.
+      if (job.done) { console.log(`[print] ${p.name}: after "${name}" ${job.result && job.result.started ? "started" : "uploaded"}: ${e.message}`); return; }
       console.log(`[print] ${p.name}: FAILED at phase "${job.phase}" — ${e.message}`);
-      if (e && e.code === "UPLOAD_CANCELLED") job.cancelled = true;
+      if ((e && e.code === "UPLOAD_CANCELLED") || job.cancelRequested) job.cancelled = true;
+      if (job.phase === "upload" || job.phase === "verifying") noteUploadFailure(job, e);
       // The code (ECONNRESET, ETIMEDOUT, UPLOAD_REJECTED, NAS_UNREACHABLE…)
       // and the phase it failed in let the browser say what went wrong in
       // plain words, and tell an upload failure from a start failure.
       job.errorCode = (e && e.code) || null; job.failedPhase = job.phase;
       job.error = e.message; job.done = true; job.phase = "error";
+      // After the job is settled, so a failing audit write cannot hold the
+      // printer (§37 P1). A cancel was logged when it was asked for.
+      if (job.failedPhase === "upload" || job.failedPhase === "verifying") {
+        const event = job.outcome === "unknown" ? "upload-unconfirmed" : job.outcome === "sent" ? "file-uploaded" : job.cancelled ? null : "upload-failed";
+        if (event) {
+          try {
+            auditLog.log({ category: "job", event, ...actor, printerId: p.id, printerName: p.name,
+              detail: { file: name, ...(job.errorCode ? { code: job.errorCode } : {}), ...(job.errorReason ? { reason: job.errorReason } : {}), ...(job.cancelled ? { cancelled: true } : {}) } });
+          } catch (auditError) { console.log(`[print] ${p.name}: could not record the upload's outcome: ${auditError.message}`); }
+        }
+      }
     }
   })();
-});
+}));
 
-// Cancels an /api/print upload while it is still sending. Only the transfer
-// can be cancelled: once its last byte is written the connector clears
-// job.cancelUpload, so a cancel can never land between the upload finishing
-// and the print starting. The printer is left with a broken upload, not a
-// complete-looking file.
+// Cancels an upload until the printer has answered for it (§37 P1).
+// While bytes are going out the transfer is cut: the printer is left with a
+// broken upload, not a complete-looking file. After the last byte nothing is
+// cut (the printer may have the whole file): the cancel stops everything that
+// would follow — mapping, the print start, a queue item's start — at once, and
+// the upload still waits for the printer's answer, which is what is reported.
+// Once the printer has answered, the connector has disarmed job.cancelUpload,
+// so a cancel can never land between the answer and the print starting.
 app.post("/api/print-cancel", requireRegular, (req, res) => {
   const job = JOBS.get(req.body && req.body.job);
   if (!job || !job.printerId) return res.status(404).json({ error: "No such upload" });
   const p = PRINTERS.find(x => x.id === job.printerId);
   if (!p || !printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (!job.cancelUpload) {
-    return res.status(409).json({ error: job.done ? "This upload has already finished." : "The file has already been sent; it can't be cancelled now." });
+    return res.status(409).json({ error: job.done ? "This upload has already finished."
+      : job.cancelRequested ? "Already cancelled; waiting for the printer to say whether it received the file."
+      : "The printer already has the file; the upload can't be cancelled now." });
   }
+  const whileConfirming = !!job.confirmingSince;
+  // A queue dispatch names who cancelled in the item's attention message.
+  job.cancelledBy = actorFromReq(req).userLabel;
   job.cancelUpload();
-  auditLog.log({ category: "job", event: "upload-cancelled", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file: job.file } });
-  res.json({ ok: true });
+  try { auditLog.log({ category: "job", event: "upload-cancelled", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file: job.file, ...(whileConfirming ? { whileConfirming: true } : {}) } }); }
+  catch (e) { console.log(`[print] ${p.name}: could not record the cancel: ${e.message}`); }
+  res.json({ ok: true, ...(whileConfirming ? { whileConfirming: true } : {}) });
 });
 
-// Poll a print job's progress. Cleans the record up once a finished job is read.
+// Poll a print job's progress. A finished job is kept, result and all, for
+// JOB_MAX_AGE after it finished (sweepFinishedJobs), however often it is read:
+// a tab that lost its connection, or a second tab, still gets the real result
+// (§37 P1). A job this server does not know is not evidence of anything about
+// the printer: the answer says so, and when this server started.
 app.get("/api/print-status", requireAuth, (req, res) => {
   const job = JOBS.get(req.query.job);
-  if (!job) return res.status(404).json({ error: "No such job" });
-  // skippedUpload travels so the client can say the transfer was skipped
-  // rather than leaving a suspiciously instant "done" unexplained.
-  const out = { phase: job.phase, sent: job.sent, total: job.total, done: job.done, error: job.error, result: job.result, skippedUpload: !!job.skippedUpload,
+  if (!job) return res.status(404).json({ error: "No such job", code: "job_unknown", serverStartedAt: SERVER_STARTED_AT });
+  // "confirming": every byte is out and the printer has not answered yet.
+  const confirming = !job.done && job.phase === "upload" && !!job.confirmingSince;
+  const out = { phase: confirming ? "confirming" : job.phase, sent: job.sent, total: job.total, done: job.done, error: job.error, result: job.result, 
     cancellable: !!job.cancelUpload, cancelled: !!job.cancelled,
-    errorCode: job.errorCode || null, failedPhase: job.failedPhase || null };
-  if (job.done) setTimeout(() => JOBS.delete(req.query.job), 5000);
+    errorCode: job.errorCode || null, failedPhase: job.failedPhase || null,
+    outcome: job.outcome || null, startCancelled: !!job.cancelRequested && !!job.confirmingSince,
+    confirmingMs: job.confirmingSince ? Date.now() - job.confirmingSince : null,
+    errorReason: job.errorReason || null, errorSeconds: job.errorSeconds || null, printerPrompt: !!job.printerPrompt };
   res.json(out);
 });
 
@@ -2088,28 +2623,95 @@ app.get("/api/printer-file-meta", requireAuth, async (req, res) => {
 // print-started notification) and the audit row must fire exactly once, and
 // never for a job that failed -- an audit trail claiming a print started when
 // it did not is worse than no trail at all.
-// The printer still holds the file SnapCon staged there: listed under that
-// name, the size SnapCon sent. Anything else — gone, another size — is a file
-// that merely has the name, and its Print is linked by name like any other.
-// A printer that cannot be asked keeps what SnapCon recorded, and says so.
-async function stagedCopyStillOurs(p, c, staged) {
-  if (!c.listFiles || staged.size == null) return { ...staged.send, copyChecked: false };
+// What a Print of the Loaded file records as sent (M7.1), once the check
+// found it present: copyChecked when that rested on the recorded size, not
+// the name alone.
+const stagedSend = (staged, check) => staged.send ? { ...staged.send, copyChecked: check.basis === "size" } : null;
+
+// ---- Is the Loaded file still the one SnapCon put there? (§37 P5) ----
+// One read of the printer, at the exact name every upload uses, held to the
+// size recorded when it was staged. The local file is not compared: it may
+// have moved or changed since. So the most this says is that the printer has
+// a file of that name and size (basis "size"), or of that name (basis
+// "name", when no size was recorded or the printer reports none) — never
+// that its content was checked.
+//   present       still there (at the recorded size, where there is one);
+//   missing       the printer answered and it is not there;
+//   changed       there under that name at another size;
+//   unverifiable  the printer could not be asked (offline, a failed read).
+// Nothing is deleted, sent or retried here; only the entry's check changes.
+const STAGED_CHECK_STATES = new Set(["present", "missing", "changed", "unverifiable"]);
+const STAGED_CHECK_BASES = new Set(["size", "name"]);
+const STAGED_CHECK_MAP = { verified: "present", acknowledged: "present", absent: "missing", mismatch: "changed" };
+async function checkStagedCopy(p, c, staged) {
+  const at = Date.now();   // when it began: a slower, older check never replaces a newer one
+  let v;
+  if (!c.verifyUpload) v = { result: "unverifiable", evidence: "this printer type cannot list its files" };
+  else {
+    try { v = await c.verifyUpload(p, staged.name, null, { attempts: 1, localSize: staged.size == null ? null : staged.size }); }
+    catch (e) { v = { result: "unverifiable", evidence: e.message }; }
+  }
+  const state = STAGED_CHECK_MAP[v && v.result] || "unverifiable";
+  const basis = state === "present" ? (v.basis === "size" ? "size" : "name") : null;
+  return { state, at, basis, evidence: (v && v.evidence) ? String(v.evidence).slice(0, 300) : null };
+}
+// Records a check on the entry, if it is still the same Loaded file.
+function noteStagedCheck(p, staged, check) {
+  const cur = queuedFile.get(p.id);
+  if (cur !== staged || cur.status !== "ready") return;
+  if (cur.check && cur.check.at > check.at) return;
+  const changed = !cur.check || cur.check.state !== check.state || cur.check.basis !== check.basis;
+  cur.check = check;
+  // Written when what it found changes; a renewed "present" is kept in memory.
+  if (changed) saveQueuedFiles();
+  if (check.state !== "present") console.log(`[staged] ${p.name}: "${staged.name}" ${check.state}${check.evidence ? " — " + check.evidence : ""}`);
+}
+// What the page sees: gone or changed is not "ready" any more.
+const stagedRowStatus = qf => qf.status === "ready" && qf.check && (qf.check.state === "missing" || qf.check.state === "changed") ? qf.check.state : qf.status;
+// A Print of the Loaded file goes ahead only on "present" (owner decision,
+// 2026-10-28): missing and changed are refused, and so is a printer that
+// cannot be asked — the person sees why and can check again.
+const STAGED_REFUSAL = {
+  missing: (p, n) => `${n} is no longer on ${p.name}. Dismiss it, or send it again.`,
+  changed: (p, n) => `The file called ${n} on ${p.name} has changed since SnapCon sent it, so it was not started. Send it again to print it.`,
+  unverifiable: (p, n, why) => `SnapCon could not check ${n} on ${p.name}${why ? " (" + why + ")" : ""}, so it was not started. Check the printer, then try again.`,
+};
+
+// The scheduled check of every Loaded file: shortly after startup, then every
+// 15 minutes. One printer at a time, one read each, and never two sweeps at
+// once. A printer that is offline, busy with a send or a start, or checked in
+// the last few minutes (a Print just did) is left as it is: offline says
+// nothing about the file. A file found missing or changed stays so until
+// dismissed or replaced; it is not asked about again.
+const STAGED_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const STAGED_CHECK_STARTUP_MS = 60 * 1000;
+const STAGED_CHECK_FRESH_MS = 5 * 60 * 1000;
+let stagedSweepRunning = false;
+async function sweepStagedFiles(now = Date.now()) {
+  if (stagedSweepRunning) return { skipped: "running" };
+  stagedSweepRunning = true;
+  const done = [];
   try {
-    const files = await c.listFiles(p);
-    const base = s => String(s || "").replace(/\\/g, "/").split("/").pop();
-    const f = (files || []).find(x => base(x.path || x.name) === staged.name);
-    if (!f || (f.size != null && f.size !== staged.size)) {
-      console.log(`[printfile] ${p.name}: "${staged.name}" on the printer is not the copy SnapCon staged; the Print is linked by name`);
-      return null;
+    for (const p of [...PRINTERS]) {
+      const staged = queuedFile.get(p.id);
+      if (!staged || staged.status !== "ready") continue;
+      if (staged.check && (staged.check.state === "missing" || staged.check.state === "changed")) continue;
+      if (staged.check && now - staged.check.at < STAGED_CHECK_FRESH_MS) continue;
+      if (otherSendInFlight(p) || queueDispatchJob(p.id) || STARTING.has(p.id)) continue;
+      let st;
+      try { st = await probeCached(p); } catch { st = null; }
+      if (!st || !st.online) continue;
+      noteStagedCheck(p, staged, await checkStagedCopy(p, getConnector(p.connector), staged));
+      done.push(p.id);
     }
-    return { ...staged.send, copyChecked: true };
-  } catch { return { ...staged.send, copyChecked: false }; }
+  } finally { stagedSweepRunning = false; }
+  return { checked: done };
 }
 
 // plate: the plate to start (a Bambu project). send: what SnapCon sent when
 // this file is the one it staged on this printer (M7.1) — the Print is then
 // recorded as that, not guessed from the file name.
-async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needsMapping, job, printerKey, plate = null, send = null }) {
+async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needsMapping, job, plate = null, send = null }) {
   try {
     await withStartSequence(p, async () => {
       if (needsMapping) {
@@ -2119,11 +2721,11 @@ async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needs
         console.log(`[printfile] ${p.name}: applyHeadMapping resolved, calling startPrintFile`);
       }
       job.phase = "starting";
-      await c.startPrintFile(p, filename, { plate });
+      await c.startPrintFile(p, filename, { plate, prefs });
     });
     console.log(`[printfile] ${p.name}: startPrintFile resolved for "${filename}"`);
     // Printing it is what "ready to print" was waiting for -- clear the badge.
-    if (queuedFile.get(printerKey)?.name === filename) { queuedFile.delete(printerKey); saveQueuedFiles(); }
+    if (queuedFile.get(p.id)?.name === filename) { queuedFile.delete(p.id); saveQueuedFiles(); }
     ROUTE_STARTED_PRINT.add(p.url);
     const lib = send && send.library;
     const auditRef = auditLog.log({ category: "job", event: "print-started", ...actor, printerId: p.id, printerName: p.name,
@@ -2141,15 +2743,27 @@ async function runPrintFileJob({ p, c, filename, tools, map, prefs, actor, needs
 }
 
 app.post("/api/printfile", requireRegular, async (req, res) => {
-  const { printer, filename, map, prefs } = req.body || {};
+  // loaded: the card's Print of its Loaded file (§37 P5): checked on the
+  // printer before it is accepted, and refused unless still there. A Print
+  // picked from the printer's file list is a separate operation: it does not
+  // consult the Loaded record at all (no check, no plate, no Library send),
+  // even when a file of the same name is Loaded.
+  const { printer, filename, map: mapAsked, prefs, loaded } = req.body || {};
   const p = PRINTERS[printer];
-  // The file SnapCon staged on this printer, if this is it: its plate and
-  // what was sent are used, not reconstructed from the name (M7.1).
-  const staged = (() => { const q = queuedFile.get(printer); return q && q.status === "ready" && q.name === filename ? q : null; })();
   if (!p) return res.status(400).json({ error: "Unknown printer" });
+  // The file SnapCon staged on this printer, when the card is printing it: its
+  // plate and what was sent are used, not reconstructed from the name (M7.1).
+  const staged = (() => { const q = loaded === true && queuedFile.get(p.id); return q && q.status === "ready" && q.name === filename ? q : null; })();
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
   if (p.maintenanceMode) return res.status(409).json({ error: p.name + " is in maintenance mode — take it off maintenance before printing." });
   if (!filename || /["\r\n]/.test(filename)) return res.status(400).json({ error: "Bad filename" });
+  const { map, error: mapError } = checkToolMap(mapAsked, p);
+  if (mapError) return res.status(400).json({ error: mapError, code: "bad_tool_map" });
+  // The map chosen with this Loaded file cannot be read: nothing is started on
+  // the printer's own mapping. A map given with this Print replaces it.
+  if (staged && staged.mapInvalid && !Object.keys(map).length) {
+    return res.status(409).json({ error: `The toolhead mapping saved with ${filename} on ${p.name} could not be read, so it was not printed. Upload the file again to choose its mapping, or eject it.`, code: "staged_bad_map" });
+  }
   // The file is already on the printer, but it may still be one this printer
   // cannot start (its storage holds timelapse videos too).
   {
@@ -2163,27 +2777,46 @@ app.post("/api/printfile", requireRegular, async (req, res) => {
   catch (e) { return res.status(e.status || 409).json({ error: e.message }); }
 
   // Same head-mapping macros as the upload flow (map = { paletteIdx: headIdx }).
-  let tools = [];
-  if (map && Object.keys(map).length) {
-    tools = Object.keys(map).map(Number).sort((a, b) => a - b);
-  }
+  // The Loaded file's own choices (stagedChoices) apply unless this request
+  // makes its own: the card's Print sends an empty map and, without the print
+  // options dialog, no options. Option by option: this request, then what the
+  // Loaded file kept, then the printer's default (in the connector).
+  const startMap = Object.keys(map).length ? map : (staged && staged.map) || {};
+  const startPrefs = staged && staged.prefs ? { ...staged.prefs, ...prefs } : prefs;
+  const tools = Object.keys(startMap).map(Number).sort((a, b) => a - b);
   const c = getConnector(p.connector);
   // Still needed with no mapping chosen (tools=[]) when the printer has its
   // own preferences (auto-level/flow-calibrate/timelapse) to send before
   // print start.
-  const needsMapping = !!c.applyHeadMapping && (tools.length > 0 || printerHasAnyDefaultPref(p) || wantsAnyPref(prefs));
+  const needsMapping = !!c.applyHeadMapping && (tools.length > 0 || printerHasAnyDefaultPref(p) || wantsAnyPref(startPrefs));
 
   // Everything above is cheap and synchronous, so those rejections stay
   // outright HTTP errors. Everything below can block on physical printer work,
   // so it moves onto the same JOBS machinery /api/print already uses: this
   // response now means "start job accepted", NOT "printing" -- clients poll
   // /api/print-status for the outcome.
+  // Not while another transfer to this printer runs (the queue, a deferred,
+  // CLI or manual send: the one lock, §28, §37 P3); checked right before the
+  // job is registered, and the job names the printer so the queue in turn
+  // does not claim it while this start runs.
+  if (transferBusy(p)) return res.status(409).json({ error: transferBusyRefusal(p), code: "printer_receiving" });
+  // The Loaded file is checked on the printer before the start is accepted
+  // (§37 P5): one read, at its exact name and recorded size. Anything but
+  // present is refused here, with why, and nothing is started or sent.
+  let send = null;
+  if (staged) {
+    const check = await checkStagedCopy(p, c, staged);
+    noteStagedCheck(p, staged, check);
+    if (check.state !== "present") return res.status(409).json({ error: STAGED_REFUSAL[check.state](p, filename, check.evidence), code: "staged_" + check.state });
+    send = stagedSend(staged, check);
+    // Checked with an await: another transfer may have taken the printer meanwhile.
+    if (transferBusy(p)) return res.status(409).json({ error: transferBusyRefusal(p), code: "printer_receiving" });
+  }
   const jobId = newJobId();
-  const job = { phase: needsMapping ? "mapping" : "starting", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now() };
+  const job = { phase: needsMapping ? "mapping" : "starting", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now(), printerId: p.id };
   JOBS.set(jobId, job);
   res.json({ ok: true, jobId, printer: p.name, filename, mapped: tools.length });
-  const send = staged && staged.send ? await stagedCopyStillOurs(p, c, staged) : null;
-  runPrintFileJob({ p, c, filename, tools, map, prefs, actor: actorFromReq(req), needsMapping, job, printerKey: printer,
+  runPrintFileJob({ p, c, filename, tools, map: startMap, prefs: startPrefs, actor: actorFromReq(req), needsMapping, job,
     plate: staged ? staged.plate : null, send });
 });
 
@@ -2203,7 +2836,7 @@ app.post("/api/printctl", requireRegular, async (req, res) => {
     // "Loaded" badge is SnapCon's own and was previously cleared ONLY by
     // actually printing the file, so a staged job could not be dismissed at
     // all. Clearing it here is what makes the button mean what it says.
-    if (action === "eject" && queuedFile.has(printer)) { queuedFile.delete(printer); saveQueuedFiles(); }
+    if (action === "eject" && queuedFile.has(p.id)) { queuedFile.delete(p.id); saveQueuedFiles(); }
     auditLog.log({ category: "job", event: "printctl-" + action, ...actorFromReq(req), printerId: p.id, printerName: p.name });
     res.json({ ok: true, action });
   } catch (e) {
@@ -2236,9 +2869,9 @@ app.post("/api/printer-file-delete", requireRegular, async (req, res) => {
   const refusal = printerFileDeleteRefusal({
     printerName: p.name, file, state: st.state, activeFilename: st.filename,
     starting: STARTING.has(p.id),
-    staged: queuedFile.get(printer) || null,
+    staged: queuedFile.get(p.id) || null,
     queue: [...(qs.queue || []), ...(qs.currentItem ? [qs.currentItem] : [])],
-    uploading: [...JOBS.values()].filter(j => !j.done && j.phase === "upload" && j.printerId === p.id).map(j => j.file),
+    uploading: [...JOBS.values()].filter(j => !j.done && (j.phase === "upload" || j.phase === "verifying") && j.printerId === p.id).map(j => j.file),
   });
   if (refusal) return res.status(409).json({ error: refusal });
   try {
@@ -2246,8 +2879,8 @@ app.post("/api/printer-file-delete", requireRegular, async (req, res) => {
   } catch (e) {
     return res.status(502).json({ error: "Could not delete \"" + file + "\" from " + p.name + ": " + e.message });
   }
-  const staged = queuedFile.get(printer);
-  if (staged && path.basename(String(staged.name)) === path.basename(file)) { queuedFile.delete(printer); saveQueuedFiles(); }
+  const staged = queuedFile.get(p.id);
+  if (staged && path.basename(String(staged.name)) === path.basename(file)) { queuedFile.delete(p.id); saveQueuedFiles(); }
   auditLog.log({ category: "job", event: "printer-file-deleted", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file } });
   res.json({ ok: true });
 });
@@ -2292,14 +2925,30 @@ app.post("/api/exclude", requireRegular, async (req, res) => {
 // re-probed every OFFLINE_RETRY_MS — otherwise every unreachable printer costs
 // a full fetch timeout on every fleet poll.
 const OFFLINE_RETRY_MS = 10 * 1000;
-const offlineCache = new Map();   // printer url -> { result, until }
+// The offline cache, stable printer identity and the fleet's non-blocking
+// display path live in fleetProbe.js (docs/TODO.md §43, §48): results are
+// kept per printer id, never per URL, so printers without a URL no longer
+// share one entry. FLEET_PROBE is created below, after LAST_SEEN.
 // When each printer last answered a probe: printer id -> ms. Set by
-// probeCached() on every online result (the fleet poll and notifyTick's own
-// background poll both pass through it, so it advances with no browser open)
-// and never by a failed one. In memory only: after a restart a printer has
+// fleetProbe.js on every real, current, online result — probeCached() and the
+// fleet's display path alike, so it advances with no browser open (notifyTick)
+// — and never by a failed, served-from-memory, timed-out or obsolete one. In memory only: after a restart a printer has
 // no time until it is reached once, and the card says so.
 const LAST_SEEN = new Map();
 const lastSeenIso = p => (LAST_SEEN.has(p.id) ? new Date(LAST_SEEN.get(p.id)).toISOString() : null);
+
+// probeCached() (decisions and actions) uses FLEET_PROBE.fresh(); only the
+// fleet route (what the cards show) uses FLEET_PROBE.display() through
+// probeForDisplay(). Switch: config.json "fleetFastOffline" — absent or true
+// = on (the default); false = the fleet route behaves exactly as fresh()
+// (the pre-§48 behaviour). Changed live by POST /api/fleet-fast-offline.
+const FLEET_PROBE = createFleetProbe({
+  probe: p => getConnector(p.connector).probe(p),
+  currentPrinter: key => PRINTERS.find(x => fleetProbeKeyOf(x) === key) || null,
+  onOnline: (p, at) => LAST_SEEN.set(p.id, at),
+  enabled: () => CFG.fleetFastOffline !== false,
+  retryMs: OFFLINE_RETRY_MS,
+});
 
 // /api/fleet's client only re-renders a card when the raw JSON body differs
 // from the last poll (see app.js's FLEET_PREV_BODY check) — cheap, but it
@@ -2322,7 +2971,7 @@ const lastSeenIso = p => (LAST_SEEN.has(p.id) ? new Date(LAST_SEEN.get(p.id)).to
 // built for) — anything bigger is a real change and shows immediately,
 // without waiting for a repeat.
 const JITTER_BAND = 1;
-const tempStableCache = new Map(); // "printerUrl:bed"|"printerUrl:hotend" -> { shown, pendingVal, pendingCount }
+const tempStableCache = new Map(); // "<printer key>:bed"|"<printer key>:hotend" -> { shown, pendingVal, pendingCount } (key: fleetProbeKeyOf, §43)
 function stabilizeTemp(key, incoming) {
   if (!incoming) return incoming;
   let st = tempStableCache.get(key);
@@ -2345,13 +2994,14 @@ function stabilizeTemp(key, incoming) {
 // show "Finished <time>" instead of a stale "Remaining 00m 00s". Cleared the
 // moment the printer leaves the complete state so the next print gets its
 // own fresh stamp rather than showing a previous job's finish time.
-const completedAtCache = new Map(); // printer url -> timestamp
+const completedAtCache = new Map(); // printer key (fleetProbeKeyOf, §43) -> timestamp
 function stampCompletedAt(p, result) {
+  const key = fleetProbeKeyOf(p);
   if (result.state === "complete") {
-    if (!completedAtCache.has(p.url)) completedAtCache.set(p.url, Date.now());
-    return { ...result, completedAt: completedAtCache.get(p.url) };
+    if (!completedAtCache.has(key)) completedAtCache.set(key, Date.now());
+    return { ...result, completedAt: completedAtCache.get(key) };
   }
-  completedAtCache.delete(p.url);
+  completedAtCache.delete(key);
   return result;
 }
 
@@ -2376,17 +3026,24 @@ function webrtcCameraFields(p, conn) {
   const url = conn.webrtcSignalUrl(p);
   return url ? { cameraWebrtcUrl: url } : {};
 }
+// The authoritative status, for every decision and action: an offline result
+// is reused for OFFLINE_RETRY_MS, anything else is a new probe of its own.
 async function probeCached(p) {
-  const hit = offlineCache.get(p.url);
-  let result;
-  if (hit && Date.now() < hit.until) result = hit.result;
-  else {
-    result = await getConnector(p.connector).probe(p);
-    if (result.online) { offlineCache.delete(p.url); LAST_SEEN.set(p.id, Date.now()); }
-    else offlineCache.set(p.url, { result, until: Date.now() + OFFLINE_RETRY_MS });
-  }
+  return finishProbe(p, await FLEET_PROBE.fresh(p));
+}
+// What the fleet cards show (GET /api/fleet only). A printer last seen offline
+// is answered from that result at once and re-checked in the background; it
+// then carries statusCheckedAt (when that offline result was observed). Online
+// and printing states are always a live probe. Never use this for a decision.
+async function probeForDisplay(p) {
+  const d = await FLEET_PROBE.display(p);
+  const r = finishProbe(p, d.result);
+  return d.cached ? { ...r, statusCheckedAt: new Date(d.checkedAt).toISOString() } : r;
+}
+function finishProbe(p, result) {
   if (result.online) {
-    result = { ...result, bed: stabilizeTemp(p.url + ":bed", result.bed), hotend: stabilizeTemp(p.url + ":hotend", result.hotend) };
+    const key = fleetProbeKeyOf(p);
+    result = { ...result, bed: stabilizeTemp(key + ":bed", result.bed), hotend: stabilizeTemp(key + ":hotend", result.hotend) };
     result = stampCompletedAt(p, result);
   }
   // Checked fresh every call, independent of the reachability cache above —
@@ -2404,12 +3061,12 @@ async function probeCached(p) {
 }
 
 // ---- Notify: external CLI hook (--load/--printer) stages a file for a printer ----
-// No interactive hand-off, ever — a notify always just uploads. If the printer
-// is busy right now, it's held in pendingLoad and a background sweep retries
-// it once the printer goes idle, with no browser tab needed for that to happen.
-// queuedFile: printer index -> { name, status, ts, error? } — reflects the
-// upload's progress; visible to ANY tab as a "ready to print" card banner.
-const pendingLoad = new Map();
+// No interactive hand-off, ever — a notify always just uploads. It is kept as
+// a deferred send (deferredStore, §37 P3) and sent as soon as the printer is
+// free, with no browser tab needed for that to happen.
+// queuedFile: printer id -> { name, status, ts, error?, check? } — the file
+// waiting on the printer ("Loaded"); visible to ANY tab. Keyed by the
+// printer's stable id (§37 P5), like the deferred sends.
 const queuedFile = new Map();
 
 // Printer url -> true, set right after /api/print or /api/printfile actually
@@ -2424,18 +3081,18 @@ const ROUTE_STARTED_PRINT = new Set();
 // the printer's own storage until it's printed or ejected — but Klipper
 // itself has no concept of "loaded but not started" separate from actually
 // beginning the print, so this in-memory bookkeeping is the ONLY place that
-// fact lives. Persisted (by printer id, not the runtime array index queuedFile
-// itself uses, since a Settings save can reorder PRINTERS[] within the same
-// run) so a SnapCon restart doesn't forget it and silently strand a file the
-// user can no longer see is there. "queued"/"uploading"/"error" are
+// fact lives. Persisted by printer id so a SnapCon restart doesn't forget it
+// and silently strand a file the user can no longer see is there. "queued"/"uploading"/"error" are
 // mid-flight snapshots of an operation that's simply dead the moment the
 // process restarts — nothing to resume, so only "ready" is written.
 function saveQueuedFiles() {
   const out = {};
-  for (const [idx, qf] of queuedFile) {
+  for (const [id, qf] of queuedFile) {
     if (qf.status !== "ready") continue;
-    const p = PRINTERS[idx];
-    if (p && p.id) out[p.id] = { name: qf.name, ts: qf.ts, plate: qf.plate == null ? null : qf.plate, send: qf.send || null, size: qf.size == null ? null : qf.size };
+    // A printer removed from Settings: not written, so its entry does not
+    // outlive the next restart.
+    if (!PRINTERS.some(p => p.id === id)) continue;
+    out[id] = { name: qf.name, ts: qf.ts, plate: qf.plate == null ? null : qf.plate, send: qf.send || null, ...(qf.map ? { map: qf.map } : {}), ...(qf.mapInvalid ? { mapInvalid: true } : {}), ...(qf.prefs ? { prefs: qf.prefs } : {}), size: qf.size == null ? null : qf.size, ...(qf.sizeOf ? { sizeOf: qf.sizeOf } : {}), ...(qf.verification ? { verification: qf.verification, verifiedAt: qf.verifiedAt || null } : {}), ...(qf.check ? { check: qf.check } : {}) };
   }
   try { fs.writeFileSync(QUEUED_FILE_PATH, JSON.stringify(out, null, 2)); }
   catch (e) { console.error("[queued-files] save failed:", e.message); }
@@ -2444,12 +3101,230 @@ function loadQueuedFiles() {
   let saved;
   try { saved = JSON.parse(fs.readFileSync(QUEUED_FILE_PATH, "utf8")); } catch { return; }
   if (!saved || typeof saved !== "object") return;
-  PRINTERS.forEach((p, idx) => {
+  PRINTERS.forEach(p => {
     const entry = p.id && saved[p.id];
-    if (entry && entry.name) queuedFile.set(idx, { name: entry.name, status: "ready", ts: entry.ts || Date.now(), plate: entry.plate == null ? null : entry.plate, send: entry.send || null, size: entry.size == null ? null : entry.size });
+    // An entry written before sizes were recorded as the file's own (sizeOf
+    // "file") may hold the whole upload body's size, framing included: its
+    // size is unknown, so its copy on the printer is not checked against it
+    // and its Library link stays (checkStagedCopy by name, copyChecked false).
+    const fileSize = entry && entry.sizeOf === "file" && entry.size != null ? entry.size : null;
+    // An entry written before the read-back (§37 P2) has no check recorded:
+    // it stays unchecked, never assumed verified.
+    const checked = entry && START_OK_VERIFICATIONS.has(entry.verification) && Number.isFinite(entry.verifiedAt)
+      ? { verification: entry.verification, verifiedAt: entry.verifiedAt } : {};
+    // What the last freshness check found (§37 P5); anything else is unchecked.
+    const check = entry && entry.check && STAGED_CHECK_STATES.has(entry.check.state) && Number.isFinite(entry.check.at)
+      ? { state: entry.check.state, at: entry.check.at, basis: STAGED_CHECK_BASES.has(entry.check.basis) ? entry.check.basis : null, evidence: typeof entry.check.evidence === "string" ? entry.check.evidence.slice(0, 300) : null } : null;
+    if (entry && entry.name) queuedFile.set(p.id, { name: entry.name, status: "ready", ts: entry.ts || Date.now(), plate: entry.plate == null ? null : entry.plate, send: entry.send || null, ...stagedChoices(entry.map, entry.prefs, p), ...(entry.mapInvalid === true ? { mapInvalid: true } : {}), size: fileSize, ...(fileSize != null ? { sizeOf: "file" } : {}), ...checked, ...(check ? { check } : {}) });
   });
 }
 loadQueuedFiles();
+deferredStore.load();
+transferResults.setLimits(transferResultLimitsFromConfig(CFG));
+transferResults.load();
+deferredStartup();
+// The scheduled freshness check of Loaded files (§37 P5; sweepStagedFiles).
+setTimeout(() => { sweepStagedFiles().catch(e => console.log("[staged] check failed:", e.message)); }, STAGED_CHECK_STARTUP_MS).unref();
+setInterval(() => { sweepStagedFiles().catch(e => console.log("[staged] check failed:", e.message)); }, STAGED_CHECK_INTERVAL_MS).unref();
+
+// The card's Dismiss and Check again for a Loaded file found missing or
+// changed, or that could not be checked, and Dismiss for a deferred send's
+// error (§37 P5). Dismiss forgets SnapCon's record only: the printer's file is
+// never touched. Check again is one read, at most once a minute per printer.
+const STAGED_MANUAL_MIN_MS = 60 * 1000;
+const stagedManualAt = new Map();
+app.post("/api/staged-file/dismiss", requireRegular, (req, res) => {
+  const p = PRINTERS[req.body && req.body.printer];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const qf = queuedFile.get(p.id);
+  if (!qf || (req.body.name && qf.name !== req.body.name)) return res.status(404).json({ error: "Nothing to dismiss" });
+  const dismissable = qf.status === "error" || (qf.status === "ready" && qf.check && qf.check.state !== "present");
+  if (!dismissable) return res.status(409).json({ error: `${qf.name} is ready to print on ${p.name}; eject it instead.` });
+  queuedFile.delete(p.id);
+  saveQueuedFiles();
+  try { auditLog.log({ category: "job", event: "staged-file-dismissed", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { file: qf.name, ...(qf.check ? { check: qf.check.state } : {}) } }); }
+  catch (e) { console.log(`[staged] ${p.name}: could not record the dismiss: ${e.message}`); }
+  res.json({ ok: true });
+});
+app.post("/api/staged-file/check", requireRegular, async (req, res) => {
+  const p = PRINTERS[req.body && req.body.printer];
+  if (!p) return res.status(400).json({ error: "Unknown printer" });
+  if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer" });
+  const staged = queuedFile.get(p.id);
+  if (!staged || staged.status !== "ready") return res.status(404).json({ error: "No Loaded file to check" });
+  const last = stagedManualAt.get(p.id) || 0;
+  if (Date.now() - last < STAGED_MANUAL_MIN_MS) return res.status(429).json({ error: "Checked a moment ago. Try again in a minute." });
+  stagedManualAt.set(p.id, Date.now());
+  const check = await checkStagedCopy(p, getConnector(p.connector), staged);
+  noteStagedCheck(p, staged, check);
+  res.json({ ok: true, check: { state: check.state, at: check.at, basis: check.basis } });
+});
+
+// A deferred send as the page sees it: never its source path or bytes.
+const deferredRow = r => ({ id: r.id, transferId: tidOf(r), name: r.name, state: r.state, ...((f => f ? { finished: f.state, ...(f.later ? { finishedLater: true } : {}) } : {})(deferredFinished(r))), createdAt: r.createdAt, seq: r.seq, ...(r.waitingFor ? { waitingFor: r.waitingFor } : {}), ...(r.reason ? { reason: r.reason } : {}), ...(r.error ? { error: r.error } : {}), ...(r.code ? { code: r.code } : {}), ...(r.outcome ? { outcome: r.outcome } : {}), ...(r.errorReason ? { errorReason: r.errorReason } : {}), printerName: r.printerName || null });
+
+// ---- A person's actions on a deferred send (§37 P3) ----
+// Each acts only from the states it names, so a repeated click, a second tab
+// or a restart in between changes nothing twice. A send whose printer was
+// removed is an admin's to act on (there is no printer to check access to).
+function deferredForRequest(req, res) {
+  const rec = deferredStore.get(req.params.id);
+  if (!rec) { res.status(404).json({ error: "No such send" }); return null; }
+  const p = printerById(rec.printerId);
+  if (p ? !printerVisibleTo(req.user, p) : !(req.user && req.user.role === "admin")) { res.status(403).json({ error: "You don't have access to this printer" }); return null; }
+  return { rec, p };
+}
+function deferredAudit(req, event, rec, extra = {}) {
+  try { auditLog.log({ category: "job", event, ...actorFromReq(req), printerId: rec.printerId, printerName: rec.printerName || null, detail: { file: rec.name, transferId: tidOf(rec), ...extra } }); } catch {}
+}
+// Cancel: a queued, interrupted or attention send is cancelled (its stored
+// bytes go only once that is saved); one uploading is cut as any upload is
+// (P1: after the last byte only what follows is called off).
+app.post("/api/deferred/:id/cancel", requireRegular, (req, res) => {
+  const it = deferredForRequest(req, res); if (!it) return;
+  const { rec } = it;
+  if (rec.state === "uploading") {
+    const job = [...JOBS.values()].find(j => j.deferredId === rec.id && !j.done);
+    if (!job || !job.cancelUpload) return res.status(409).json({ error: "The printer has already answered for this file; it can't be cancelled now." });
+    job.cancelledBy = actorFromReq(req).userLabel;
+    job.cancelUpload();
+    deferredAudit(req, "deferred-send-cancel-requested", rec);
+    return res.json({ ok: true, state: "uploading" });
+  }
+  const t = deferredStore.transition(rec.id, ["queued", "interrupted", "attention"], { state: "cancelled", outcome: rec.state === "queued" ? "not-sent" : "unknown" });
+  if (!t.ok) return res.status(t.reason === "persist" ? 503 : 409).json({ error: t.reason === "persist" ? "The cancel could not be saved; nothing changed." : `This send is ${t.state || "gone"}; nothing to cancel.` });
+  noteDeferredResult(t.record);
+  if (rec.bytes) deferredStore.deleteBytes(rec.id);
+  deferredAudit(req, "deferred-send-cancelled", rec, { from: rec.state });
+  res.json({ ok: true, state: "cancelled" });
+});
+// Dismiss: forgets a failed or cancelled send (and any bytes kept for it), or
+// one restored from a backup that had already finished. Its result is saved
+// first (§37 P4): the record is never the last trace of an outcome to go.
+app.post("/api/deferred/:id/dismiss", requireRegular, (req, res) => {
+  const it = deferredForRequest(req, res); if (!it) return;
+  const from = deferredFinished(it.rec) ? ["attention", "failed", "cancelled"] : ["failed", "cancelled"];
+  if (!from.includes(it.rec.state)) return res.status(409).json({ error: "Only a failed or cancelled send can be dismissed." });
+  if (!deferredResultSettled(it.rec) && !noteDeferredResult(it.rec).ok) return res.status(503).json({ error: "Its result could not be saved; nothing changed." });
+  const r = deferredStore.remove(it.rec.id, from);
+  if (!r.ok) return res.status(r.reason === "persist" ? 503 : 409).json({ error: r.reason === "persist" ? "Could not be saved; nothing changed." : "Only a failed or cancelled send can be dismissed." });
+  if (it.rec.bytes) deferredStore.deleteBytes(it.rec.id);
+  deferredAudit(req, "deferred-send-dismissed", it.rec, { from: it.rec.state });
+  res.json({ ok: true });
+});
+// Send again: the person authorises another transfer of a send that needs
+// attention or failed. Back in line where it was; it replaces the printer's
+// file of that name when it goes (the page says so before asking).
+app.post("/api/deferred/:id/send-again", requireRegular, (req, res) => {
+  const it = deferredForRequest(req, res); if (!it) return;
+  const { rec, p } = it;
+  if (!p) return res.status(409).json({ error: "Its printer is not configured any more; it cannot be sent." });
+  if (rec.bytes && !fs.existsSync(deferredStore.bytesPath(rec.id))) return res.status(409).json({ error: "The file kept for this send is gone; send it again from the slicer." });
+  // Its content is fixed by hash: a changed source fails again every time.
+  // A new version is a new send (P3 frontend review).
+  const finished = deferredFinished(rec);
+  if (finished) return res.status(409).json({ error: finished.later ? `A later attempt already delivered ${rec.name}; this send, restored from a backup, is out of date and is not sent again. Dismiss it.` : `${rec.name} already finished (${finished.state}) before SnapCon restored this send from its backup; it is not sent again. Dismiss it.` });
+  if (rec.state === "failed" && rec.code === "DEFERRED_SOURCE_CHANGED") return res.status(409).json({ error: `${rec.name} changed since this send was asked for. Send the file again from SnapCon to send the new version.` });
+  const other = deferredStore.list({ printerId: p.id }).find(r => r.id !== rec.id && r.name === rec.name && ["queued", "uploading", "interrupted", "attention", "completed"].includes(r.state) && !(r.state === "completed" && r.loadedApplied));
+  if (other) return res.status(409).json({ error: `${rec.name} is already waiting to be sent to ${p.name} in another send.` });
+  // Another attempt is another transfer (§37 P4): the attempt that ended
+  // keeps its result under its own id, saved before the send moves on.
+  if (!deferredResultSettled(rec) && !noteDeferredResult(rec).ok) return res.status(503).json({ error: "The result of the last attempt could not be saved; nothing changed." });
+  const transferId = deferredStore.newId();
+  const t = deferredStore.transition(rec.id, ["attention", "failed"], { state: "queued", transferId, parentTransferId: tidOf(rec), reason: null, error: null, code: null, errorReason: null, outcome: null, evidence: null, waitingFor: null, notBefore: null });
+  if (!t.ok) return res.status(t.reason === "persist" ? 503 : 409).json({ error: t.reason === "persist" ? "Could not be saved; nothing changed." : `This send is ${t.state || "gone"}.` });
+  deferredAudit(req, "deferred-send-again", t.record, { from: rec.state, parentTransferId: tidOf(rec) });
+  setImmediate(() => { pumpDeferred().catch(() => {}); });
+  res.json({ ok: true, state: "queued", transferId });
+});
+// Check again: reads the printer back once (at most once a minute per send).
+app.post("/api/deferred/:id/check", requireRegular, async (req, res) => {
+  const it = deferredForRequest(req, res); if (!it) return;
+  const { rec, p } = it;
+  if (!p) return res.status(409).json({ error: "Its printer is not configured any more." });
+  if (!["interrupted", "attention"].includes(rec.state)) return res.status(409).json({ error: `This send is ${rec.state}; there is nothing to check.` });
+  if (transferBusy(p)) return res.status(409).json({ error: transferBusyRefusal(p) });
+  if (Date.now() - (deferredCheckedAt.get(rec.id) || 0) < 60 * 1000) return res.status(429).json({ error: "Checked a moment ago. Try again in a minute." });
+  deferredCheckedAt.set(rec.id, Date.now());
+  const out = await reconcileDeferredOne(p, rec, ["interrupted", "attention"]);
+  deferredAudit(req, "deferred-send-checked", rec, { state: out.state });
+  res.json({ ok: true, state: out.state, evidence: out.evidence });
+});
+// Sends whose printer was removed, for the fleet's attention list (admins).
+app.get("/api/deferred/orphans", requireAdmin, (req, res) => {
+  const st = deferredStore.status();
+  const orphaned = deferredStore.listOrphaned();
+  res.json({ status: { loadStatus: st.loadStatus, recoveryRequired: st.recoveryRequired, degraded: st.degraded, readOnly: st.readOnly, hold: st.hold ? { reason: st.hold.reason, since: st.hold.since } : null, dropped: st.dropped },
+    orphanedFiles: { count: orphaned.length, bytes: orphaned.reduce((n, f) => n + f.size, 0) },
+    results: (({ loadStatus, readOnly, degraded }) => ({ loadStatus, readOnly, degraded }))(transferResults.status()),
+    sends: deferredStore.list().filter(r => !printerById(r.printerId)).map(r => ({ ...deferredRow(r), printerId: r.printerId })) });
+});
+// The only way set-aside files are deleted: an admin's explicit action, audited
+// with each file.
+app.post("/api/deferred/orphaned-files/delete", requireAdmin, (req, res) => {
+  const gone = deferredStore.deleteOrphaned();
+  try { auditLog.log({ category: "system", event: "deferred-files-deleted", ...actorFromReq(req), detail: { files: gone.map(f => f.name), bytes: gone.reduce((n, f) => n + f.size, 0) } }); } catch {}
+  res.json({ ok: true, deleted: gone.length });
+});
+// Clears the hold only: no send changes state, and no file is deleted.
+app.post("/api/deferred/acknowledge-recovery", requireAdmin, (req, res) => {
+  const r = deferredStore.acknowledgeRecovery();
+  if (!r.ok) return res.status(503).json({ error: r.error ? r.error.message : "Could not be saved." });
+  try { auditLog.log({ category: "system", event: "deferred-sends-recovery-acknowledged", ...actorFromReq(req) }); } catch {}
+  res.json({ ok: true });
+});
+
+// ---- A transfer's status (§37 P4) ----
+// Read-only. What a transfer id's attempt is doing, or how it ended: a send
+// still under way from deferredStore (with its job's progress), else its
+// saved result, else (a result not yet saved) the outcome its send records.
+// Asked by a signed-in user who can see its printer (a removed printer's:
+// admins), or by the same-machine command line with its local token. Anyone
+// else gets exactly the answer an unknown id gets, so an id reveals nothing.
+const TRANSFER_UNDER_WAY = new Set(["queued", "uploading", "interrupted"]);
+function transferReadAllowed(req, printerId) {
+  if (NOTIFY_TOKEN && isLoopback(req) && req.headers["x-snapcon-local-token"] && timingSafeTokenEqual(req.headers["x-snapcon-local-token"], NOTIFY_TOKEN)) return true;
+  if (!req.user) return false;
+  const p = printerById(printerId);
+  return p ? printerVisibleTo(req.user, p) : req.user.role === "admin";
+}
+function transferStatus(id, rec, result) {
+  const p = printerById(rec ? rec.printerId : result.printerId);
+  const out = { transferId: id, printer: p ? p.name : (rec && rec.printerName) || null };
+  if (rec && TRANSFER_UNDER_WAY.has(rec.state)) {
+    Object.assign(out, { state: rec.state, final: false }, rec.parentTransferId ? { parentTransferId: rec.parentTransferId } : {});
+    if (rec.state === "queued" && rec.waitingFor) out.waitingFor = rec.waitingFor;
+    if (rec.state === "uploading") {
+      const job = [...JOBS.values()].find(j => j.deferredId === rec.id && !j.done);
+      const ph = job && job.phase;
+      out.phase = ph === "upload" ? (job.total > 0 && job.sent >= job.total ? "confirming" : "sending") : ph === "verifying" ? "verifying" : ph === "mapping" ? "finishing" : "preparing";
+      if (job && job.total > 0) { out.sent = job.sent || 0; out.total = job.total; }
+    }
+    return out;
+  }
+  // An outcome its send records but the results do not hold yet (a save
+  // that failed, or a completion settling an "unknown") is the newer one.
+  const pending = rec && !deferredResultSettled(rec) ? resultEntryFor(rec) : null;
+  const e = pending || result;
+  if (!e) return Object.assign(out, { state: "unknown", final: true, reason: (rec && rec.reason) || "restored-from-backup" });
+  Object.assign(out, { state: e.state, final: true, at: e.at });
+  for (const k of ["basis", "code", "reason", "outcome", "message", "reconciledFrom"]) if (e[k] != null) out[k] = e[k];
+  if (e.parentId) out.parentTransferId = e.parentId;
+  if (pending) out.unsaved = true;
+  return out;
+}
+app.get("/api/transfers/:id", (req, res) => {
+  const id = String(req.params.id || "");
+  const unknown = () => res.status(404).json({ error: "SnapCon does not know this transfer (it may have expired).", code: "transfer_unknown", serverStartedAt: SERVER_STARTED_AT });
+  if (!ID_SHAPE.test(id)) return unknown();
+  const rec = deferredStore.byTransfer(id);
+  const result = transferResults.get(id);
+  // Its current attempt's own record wins only while it is under way.
+  const printerId = rec ? rec.printerId : result ? result.printerId : null;
+  if (!printerId || !transferReadAllowed(req, printerId)) return unknown();
+  res.json(transferStatus(id, rec, result));
+});
 
 const normPrinterName = s => String(s || "").replace(/_/g, " ").trim().toLowerCase();
 function findPrinterIndex(name) {
@@ -2459,7 +3334,7 @@ function findPrinterIndex(name) {
 }
 
 // The states in which SnapCon may START work on a printer -- queue dispatch,
-// the pendingLoad retry, and both /api/notify-load arms all gate on this.
+// the deferred sends, and both /api/notify-load arms all gate on this.
 //
 // An ALLOWLIST on purpose. This used to exclude only "printing"/"paused",
 // which meant every other state counted as idle -- including "error", so a
@@ -2523,64 +3398,434 @@ async function isPrinterIdle(p) {
   // operator did not cause. The pre-flash gate stays as the last safety net;
   // this stops the collision happening in the first place.
   if (firmwareUpdating(p)) return false;
-  try { const st = await probeCached(p); return !!(st && st.online) && DISPATCH_IDLE_STATES.has(st.state); }
-  catch { return false; }
+  // A queue dispatch is decided after the probe, not before: callers act on
+  // "idle" without waiting again, and the queue may claim the printer while
+  // the probe is out (§28).
+  let st;
+  try { st = await probeCached(p); } catch { return false; }
+  return !!(st && st.online) && DISPATCH_IDLE_STATES.has(st.state) && !queueDispatchJob(p.id);
 }
-async function uploadNotifiedFile(idx, pl) {
-  const p = PRINTERS[idx];
-  const c = getConnector(p.connector);
-  queuedFile.set(idx, { name: pl.name, status: "uploading", ts: Date.now() });
-  saveQueuedFiles();
+// ---- Sends waiting for a busy printer (§37 P3) ----
+// A file SnapCon was asked to upload while the printer was busy (the Upload
+// button with uploads-while-printing off, the slicer/CLI hook) is kept in
+// deferredStore — on disk, in order per printer id — and sent once the printer
+// is free. Rules (owner, 2026-10-28):
+//   - acknowledged only once its record (and any pushed bytes) is saved;
+//   - first in, first out per printer; a second open send of the same name to
+//     the same printer is refused, never replacing the first;
+//   - the source must still be exactly what was asked for (sha256), or it fails;
+//   - sent through the per-printer lock as a real job (progress, Cancel, the
+//     strip), read back as every upload is (P2), and only ever uploaded: no
+//     path here starts a print;
+//   - an attempt interrupted by a restart is reconciled by reading the printer
+//     back, never resent, overwritten, deleted or started by itself; anything
+//     not proven complete waits for a person (Send again, Check again, Cancel);
+//   - a removed printer's sends are kept, shown as needing attention, and go
+//     on only if a printer with that id comes back.
+const DEFERRED_PUMP_MS = 5000;
+const DEFERRED_RECONCILE_MS = 60 * 1000;
+// A source folder that did not answer: asked again after this, not every pass.
+const DEFERRED_SOURCE_RETRY_MS = 60 * 1000;
+// A queued send that can go now: not waiting out a source retry, and its file
+// (unless pushed bytes, kept here) not on a share known to be down. One that
+// cannot does not hold up the next send to that printer, nor its queue
+// (owner, 2026-10-28) — it goes when it can, its content checked first.
+const deferredEligible = (r, now = Date.now()) => r.state === "queued" && !(r.notBefore > now) && (!!r.bytes || netfs.availability(r.source.path).status === "online");
+const sourcePathOf = rec => rec.bytes ? deferredStore.bytesPath(rec.id) : rec.source.path;
+// The transfer id of a send's current attempt (§37 P4): the send's own id at
+// first; Send again gives it a new one, linked by parentTransferId, so an
+// earlier attempt's result never turns into a later one's. A restart's
+// reconciliation keeps the attempt's id.
+const tidOf = r => r.transferId || r.id;
+// The file's hash, with its identity (netfs.identity) taken before and after
+// hashing: if they differ the file was being written while it was read, and
+// the hash describes no one version of it (§37 A4). `id` is the identity the
+// upload's later re-check compares against.
+async function sourceIdentity(file) {
+  const before = await netfs.identity(file);
+  const h = await queueStore.computeFileHash(file, { force: true });
+  const after = await netfs.identity(file);
+  if (!sameSource(before, after) || h.sizeBytes !== before.size) throw Object.assign(new Error("it changed while SnapCon was reading it"), { code: "SOURCE_CHANGED_WHILE_READ" });
+  return { size: h.sizeBytes, sha256: h.sha256, mtimeMs: before.mtimeMs, id: before };
+}
+const httpError = (status, message, code) => Object.assign(new Error(message), { status, code });
+const deferredDuplicate = (p, name) => httpError(409, `${name} is already waiting to be sent to ${p.name}. Cancel that send first to replace it.`, "deferred_duplicate");
+
+// Accepts a send for later: duplicate check, the source's identity (or the
+// pushed bytes, written durably first), then the record — persisted before
+// this returns, which is when the caller may answer that it is queued.
+async function acceptDeferredSend(p, { name, kind, file = null, buffer = null, tools = [], map = {}, prefs = {}, plate = null, actor, send = null }) {
+  if (deferredStore.openDuplicate(p.id, name)) throw deferredDuplicate(p, name);
+  const id = deferredStore.newId();
+  let source, bytes = null;
+  if (buffer) {
+    const b = await deferredStore.storeBytes(id, buffer, deferredLimitsFromConfig(CFG));
+    bytes = { size: b.size, sha256: b.sha256 };
+    source = { kind, size: b.size, sha256: b.sha256 };
+  } else {
+    let ident;
+    try { ident = await sourceIdentity(file); }
+    catch (e) { throw httpError(e && e.code === "NAS_UNREACHABLE" ? 503 : 404, `${name} could not be read: ${e.message}`, "deferred_source_unreadable"); }
+    if (send && send.library && send.library.sha256 && ident.sha256 !== send.library.sha256) throw httpError(409, `${name} changed since it was chosen in the Library; it was not queued. Send it again from the model page.`, "deferred_source_changed");
+    source = { kind, path: file, size: ident.size, sha256: ident.sha256, mtimeMs: ident.mtimeMs };
+  }
+  // Checked again: the hash or the write took time.
+  if (deferredStore.openDuplicate(p.id, name)) { if (bytes) deferredStore.deleteBytes(id); throw deferredDuplicate(p, name); }
+  // Nothing is awaited from here to the add: a delete of the file that has
+  // begun is seen here, and one that begins later sees this send.
+  if (file && gcodeFileBeingDeleted(file)) throw httpError(409, BEING_DELETED(name), "file_being_deleted");
+  let rec;
+  try { rec = deferredStore.add({ id, transferId: id, printerId: p.id, printerName: p.name, name, source, ...(bytes ? { bytes } : {}), tools, map, prefs, plate, actor: actor || null, send }); }
+  catch (e) { if (bytes) deferredStore.deleteBytes(id); throw e; }
+  try { auditLog.log({ category: "job", event: "deferred-send-accepted", ...(actor || { userId: null, userLabel: null }), printerId: p.id, printerName: p.name, detail: { file: name, transferId: tidOf(rec), source: kind } }); } catch {}
+  setImmediate(() => { pumpDeferred().catch(e => console.log("[deferred] send failed to start:", e.message)); });
+  return rec;
+}
+
+// A send to a printer that has queued ones waiting goes after them: the queue
+// does not claim it meanwhile (C4). Sends needing attention do not hold it up.
+const deferredWaiting = printerId => deferredStore.list({ printerId, states: ["queued"] }).some(r => deferredEligible(r));
+
+// Starts the first queued send of each free printer. One pass at a time; the
+// claim (record → uploading, saved, and the job registered) happens with
+// nothing awaited after the last check.
+let deferredPumping = false;
+async function pumpDeferred() {
+  if (deferredPumping) return;
+  deferredPumping = true;
   try {
-    // A Library Variant is only sent while it is still that content.
-    if (pl.send && pl.send.library && pl.send.library.sha256) {
-      const h = await queueStore.computeFileHash(pl.file, { force: true });
-      if (h.sha256 !== pl.send.library.sha256) throw new Error(`"${pl.name}" changed since it was sent from the Library; it was not uploaded. Send it again from the model page.`);
+    // A store that could not save stops new sends until it can again: a
+    // restart must never find a state it does not know.
+    if (deferredStore.status().degraded && !deferredStore.retrySave().ok) return;
+    retryUnsavedDeferred();
+    transferResults.setLimits(transferResultLimitsFromConfig(CFG));
+    syncDeferredResults();
+    // Per printer, the oldest send that can go now (deferredEligible).
+    const first = new Map();
+    for (const r of deferredStore.list({ states: ["queued"] })) if (!first.has(r.printerId) && deferredEligible(r)) first.set(r.printerId, r);
+    for (const [printerId, rec] of first) {
+      const p = printerById(printerId);
+      if (!p) continue;                                   // removed: kept, needs attention
+      if (transferBusy(p)) continue;
+      if (!(await isPrinterIdle(p))) continue;
+      const head = deferredStore.list({ printerId, states: ["queued"] }).find(r => deferredEligible(r));
+      if (!head || head.id !== rec.id || transferBusy(p)) continue;
+      const t = deferredStore.transition(rec.id, ["queued"], { state: "uploading", attempt: { id: "att_" + Date.now().toString(36), startedAt: Date.now() } });
+      if (!t.ok) continue;
+      const job = { phase: "verify", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now(), printerId: p.id, file: rec.name, deferredId: rec.id, timeouts: uploadTimeoutsFromConfig(CFG), startsPrint: false };
+      JOBS.set(newJobId(), job);
+      try { auditLog.log({ category: "job", event: "deferred-send-started", printerId: p.id, printerName: p.name, detail: { file: rec.name, transferId: tidOf(rec) } }); } catch {}
+      runDeferredSend(p, t.record, job).catch(e => console.log(`[deferred] ${p.name}: ${e.message}`));
     }
-    // This path fires when a previously-busy printer looks idle enough to
-    // receive the deferred file. "Looks idle" is a sampled observation, so
-    // re-check against the running job immediately before writing.
-    await assertNotActiveJobFile(p, pl.name);
-    await whileUploading(() => c.uploadFile(p, pl.file, pl.name, { sent: 0, total: 0 }));
-    // Only ever set when this came from the Upload-button queue (not the
-    // --load CLI hook, which has no color-mapping concept) — apply the same
-    // head mapping an immediate upload would have gotten, now that the
-    // printer that was busy is finally idle enough to receive it.
-    if (c.applyHeadMapping && ((pl.tools && pl.tools.length) || printerHasAnyDefaultPref(p) || wantsAnyPref(pl.prefs))) await c.applyHeadMapping(p, pl.tools || [], pl.map, pl.prefs, { file: pl.name, plate: pl.plate });
-    const sent = await netfs.stat(pl.file).then(s => s.size).catch(() => null);
-    queuedFile.set(idx, { name: pl.name, status: "ready", ts: Date.now(), plate: pl.plate == null ? null : pl.plate, send: pl.send || null, size: sent });
-    saveQueuedFiles();
-    // pl.actor is attached by whichever caller queued this (a web request's
-    // actorFromReq(req), or userLabel:"CLI" for the --load/--snapcon hook) —
-    // by the time a busy printer finally goes idle and this runs, the
-    // original HTTP request is long gone, so the actor has to travel with
-    // the payload rather than being read from req here.
-    auditLog.log({ category: "job", event: "file-uploaded", ...(pl.actor || { userId: null, userLabel: null }), printerId: p.id, printerName: p.name, detail: { file: pl.name } });
-  } catch (e) {
-    queuedFile.set(idx, { name: pl.name, status: "error", error: e.message, ts: Date.now() });
-    saveQueuedFiles();
-  } finally {
-    // Remote --snapcon pushes materialize into NOTIFY_TMP_DIR (see
-    // /api/notify-load) — that copy is only ever needed for this one upload.
-    if (pl.cleanup) { try { fs.unlinkSync(pl.file); } catch {} }
+  } finally { deferredPumping = false; }
+}
+
+// ---- Transfer results (§37 P4) ----
+// A send's final state, once saved in deferredStore, is written to
+// transferResults — the outcome --wait and GET /api/transfers/:id answer
+// with, kept after the send itself is gone. Written only from that saved
+// state, never from a file name. Order on completion (owner, P4 item 2):
+// completed saved → result saved → Loaded entry → the record removed. The
+// record is the only durable completion until its result is saved, so it is
+// never removed before; a result that could not be saved is written again on
+// the next pass (syncDeferredResults), and at startup — never another upload.
+function resultEntryFor(r) {
+  const base = { id: tidOf(r), parentId: r.parentTransferId || null, printerId: r.printerId, at: r.updatedAt || Date.now() };
+  if (r.state === "completed") {
+    const c = r.completion || {};
+    // A basis a connector may report beyond these is left out, never fatal (R1).
+    return START_OK_VERIFICATIONS.has(c.verification) ? { ...base, state: c.verification, basis: ["content", "size", "name"].includes(c.basis) ? c.basis : null, at: c.at || base.at } : null;
+  }
+  if (r.state === "failed") return { ...base, state: "failed", code: r.code || null, message: r.error || null };
+  if (r.state === "cancelled") return { ...base, state: "cancelled", outcome: r.outcome || null, message: r.error || null };
+  // A send brought back from a backup is not an outcome: nothing is written
+  // for it (backup recovery never makes a result).
+  if (r.state === "attention" && r.reason !== "restored-from-backup") return { ...base, state: "unknown", reason: r.reason || null, code: r.code || null, message: r.error || null };
+  return null;
+}
+// Its result is saved (or it has none to save).
+function deferredResultSettled(r) {
+  const e = resultEntryFor(r);
+  if (!e) return true;
+  const cur = transferResults.get(e.id);
+  return !!cur && !(r.state === "completed" && cur.state === "unknown");
+}
+const RESULT_SAVE_WARNED = new Set();
+// After a result could not be saved, the pass waits this long before trying
+// again: a disk refusing every write (EACCES retried synchronously) must not
+// hold the event loop every 5 s (P4 backend review R2).
+const RESULTS_RETRY_MS = 60 * 1000;
+let RESULTS_RETRY_AT = 0;
+// A completion is read-back evidence (P2), so it may settle an "unknown" of
+// the same attempt — audited as such.
+function noteDeferredResult(r) {
+  const e = resultEntryFor(r);
+  if (!e) return { ok: true };
+  let out;
+  try { out = transferResults.record(e, { reconcile: r.state === "completed" }); }
+  catch (err) { out = { ok: false, reason: "invalid", error: err }; }
+  if (!out.ok) RESULTS_RETRY_AT = Date.now() + RESULTS_RETRY_MS;
+  if (!out.ok) {
+    if (!RESULT_SAVE_WARNED.has(r.id)) { RESULT_SAVE_WARNED.add(r.id); console.log(`[transfers] the result of "${r.name}" could not be saved (${out.error ? out.error.message : "?"}); its send is kept and it is saved again on the next pass`); }
+    return out;
+  }
+  RESULT_SAVE_WARNED.delete(r.id);
+  if (out.reconciled) {
+    try { auditLog.log({ category: "job", event: "transfer-result-reconciled", printerId: r.printerId, printerName: r.printerName || null, detail: { file: r.name, transferId: e.id, from: out.from, to: e.state, basis: e.basis } }); } catch {}
+  }
+  return out;
+}
+// Each pass and at startup: results not yet saved are saved, and completed
+// sends finished (Loaded entry, then the record once its result is saved).
+function syncDeferredResults({ force = false } = {}) {
+  let writing = force || Date.now() >= RESULTS_RETRY_AT;
+  for (const r of deferredStore.list({ states: ["completed", "failed", "cancelled", "attention"] })) {
+    try {
+      if (writing && !deferredResultSettled(r) && !noteDeferredResult(r).ok) writing = false;   // one failure ends this pass's writes
+      if (r.state === "completed") applyDeferredCompleted(r);
+    } catch (e) { console.log(`[transfers] "${r.name}": ${e.message}`); }
   }
 }
-// Runs independent of any open browser tab — this is what lets a queued file
-// eventually upload even if nobody ever loads the page.
-const PENDING_RETRY_MS = 5000;
-setInterval(async () => {
-  for (const [idx, pl] of [...pendingLoad]) {
-    const p = PRINTERS[idx];
-    if (!p) { pendingLoad.delete(idx); continue; }
-    // A deferred file on a share that is down stays deferred rather than
-    // failing; the upload itself still fails cleanly if the share drops mid-way.
-    if (netfs.availability(pl.file).status !== "online") continue;
-    if (await isPrinterIdle(p)) {
-      pendingLoad.delete(idx);
-      uploadNotifiedFile(idx, pl);
-    }
+// A send brought back by a backup restore may be out of date (owner, P4):
+//   - its own attempt already has a final result (delivered, failed,
+//     cancelled) → it is finished;
+//   - a later attempt of it (Send again, linked by parentTransferId) was
+//     delivered → it is finished, and must never go again.
+// Either way it can only be dismissed. { state, later } or null. A send not
+// restored has no later attempts (Send again moves its own transfer id on),
+// so this changes nothing for it.
+function deferredFinished(r) {
+  if (!["attention", "failed", "cancelled"].includes(r.state)) return null;
+  const restored = r.reason === "restored-from-backup" || !!r.restoredFromBackup;
+  const delivered = transferResults.laterAttempts(tidOf(r)).find(e => e.state === "verified" || e.state === "acknowledged");
+  if (delivered) return { state: delivered.state, later: true };
+  const own = transferResults.get(tidOf(r));
+  return own && own.state !== "unknown" && (restored || r.state === "attention") ? { state: own.state, later: false } : null;
+}
+
+// Ends an attempt: only from "uploading", so a restart's reconciliation or a
+// person's action that moved it on is never overwritten. An ending that could
+// not be saved (the disk refused) is kept and saved on the next pass, so it is
+// neither lost for the rest of the run nor redone (P3 review); a restart
+// before then reconciles the attempt as interrupted.
+const DEFERRED_UNSAVED = new Map();   // id → { from, patch }
+function endDeferred(rec, patch) {
+  const t = deferredStore.transition(rec.id, ["uploading"], patch);
+  if (!t.ok) {
+    console.log(`[deferred] "${rec.name}": could not record ${patch.state} (${t.reason})`);
+    if (t.reason === "persist") DEFERRED_UNSAVED.set(rec.id, { from: ["uploading"], patch });
+  } else noteDeferredResult(t.record);
+  return t;
+}
+function retryUnsavedDeferred() {
+  for (const [id, u] of [...DEFERRED_UNSAVED]) {
+    const t = deferredStore.transition(id, u.from, u.patch);
+    if (t.ok) { DEFERRED_UNSAVED.delete(id); noteDeferredResult(t.record); if (t.record.state === "completed") applyDeferredCompleted(t.record); }
+    else if (t.reason !== "persist") DEFERRED_UNSAVED.delete(id);   // moved on, or gone
   }
-}, PENDING_RETRY_MS).unref();
+}
+// Reached the printer and checked: saved as completed first, then its result,
+// then the Loaded entry, then the record (and its bytes) go — the record only
+// once the result is saved. A crash between any two steps is finished at
+// startup (syncDeferredResults) — never another upload.
+function completeDeferred(rec, from, { verification, size }) {
+  const patch = { state: "completed", completion: { verification: verification.result, basis: verification.basis || null, verifiedAt: verification.at, size, at: Date.now() } };
+  const t = deferredStore.transition(rec.id, from, patch);
+  if (!t.ok) { if (t.reason === "persist") DEFERRED_UNSAVED.set(rec.id, { from, patch }); return t; }
+  noteDeferredResult(t.record);
+  applyDeferredCompleted(t.record);
+  return t;
+}
+// Completions whose Loaded entry this run has written: written once, while
+// the record waits for its result to be saved.
+const DEFERRED_LOADED = new Set();
+function applyDeferredCompleted(r) {
+  const p = printerById(r.printerId);
+  if (!p) return;                                         // kept until its printer is back
+  if (!r.loadedApplied && !DEFERRED_LOADED.has(r.id)) {
+    DEFERRED_LOADED.add(r.id);
+    // Finished at startup after a crash: a Loaded file staged after this send
+    // completed is the newer one and is left as it is (P3 review).
+    const cur = queuedFile.get(p.id);
+    const doneAt = (r.completion && r.completion.at) || r.updatedAt || 0;
+    if (!(cur && cur.status === "ready" && cur.ts > doneAt && cur.name !== r.name)) {
+      const size = r.completion && r.completion.size != null ? r.completion.size : r.source.size;
+      queuedFile.set(p.id, { name: r.name, status: "ready", ts: Date.now(), plate: r.plate == null ? null : r.plate, send: r.send || null, size, sizeOf: "file", ...stagedChoices(r.map, r.prefs, p),
+        ...(r.completion && START_OK_VERIFICATIONS.has(r.completion.verification) ? { verification: r.completion.verification, verifiedAt: r.completion.verifiedAt } : {}) });
+      saveQueuedFiles();
+    }
+    // Waiting for its result: saved as Loaded already, so a restart does not
+    // Load it again and a new send of the name is not refused (backend B1).
+    if (!deferredResultSettled(r)) deferredStore.transition(r.id, ["completed"], { loadedApplied: true });
+  }
+  // The record is the only durable completion until its result is saved.
+  if (!deferredResultSettled(r)) return;
+  const rm = deferredStore.remove(r.id, ["completed"]);
+  if (rm.ok) { DEFERRED_LOADED.delete(r.id); if (r.bytes) deferredStore.deleteBytes(r.id); }
+}
+
+async function runDeferredSend(p, rec, job) {
+  const c = getConnector(p.connector);
+  const actor = rec.actor || { userId: null, userLabel: null };
+  const src = sourcePathOf(rec);
+  // Nothing has been sent yet: a cancel now calls the whole send off.
+  job.cancelUpload = () => { job.cancelRequested = true; job.cancelUpload = null; };
+  try {
+    // The source is still exactly what was asked for (owner safeguard 5).
+    let ident;
+    try { ident = await sourceIdentity(src); }
+    catch (e) {
+      // A share that is down says nothing about the file: the send goes back
+      // in line, as an offline printer never drops one (P3 test review F4).
+      // netfs's codes for "could not ask now" (netfs/NetFs.js), not "not there".
+      if (e && ["NAS_UNREACHABLE", "ETIMEDOUT", "NETFS_BUSY", "NETFS_STOPPED", "WORKER_EXITED"].includes(e.code)) {
+        throw Object.assign(new Error(`The folder ${rec.name} is in does not answer; it waits until it does.`), { code: "DEFERRED_SOURCE_UNREACHABLE", outcome: "failed", requeue: true });
+      }
+      // The code only: the fs message names the full path, and this text is kept
+      // with the transfer's result (P4 security review).
+      if (e && e.code === "SOURCE_CHANGED_WHILE_READ") throw Object.assign(new Error("It was changing while SnapCon checked it; nothing was sent. To send the new version, send the file again from SnapCon."), { code: "DEFERRED_SOURCE_CHANGED", outcome: "failed" });
+      throw Object.assign(new Error(`It is no longer where it was when the send was asked for (${(e && e.code) || "unreadable"}); nothing was sent.`), { code: "DEFERRED_SOURCE_MISSING", outcome: "failed" });
+    }
+    if (ident.sha256 !== rec.source.sha256 || ident.size !== rec.source.size) {
+      throw Object.assign(new Error("It changed after the send was asked for; nothing was sent. To send the new version, send the file again from SnapCon."), { code: "DEFERRED_SOURCE_CHANGED", outcome: "failed" });
+    }
+    // "Looks idle" was a sampled observation: re-check against the running job.
+    await assertNotActiveJobFile(p, rec.name);
+    // Replacing a file the printer already has, when that is switched off:
+    // refused, as for any other send (owner, 2026-10-29).
+    const plan = await decideUpload(p, rec.name);
+    // It has the file: refused. It could not say (its list unreadable for
+    // now): nothing sent, and the send waits and asks again later.
+    if (plan.action === "refuse" && !plan.present) throw Object.assign(new Error(plan.reason), { code: "DEFERRED_PRINTER_UNCHECKED", outcome: "failed", requeue: true, waitingFor: "printer" });
+    if (plan.action === "refuse") throw Object.assign(new Error(plan.reason + " Nothing was sent."), { code: "PRINTER_HAS_FILE", outcome: "failed" });
+    // Still nothing sent: a cancel up to here calls the send off; from here
+    // the connector's own Cancel takes over (P1).
+    if (job.cancelRequested) throw Object.assign(new Error("Cancelled before anything was sent."), { code: "UPLOAD_CANCELLED", outcome: "failed" });
+    job.cancelUpload = null;
+    job.phase = "upload";
+    job.localStat = ident.id;
+    await whileUploading(() => c.uploadFile(p, src, rec.name, job));
+    job.outcome = "sent";
+    if (job.cancelRequested) throw cancelledAfterSending(job, p);
+    await verifyOnPrinter(p, c, rec.name, src, job);
+    // Nothing but the file goes to the printer (TODO §38): this runs unattended,
+    // as soon as a print ends. The map and options wait for the Print.
+    completeDeferred(rec, ["uploading"], { verification: job.verification, size: ident.size });
+    job.result = { printer: p.name, started: false, verification: job.verification.result };
+    job.phase = "done";
+    try { auditLog.log({ category: "job", event: "file-uploaded", ...actor, printerId: p.id, printerName: p.name, detail: { file: rec.name, deferred: true, transferId: tidOf(rec), verification: job.verification.result } }); } catch {}
+  } catch (e) {
+    if (job.phase === "upload" || job.phase === "verifying") noteUploadFailure(job, e);
+    job.errorCode = (e && e.code) || null; job.failedPhase = job.phase; job.error = e.message; job.phase = "error";
+    const cancelled = (e && e.code === "UPLOAD_CANCELLED") || job.cancelRequested;
+    if (cancelled) job.cancelled = true;
+    // Nothing was sent and the source may come back: back in line, unchanged.
+    if (!cancelled && e && e.requeue) {
+      const patch = { state: "queued", attempt: null, waitingFor: e.waitingFor || "source", notBefore: Date.now() + DEFERRED_SOURCE_RETRY_MS };
+      const t = deferredStore.transition(rec.id, ["uploading"], patch);
+      if (!t.ok && t.reason === "persist") DEFERRED_UNSAVED.set(rec.id, { from: ["uploading"], patch });
+      try { auditLog.log({ category: "job", event: e.waitingFor === "printer" ? "deferred-send-printer-unchecked" : "deferred-send-source-unreachable", printerId: p.id, printerName: p.name, detail: { file: rec.name, transferId: tidOf(rec) } }); } catch {}
+      return;
+    }
+    const unknown = !cancelled && (job.outcome === "unknown" || (e && e.outcome === "unknown"));
+    const state = cancelled ? "cancelled" : unknown ? "attention" : "failed";
+    endDeferred(rec, { state, error: e.message, code: job.errorCode, ...(unknown ? { reason: "unknown-after-upload", errorReason: job.errorReason || null } : {}), ...(cancelled ? { outcome: job.outcome || "not-sent" } : {}) });
+    try { auditLog.log({ category: "job", event: cancelled ? "deferred-send-cancelled" : unknown ? "upload-unconfirmed" : "upload-failed", ...actor, printerId: p.id, printerName: p.name, detail: { file: rec.name, deferred: true, transferId: tidOf(rec), ...(job.errorCode ? { code: job.errorCode } : {}) } }); } catch {}
+  } finally {
+    job.done = true; job.cancelUpload = null;
+  }
+}
+
+// Reading the printer back for a send whose attempt was interrupted, or that
+// needs attention (§37 P3, owner decisions 1 and D): only a copy proven
+// complete — content verified, or the exact size listed — completes it.
+// Anything else needs a person; a printer that cannot be asked leaves it as it
+// was. Nothing is uploaded, overwritten, deleted or started.
+const DEFERRED_ATTENTION_REASON = { absent: "interrupted-not-on-printer", mismatch: "interrupted-different-on-printer", acknowledged: "interrupted-listed-by-name" };
+async function reconcileDeferredOne(p, rec, from) {
+  const c = getConnector(p.connector);
+  // What the file on this computer is now (A4 review B1): the very content
+  // asked for (compared by content), gone (the printer's copy by size alone,
+  // as P3 intends for a slicer's removed temporary file — but never for a
+  // send whose own upload saw the file change), changed (proves nothing: it
+  // needs a person), or not readable now (left as it was).
+  let localPath = null, localId = null, source = "same";
+  try {
+    const ident = await sourceIdentity(sourcePathOf(rec));
+    if (ident.sha256 === rec.source.sha256) { localPath = sourcePathOf(rec); localId = ident.id; } else source = "changed";
+  } catch (e) {
+    source = e && ["ENOENT", "ENOTDIR"].includes(e.code) ? "missing" : e && e.code === "SOURCE_CHANGED_WHILE_READ" ? "changed" : "unreadable";
+  }
+  if (source === "changed") {
+    const t = deferredStore.transition(rec.id, from, { state: "attention", reason: "source-changed", evidence: `${rec.name} on this computer is not the version this send was asked for` });
+    if (t.ok) noteDeferredResult(t.record);
+    return { state: t.ok ? "attention" : (t.state || rec.state), evidence: "the file changed on this computer" };
+  }
+  if (source === "unreadable" || (source === "missing" && rec.errorReason === "local-changed")) return { state: rec.state, evidence: source === "unreadable" ? "the file on this computer could not be read" : "the file changed on this computer during its send and is gone; only its content could prove the copy" };
+  let v;
+  if (!c.verifyUpload) v = { result: "unverifiable", evidence: "this printer type cannot read files back" };
+  else {
+    try { v = await c.verifyUpload(p, rec.name, localPath, { attempts: 1, localSize: rec.source.size }); }
+    catch (e) { v = { result: "unverifiable", evidence: e.message }; }
+  }
+  // Compared against a file that changed meanwhile: that comparison proves
+  // nothing (§37 A4); the send is left as it was.
+  if (localPath && !sameSource(localId, await sourceIdentityNow(localPath))) v = { result: "unverifiable", evidence: `${rec.name} changed on this computer while the printer's copy was compared` };
+  const complete = v.result === "verified" || (v.result === "acknowledged" && v.basis === "size") || (v.result === "acknowledged" && v.basis === "content");
+  if (complete) {
+    const t = completeDeferred(rec, from, { verification: { result: v.result, basis: v.basis || null, at: Date.now() }, size: rec.source.size });
+    return { state: t.ok ? "completed" : (t.state || rec.state), evidence: v.evidence || null };
+  }
+  if (v.result === "unverifiable") return { state: rec.state, evidence: v.evidence || null };
+  const reason = DEFERRED_ATTENTION_REASON[v.result] || "interrupted-unknown";
+  const t = deferredStore.transition(rec.id, from, { state: "attention", reason, evidence: v.evidence ? String(v.evidence).slice(0, 300) : null });
+  if (t.ok) noteDeferredResult(t.record);
+  return { state: t.ok ? "attention" : (t.state || rec.state), evidence: v.evidence || null };
+}
+const deferredCheckedAt = new Map();
+let deferredReconciling = false;
+async function reconcileDeferred(now = Date.now()) {
+  if (deferredReconciling) return;
+  deferredReconciling = true;
+  try {
+    for (const rec of deferredStore.list({ states: ["interrupted"] })) {
+      const p = printerById(rec.printerId);
+      if (!p || transferBusy(p)) continue;
+      if (now - (deferredCheckedAt.get(rec.id) || 0) < DEFERRED_RECONCILE_MS) continue;
+      let st; try { st = await probeCached(p); } catch { st = null; }
+      if (!st || !st.online) continue;                    // offline: left as it was
+      deferredCheckedAt.set(rec.id, Date.now());
+      const out = await reconcileDeferredOne(p, rec, ["interrupted"]);
+      try { auditLog.log({ category: "job", event: "deferred-send-reconciled", printerId: p.id, printerName: p.name, detail: { file: rec.name, transferId: tidOf(rec), state: out.state } }); } catch {}
+    }
+  } finally { deferredReconciling = false; }
+}
+
+// At startup: an attempt still "uploading" was interrupted (owner safeguard
+// 1: an outcome to reconcile, not proof of a partial file); a completed one
+// whose Loaded entry may not have been written is finished; leftover bytes
+// are removed only after a clean load.
+function deferredStartup() {
+  for (const rec of deferredStore.list({ states: ["uploading"] })) {
+    const t = deferredStore.transition(rec.id, ["uploading"], { state: "interrupted", interruptedAt: Date.now() });
+    try { auditLog.log({ category: "job", event: "deferred-send-interrupted", printerId: rec.printerId, printerName: rec.printerName || null, detail: { file: rec.name, transferId: tidOf(rec), saved: t.ok } }); } catch {}
+  }
+  syncDeferredResults({ force: true });
+  const c = deferredStore.cleanupOrphans();
+  if (c.skipped) console.log(`[deferred] stored files kept: the send list was ${c.skipped}`);
+  if (c.setAside && c.setAside.length) {
+    console.log(`[deferred] ${c.setAside.length} stored file(s) no send refers to were set aside (kept until an admin deletes them)`);
+    try { auditLog.log({ category: "system", event: "deferred-files-set-aside", detail: { files: c.setAside } }); } catch {}
+  }
+  const st = deferredStore.status();
+  if (st.loadStatus !== "ok" && st.loadStatus !== "missing" || st.hold || st.dropped) {
+    try { auditLog.log({ category: "system", event: "deferred-sends-restored", detail: { loadStatus: st.loadStatus, hold: st.hold ? st.hold.reason : null, readOnly: st.readOnly, dropped: st.dropped, quarantined: st.quarantined.map(f => path.basename(f)) } }); } catch {}
+  }
+}
+setInterval(() => {
+  pumpDeferred().catch(e => console.log("[deferred] send pass failed:", e.message));
+  reconcileDeferred().catch(e => console.log("[deferred] reconcile pass failed:", e.message));
+}, DEFERRED_PUMP_MS).unref();
 
 function printerById(id) { return PRINTERS.find(p => p.id === id); }
 // The executable bed-clear payload (real URL/headers/body/secrets — see
@@ -2627,25 +3872,33 @@ async function relocateQueuedFile(item) {
     try {
       const ref = await resolveFileRef(null, c.rootId, c.rel, { system: true });
       if (!ref || !(await fileExists(ref.fp))) continue;
+      const idBefore = await sourceIdentityNow(ref.fp);
       const h = await queueStore.computeFileHash(ref.fp, { force: true });
-      if (h.sha256 !== item.file.sha256) continue;
+      const idAfter = await sourceIdentityNow(ref.fp);
+      if (h.sha256 !== item.file.sha256 || !sameSource(idBefore, idAfter)) continue;
       console.log(`[queue] "${item.file.name}" moved: dispatching the identical file at ${c.rootId}:${c.rel}`);
-      return { fp: ref.fp, root: ref.root, rel: relOf(ref) };
+      // id: what the upload's read-back compares against (§37 A4).
+      return { fp: ref.fp, root: ref.root, rel: relOf(ref), id: idBefore };
     } catch { /* unreachable or unreadable: try the next copy */ }
   }
   return null;
 }
 
+// Whether the queue still owns this dispatch. Clear takes the item off, and
+// then what the dispatch was about to do is not started or recorded (§28).
+// A read, not a transition.
+function queueStillDispatching(printerId, itemId) {
+  const s = queueStore.getPrinterState(printerId);
+  return s.queueState === "dispatching" && !!s.currentItem && s.currentItem.id === itemId;
+}
+
 async function attemptQueueDispatch(printerId) {
   const p = PRINTERS.find(pr => pr.id === printerId);
   if (!p || !p.printerPoolId) return;
-  // Interlock with the OLD single-slot mechanism (round-3 issue #7): a
-  // printer the legacy pendingLoad/queuedFile flow still owns must finish
-  // resolving under that flow first — both mechanisms racing to claim the
-  // same printer the instant it goes idle is exactly the overlap the
-  // interlock exists to prevent.
-  const idx = PRINTERS.indexOf(p);
-  if (pendingLoad.has(idx)) return;
+  // Interlock with the sends waiting for this printer (round-3 issue #7, §37
+  // P3 C4): they were asked for first and go first; the queue does not claim
+  // the printer while any is queued. One needing attention does not hold it.
+  if (deferredWaiting(p.id)) return;
   if (!(await isPrinterIdle(p))) return;
   // While the folder the next item is in is known to be unreachable nothing
   // is claimed: the items wait in order and dispatch resumes on the first
@@ -2670,109 +3923,202 @@ async function attemptQueueDispatch(printerId) {
   if (next && nextDir && !(await locationAnswers(nextDir))) { noteRootDown(nextRoot); return; }
 
   if (next) ROOT_DOWN.delete(nextRoot);
+  // Checked again here, with nothing awaited before the claim: a manual send
+  // or start registered while the checks above waited keeps the printer, and
+  // a later sweep tries again (§28).
+  if (deferredWaiting(p.id) || otherSendInFlight(p)) return;
   const claim = queueStore.claimNextForDispatch(printerId);
   if (!claim.claimed) return;
   const item = claim.item;
-  const c = getConnector(p.connector);
-  const rel = (item.file.sub ? item.file.sub + "/" : "") + item.file.name;
-  let ref = null, fp = null, relocated = null;
-  try { ref = await resolveFileRef(null, item.file.root, rel, { system: true }); fp = ref && ref.fp; }
-  catch (e) {
-    if (e && (e.code === "NAS_UNREACHABLE" || (e instanceof LibraryError && e.status === 503))) {
-      queueStore.applyObserved(printerId, QueueEngine.onDispatchDeferred, item.id);
-      return;
-    }
-    if (!(e instanceof LibraryError)) throw e;
-    // The location was removed or switched off: like a missing file, the
-    // item waits for a person (the same attention state, with the reason).
-    queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-missing", message: e.message + " (" + item.file.name + ")" });
-    return;
-  }
-
-  // Mandatory pre-dispatch file-identity check (design doc Part B/D6,
-  // round-3 issue #4, round-4 issue #7) — forced, uncached hash, since this
-  // IS the moment identity is being decided, not the routine case the cache
-  // exists for.
-  let verified = false;
+  // In JOBS from the claim to the end (§28): its upload is on the fleet row
+  // like any other (activeUploadFor), /api/print-cancel can stop it, and
+  // manual sends see the printer as taken (queueDispatchJob).
+  const job = { phase: "verify", sent: 0, total: 0, done: false, error: null, result: null, ts: Date.now(), printerId: p.id, file: item.file.name, queueItemId: item.id, timeouts: uploadTimeoutsFromConfig(CFG), startsPrint: true };
+  JOBS.set(newJobId(), job);
   try {
-    if (!fp || !(await fileExists(fp))) {
-      // A Library location that does not answer at all is offline, not a
-      // missing file (§12, M7): the item goes back to the front and waits,
-      // and the Library checks the location now. Once it is known offline
-      // nothing is claimed until it answers again.
-      if (!(await locationAnswers(nextDir))) {
-        console.log(`[queue] ${p.name}: "${item.file.name}" not dispatched — its folder does not answer; it stays first in the queue`);
-        noteRootDown(nextRoot);
+    const c = getConnector(p.connector);
+    const rel = (item.file.sub ? item.file.sub + "/" : "") + item.file.name;
+    let ref = null, fp = null, relocated = null;
+    try { ref = await resolveFileRef(null, item.file.root, rel, { system: true }); fp = ref && ref.fp; }
+    catch (e) {
+      if (e && (e.code === "NAS_UNREACHABLE" || (e instanceof LibraryError && e.status === 503))) {
         queueStore.applyObserved(printerId, QueueEngine.onDispatchDeferred, item.id);
         return;
       }
-      // Moved (§12, M7): the same content, verified now by its full hash, at
-      // another place the Library knows. Dispatched from there and recorded
-      // as such; anything else waits for a person.
-      relocated = await relocateQueuedFile(item);
-      if (relocated) { fp = relocated.fp; verified = true; }
-      else queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-missing", message: "File no longer exists: " + item.file.name });
-    } else {
-      const hash = await queueStore.computeFileHash(fp, { force: true });
-      if (hash.sha256 !== item.file.sha256) {
-        queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "changed", { code: "file-changed", message: "File content changed since it was queued: " + item.file.name });
-      } else {
-        verified = true;
-      }
-    }
-  } catch (e) {
-    // Unreachable storage says nothing about the file: nothing has been sent
-    // yet, so the item goes back to the front of the queue unverified.
-    if (e && e.code === "NAS_UNREACHABLE") {
-      console.log(`[queue] ${p.name}: "${item.file.name}" not dispatched — the G-code folder is unreachable; it stays first in the queue`);
-      queueStore.applyObserved(printerId, QueueEngine.onDispatchDeferred, item.id);
+      if (!(e instanceof LibraryError)) throw e;
+      // The location was removed or switched off: like a missing file, the
+      // item waits for a person (the same attention state, with the reason).
+      queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-missing", message: e.message + " (" + item.file.name + ")" });
       return;
     }
-    queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-check-error", message: e.message });
-  }
-  if (!verified) return;
 
-  const name = item.file.name;
-  try {
-    // The queue reaches the same printers as the card and needs the same
-    // protection: dispatch decides a printer is idle from a sampled probe, and
-    // a job can start between that decision and this write.
-    await assertNotActiveJobFile(p, name);
-    // alreadyUploaded is the queue's own "this one is staged" flag; the
-    // comparison answers the same question for a file that got there any other
-    // way, including a previous run of this very job.
-    if (!item.alreadyUploaded) {
-      const plan = await decideUpload(p, name, fp);
-      // A refusal is a real failure for a queued job — it cannot print what it
-      // is not allowed to place — so it goes down the same path as any other
-      // dispatch error rather than silently starting the wrong file.
-      if (plan.action === "refuse") throw new Error(plan.reason);
-      if (plan.action !== "skip") await whileUploading(() => c.uploadFile(p, fp, name, { sent: 0, total: 0 }));
-    }
-    const tools = Object.keys(item.map || {}).map(Number).sort((a, b) => a - b);
-    await withStartSequence(p, async () => {
-      if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(item.prefs))) {
-        await c.applyHeadMapping(p, tools, item.map, item.prefs);
+    // Mandatory pre-dispatch file-identity check (design doc Part B/D6,
+    // round-3 issue #4, round-4 issue #7) — forced, uncached hash, since this
+    // IS the moment identity is being decided, not the routine case the cache
+    // exists for.
+    let verified = false;
+    // The identity the content hash below was taken with (A4 review R1): the
+    // read-back later compares against it, so an edit between the hash and the
+    // upload is caught too.
+    let hashedId = null;
+    try {
+      if (!fp || !(await fileExists(fp))) {
+        // A Library location that does not answer at all is offline, not a
+        // missing file (§12, M7): the item goes back to the front and waits,
+        // and the Library checks the location now. Once it is known offline
+        // nothing is claimed until it answers again.
+        if (!(await locationAnswers(nextDir))) {
+          console.log(`[queue] ${p.name}: "${item.file.name}" not dispatched — its folder does not answer; it stays first in the queue`);
+          noteRootDown(nextRoot);
+          queueStore.applyObserved(printerId, QueueEngine.onDispatchDeferred, item.id);
+          return;
+        }
+        // Moved (§12, M7): the same content, verified now by its full hash, at
+        // another place the Library knows. Dispatched from there and recorded
+        // as such; anything else waits for a person.
+        relocated = await relocateQueuedFile(item);
+        if (relocated) { fp = relocated.fp; verified = true; hashedId = relocated.id; }
+        else queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-missing", message: "File no longer exists: " + item.file.name });
+      } else {
+        const idBefore = await sourceIdentityNow(fp);
+        const hash = await queueStore.computeFileHash(fp, { force: true });
+        const idAfter = await sourceIdentityNow(fp);
+        if (sameSource(idBefore, idAfter)) hashedId = idBefore;
+        if (hash.sha256 !== item.file.sha256 || (idBefore && idAfter && !sameSource(idBefore, idAfter))) {
+          queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "changed", { code: "file-changed", message: "File content changed since it was queued: " + item.file.name });
+        } else {
+          verified = true;
+        }
       }
-      await c.startPrintFile(p, name);
-    });
-    queueStore.applyObserved(printerId, QueueEngine.onDispatchSuccess, item.id);
-    // Same dedup convention /api/print already uses — notifyTick's own
-    // newJob detection would otherwise double-log this print's start.
-    ROUTE_STARTED_PRINT.add(p.url);
-    const auditRef = auditLog.log({ category: "job", event: "queue-print-started", printerId: p.id, printerName: p.name,
-      detail: { file: name, retryOf: item.retryOfItemId || undefined, ...(item.library ? { library: libraryAudit(item.library) } : {}), ...(relocated ? { relocated: { from: item.file.root || GCODE_ROOT, to: relocated.root } } : {}) } });
-    // Print history (M7): the queued Variant, or the queue's verified hash.
-    library.recordPrintStart({
-      jobKey: "queue:" + item.id, printerId: p.id, printerName: p.name, remoteName: name, source: item.library ? "library" : "queue", via: "queue",
-      queueItemId: item.id, user: item.queuedBy || null, startedAt: Date.now(), auditRef, sha256: item.file.sha256,
-      location: relocated ? relocated.root + ":" + relocated.rel : (item.file.root || GCODE_ROOT) + ":" + rel,
-      library: item.library ? { contentKey: item.library.contentKey, plate: item.library.plate, model: item.library.model, variantKey: item.library.variantKey, sha256: item.file.sha256 } : null,
-    });
-  } catch (e) {
-    queueStore.applyObserved(printerId, QueueEngine.onDispatchFailure, item.id, { code: "dispatch-error", message: e.message });
-    auditLog.log({ category: "job", event: "queue-dispatch-failed", printerId: p.id, printerName: p.name, detail: { file: name, error: e.message } });
+    } catch (e) {
+      // Unreachable storage says nothing about the file: nothing has been sent
+      // yet, so the item goes back to the front of the queue unverified.
+      if (e && e.code === "NAS_UNREACHABLE") {
+        console.log(`[queue] ${p.name}: "${item.file.name}" not dispatched — the G-code folder is unreachable; it stays first in the queue`);
+        queueStore.applyObserved(printerId, QueueEngine.onDispatchDeferred, item.id);
+        return;
+      }
+      queueStore.applyObserved(printerId, QueueEngine.onFileVerificationFailed, item.id, "missing", { code: "file-check-error", message: e.message });
+    }
+    if (!verified) return;
+    // Cleared while the file was being checked: nothing is sent (§28).
+    if (!queueStillDispatching(printerId, item.id)) return;
+
+    const name = item.file.name;
+    try {
+      // The queue reaches the same printers as the card and needs the same
+      // protection: dispatch decides a printer is idle from a sampled probe, and
+      // a job can start between that decision and this write.
+      await assertNotActiveJobFile(p, name);
+      // alreadyUploaded is the queue's own "this one is staged" flag; any
+      // other item is always sent (no sampled comparison proves a copy is
+      // the same).
+      if (!item.alreadyUploaded) {
+        const plan = await decideUpload(p, name);
+        // A refusal is a real failure for a queued job — it cannot print what it
+        // is not allowed to place — so it goes down the same path as any other
+        // dispatch error rather than silently starting the wrong file.
+        if (plan.action === "refuse") throw new Error(plan.reason);
+        // Cleared while the printer was asked: nothing is sent (§28).
+        if (!queueStillDispatching(printerId, item.id)) { console.log(`[queue] ${p.name}: "${name}" was taken off the queue before it was sent; not sending it`); return; }
+        {   // the upload
+          job.phase = "upload";
+          job.localStat = hashedId || await sourceIdentityNow(fp);
+          await whileUploading(() => c.uploadFile(p, fp, name, job));
+          job.outcome = "sent";
+          // Cancelled from the strip while the printer was confirming: it has
+          // the file and confirmed it, and the item is not started (§37 P1).
+          if (job.cancelRequested) throw cancelledAfterSending(job, p);
+        }
+      }
+      // Whatever put the file there — this upload, or an earlier one
+      // (alreadyUploaded) — the copy a start would use is read back first
+      // (§37 P2). Unknown or Failed: the item waits for a person, never started.
+      await verifyOnPrinter(p, c, name, fp, job, { earlier: !!item.alreadyUploaded });
+      // Cleared while the file went out, or while the mapping below ran:
+      // nothing is printing yet, so the start is not sent (§28).
+      if (!queueStillDispatching(printerId, item.id)) { console.log(`[queue] ${p.name}: "${name}" was taken off the queue before it started; not starting it`); return; }
+      const tools = Object.keys(item.map || {}).map(Number).sort((a, b) => a - b);
+      let cleared = false;
+      await withStartSequence(p, async () => {
+        if (c.applyHeadMapping && (tools.length || printerHasAnyDefaultPref(p) || wantsAnyPref(item.prefs))) {
+          job.phase = "mapping";
+          await c.applyHeadMapping(p, tools, item.map, item.prefs);
+        }
+        if (!queueStillDispatching(printerId, item.id)) { cleared = true; return; }
+        // From here Clear cancels the print, as it always did.
+        job.phase = "starting";
+        await c.startPrintFile(p, name, { prefs: item.prefs });
+      });
+      if (cleared) { console.log(`[queue] ${p.name}: "${name}" was taken off the queue before it started; not starting it`); return; }
+      // Cleared once the start had been sent: Clear cancelled the print and
+      // its result stands; nothing is recorded as started.
+      if (!queueStillDispatching(printerId, item.id)) return;
+      queueStore.applyObserved(printerId, QueueEngine.onDispatchSuccess, item.id);
+      // Same dedup convention /api/print already uses — notifyTick's own
+      // newJob detection would otherwise double-log this print's start.
+      ROUTE_STARTED_PRINT.add(p.url);
+      const auditRef = auditLog.log({ category: "job", event: "queue-print-started", printerId: p.id, printerName: p.name,
+        detail: { file: name, retryOf: item.retryOfItemId || undefined, ...(item.library ? { library: libraryAudit(item.library) } : {}), ...(relocated ? { relocated: { from: item.file.root || GCODE_ROOT, to: relocated.root } } : {}) } });
+      // Print history (M7): the queued Variant, or the queue's verified hash.
+      library.recordPrintStart({
+        jobKey: "queue:" + item.id, printerId: p.id, printerName: p.name, remoteName: name, source: item.library ? "library" : "queue", via: "queue",
+        queueItemId: item.id, user: item.queuedBy || null, startedAt: Date.now(), auditRef, sha256: item.file.sha256,
+        location: relocated ? relocated.root + ":" + relocated.rel : (item.file.root || GCODE_ROOT) + ":" + rel,
+        library: item.library ? { contentKey: item.library.contentKey, plate: item.library.plate, model: item.library.model, variantKey: item.library.variantKey, sha256: item.file.sha256 } : null,
+      });
+    } catch (e) {
+      if (job.phase === "upload" || job.phase === "verifying") noteUploadFailure(job, e);
+      job.error = e.message; job.phase = "error";
+      // Cleared meanwhile (Clear stops the upload itself): not the queue's to record.
+      if (!queueStillDispatching(printerId, item.id)) return;
+      // The item waits for a person, with Retry, Skip and Stop like any
+      // dispatch failure — never started, never retried by itself, whatever
+      // became of the transfer (§37 P1). Who cancelled is what
+      // /api/print-cancel noted on the job.
+      const error = queueDispatchError(e, job, name);
+      queueStore.applyObserved(printerId, QueueEngine.onDispatchFailure, item.id, error);
+      auditLog.log({ category: "job", event: "queue-dispatch-failed", printerId: p.id, printerName: p.name, detail: { file: name, error: error.message, ...(error.uploadOutcome ? { uploadOutcome: error.uploadOutcome } : {}) } });
+    }
+  } finally {
+    job.done = true; job.cancelUpload = null;
+    if (job.phase !== "error") job.phase = "done";
   }
+}
+
+// A failed dispatch as the queue records it (attentionDetail). The code and
+// the extra fields let the page say it in the reader's language; the message
+// is the English fallback. uploadOutcome is set when the transfer itself was
+// not a plain failure: "sent" (the printer has the file and confirmed it) or
+// "unknown" (it may have it). Either way nothing was started (§37 P1).
+const UPLOAD_UNCONFIRMED_WHY = {
+  timeout: s => `it did not answer within ${s} s`,
+  "connection-lost": () => "the connection was lost before it answered",
+  "unreadable-reply": () => "its answer could not be read",
+  "not-on-printer": () => "it is not in the printer's file list",
+  "verify-unreadable": () => "its copy on the printer could not be checked",
+  "gone-from-printer": () => "it was uploaded earlier and is no longer in the printer's file list",
+  "local-changed": () => "the file changed on this computer while it was being sent",
+  "local-unreadable": () => "the file on this computer could not be checked again after it was sent",
+};
+function queueDispatchError(e, job, name) {
+  const by = job.cancelledBy ? " by " + job.cancelledBy : "";
+  const extra = { file: name, ...(job.cancelledBy ? { by: job.cancelledBy } : {}), ...(job.errorReason ? { reason: job.errorReason } : {}), ...(job.errorSeconds ? { seconds: job.errorSeconds } : {}), ...(job.printerPrompt ? { printerPrompt: true } : {}) };
+  if (job.cancelRequested && job.outcome === "sent") {
+    return { code: "upload-cancelled", message: `Cancelled${by} after ${name} reached the printer, which confirmed it; it was not started.`, uploadOutcome: "sent", ...extra };
+  }
+  if (job.cancelRequested && job.outcome === "unknown") {
+    return { code: "upload-cancelled", message: `Cancelled${by} while the printer was confirming ${name}. SnapCon could not tell whether the printer received it; it was not started.`, uploadOutcome: "unknown", ...extra };
+  }
+  if (e && e.code === "UPLOAD_CANCELLED") return { code: "upload-cancelled", message: `Upload cancelled${by} before it finished: ${name}`, ...extra };
+  if (e && e.code === "UPLOAD_UNCONFIRMED") {
+    const why = (UPLOAD_UNCONFIRMED_WHY[job.errorReason] || UPLOAD_UNCONFIRMED_WHY["connection-lost"])(job.errorSeconds || "");
+    return { code: "upload-unconfirmed", message: `${name} was sent, but the printer did not confirm it: ${why}. SnapCon cannot tell whether the printer has the file; it was not started.`, uploadOutcome: "unknown", ...extra };
+  }
+  if (e && e.code === "UPLOAD_MISMATCH") return { code: "upload-mismatch", message: `${name} was sent, but the file the printer holds under that name is not the one sent; it was not started.`, ...extra };
+  if (e && e.code === "UPLOAD_STALLED") return { code: "upload-stalled", message: `${e.message}: ${name} was not sent completely.`, ...extra };
+  if (e && e.code === "UPLOAD_CONNECT_TIMEOUT") return { code: "upload-connect-timeout", message: `${e.message}: ${name} was not sent.`, ...extra };
+  return { code: "dispatch-error", message: e.message };
 }
 
 // Idle-sweep: the only OTHER trigger for a claim besides an explicit
@@ -2830,8 +4176,9 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // leaked to a user who can't see it.
     if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
     const conn = getConnector(p.connector);
-    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)), lastSeenAt: lastSeenIso(p) });
+    return res.json({ id: i, url: p.url, brand: p.brand || "SnapMaker", virtual: isVirtualType(p.connector), tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, powerDrawW: Number(p.costKwh) > 0 ? Number(p.costKwh) : null, ...(await probeForDisplay(p)), lastSeenAt: lastSeenIso(p) });
   }
+  FLEET_PROBE.prune(new Set(PRINTERS.map(fleetProbeKeyOf)));   // forget printers removed from config (§48)
   const out = await Promise.all(PRINTERS.map(async (p, i) => {
     if (!printerVisibleTo(req.user, p)) return null;
     const conn = getConnector(p.connector);
@@ -2844,19 +4191,25 @@ app.get("/api/fleet", requireAuth, async (req, res) => {
     // the connector can say (FlashForge's stock API vs Moonraker after a
     // firmware mod). Synchronous and I/O-free by the same contract
     // getCapabilities has; null for every connector that speaks only one.
-    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, ...(await probeCached(p)), lastSeenAt: lastSeenIso(p) };
+    const row = { id: i, url: p.url, brand: p.brand || "SnapMaker", virtual: isVirtualType(p.connector), tags: p.tags || [], capabilities: getCapabilities(p.connector, p), ...printerFamilyFields(p, conn, getCapabilities(p.connector, p)), transport: conn.getTransport ? conn.getTransport(p) : null, ...webrtcCameraFields(p, conn), colorPalette: conn.colorPalette, filamentMaterials: conn.filamentMaterials, autoLevel: !!p.autoLevel, flowCalibrate: !!p.flowCalibrate, timelapse: !!p.timelapse, forceDefaults: p.forceDefaults !== false, powerDrawW: Number(p.costKwh) > 0 ? Number(p.costKwh) : null, ...(await probeForDisplay(p)), lastSeenAt: lastSeenIso(p) };
     const up = activeUploadFor(p.id);
     if (up) row.upload = up;
-    const qf = queuedFile.get(i);
-    const pl = pendingLoad.get(i);
+    const qf = queuedFile.get(p.id);
+    // Sends waiting for this printer (§37 P3), in order.
+    const waiting = deferredStore.list({ printerId: p.id });
+    const pl = waiting.find(r => r.state === "queued");
     // queuedFile (uploading/ready/error) reflects the retry sweep actually
-    // acting on this printer; pendingLoad is the earlier "still waiting for
+    // acting on this printer; a queued deferred send is the earlier "still waiting for
     // it to go idle" state — surface that too, as the same field with its
     // own status, or the client has no way to tell "already queued" from
     // "hasn't been queued yet" while the printer stays busy, and would just
     // keep re-showing the queue prompt on every poll.
-    if (qf) row.queuedFile = { name: qf.name, status: qf.status, ts: qf.ts, ...(qf.error ? { error: qf.error } : {}), ...(qf.plate != null ? { plate: qf.plate } : {}) };
-    else if (pl) row.queuedFile = { name: pl.name, status: "queued", ts: pl.ts };
+    // A Loaded file found gone or changed is no longer "ready" to the page:
+    // no Loaded badge, no Print, its own banner (§37 P5).
+    if (qf) row.queuedFile = { name: qf.name, status: stagedRowStatus(qf), ts: qf.ts, ...(qf.prefs ? { prefs: qf.prefs } : {}), ...(qf.error ? { error: qf.error } : {}), ...(qf.outcome ? { outcome: qf.outcome } : {}), ...(qf.reason ? { reason: qf.reason } : {}), ...(qf.plate != null ? { plate: qf.plate } : {}),
+      ...(qf.check ? { check: { state: qf.check.state, at: qf.check.at, basis: qf.check.basis } } : {}), ...(qf.verification ? { verification: qf.verification, verifiedAt: qf.verifiedAt || null } : {}) };
+    else if (pl) row.queuedFile = { name: pl.name, status: "queued", ts: pl.createdAt };
+    if (waiting.length) row.pendingSends = waiting.map(deferredRow);
     // Lightweight enough for every fleet-card poll — the full queue (files,
     // history, dispatch snapshots) is only ever fetched on demand via
     // GET /api/queue/:printerId, not repeated here on every 2s tick.
@@ -2908,7 +4261,17 @@ function isLoopback(req) {
   return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 }
 
-app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
+// A push larger than a kept file may be is refused from its declared size,
+// before express.raw reads the whole body into memory (P3 review).
+function refuseOversizePush(req, res, next) {
+  const len = Number(req.headers["content-length"]);
+  const max = deferredLimitsFromConfig(CFG).maxFileBytes || DEFERRED_LIMITS.maxFileBytes;
+  if (req.is("application/octet-stream") && Number.isFinite(len) && len > max) {
+    return res.status(413).json({ error: `The file is ${Math.ceil(len / 1048576)} MB; files sent through SnapCon's command-line hook can be at most ${Math.floor(max / 1048576)} MB.`, code: "DEFERRED_FILE_TOO_LARGE" });
+  }
+  next();
+}
+app.post("/api/notify-load", refuseOversizePush, rawGcodeBody, withGcodeHolds(async (req, res) => {
   // A remote --snapcon CLI call arrives as raw gcode bytes (application/octet-
   // stream) instead of a JSON {file} path reference, since it can't assume
   // this server can read a path off the CLI's own machine. It's gated the
@@ -2932,18 +4295,14 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
       const why = fileTypeRefusal(getCapabilities(p.connector, p), name, p.name);
       if (why) return res.status(400).json({ error: why });
     }
-    fs.mkdirSync(NOTIFY_TMP_DIR, { recursive: true });
-    const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const tmpFile = path.join(NOTIFY_TMP_DIR, "push-" + Date.now() + "-" + Math.random().toString(16).slice(2) + "-" + safeName);
-    fs.writeFileSync(tmpFile, req.body);
-
-    const actor = actorFromReq(req);
-    if (!(await isPrinterIdle(p))) {
-      pendingLoad.set(idx, { file: tmpFile, name, ts: Date.now(), cleanup: true, actor });
-      return res.json({ ok: true, mode: "pending", printer: p.name });
-    }
-    uploadNotifiedFile(idx, { file: tmpFile, name, cleanup: true, actor });
-    return res.json({ ok: true, mode: "queued", printer: p.name });
+    // Kept durably (data/deferred-files/<id>, then its record) before the
+    // answer, and sent as soon as the printer is free (§37 P3). "queued" still
+    // means it goes now, "pending" that it waits for the printer.
+    const idle = (await isPrinterIdle(p)) && !transferBusy(p);
+    let rec;
+    try { rec = await acceptDeferredSend(p, { name, kind: "push", buffer: req.body, actor: actorFromReq(req) }); }
+    catch (e) { return res.status(e.status || 500).json({ error: e.message, ...(e.code ? { code: e.code } : {}) }); }
+    return res.json({ ok: true, mode: idle ? "queued" : "pending", printer: p.name, transferId: tidOf(rec) });
   }
 
   // isLoopback() is defense-in-depth only, not the real boundary — see its
@@ -2959,6 +4318,8 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
   if (!printer) return res.status(400).json({ error: "printer required" });
   if (outputname && /["\r\n/\\]/.test(outputname)) return res.status(400).json({ error: "Bad output name" });
   const absFile = path.resolve(file);
+  // Held before anything reads it (holdGcodeFile): the file may be in the G-code folder.
+  if (!holdGcodeFile(req, absFile)) return res.status(409).json({ error: BEING_DELETED(path.basename(absFile)), code: "file_being_deleted" });
   // The slicer's output path can be a share too, so this goes through netfs.
   try { if (!(await netfs.stat(absFile)).isFile) return res.status(404).json({ error: "File not found: " + absFile }); }
   catch (e) {
@@ -2979,14 +4340,12 @@ app.post("/api/notify-load", rawGcodeBody, async (req, res) => {
   // Same-machine CLI call (--load, no --snapcon) — no browser session exists
   // to attribute this to, so it's labeled as coming from the CLI itself.
   const actor = { userId: null, userLabel: "CLI" };
-  if (!(await isPrinterIdle(p))) {
-    pendingLoad.set(idx, { file: absFile, name, ts: Date.now(), actor });
-    return res.json({ ok: true, mode: "pending", printer: p.name });
-  }
-
-  uploadNotifiedFile(idx, { file: absFile, name, actor });
-  res.json({ ok: true, mode: "queued", printer: p.name });
-});
+  const idle = (await isPrinterIdle(p)) && !transferBusy(p);
+  let rec;
+  try { rec = await acceptDeferredSend(p, { name, kind: "cli-path", file: absFile, actor }); }
+  catch (e) { return res.status(e.status || 500).json({ error: e.message, ...(e.code ? { code: e.code } : {}) }); }
+  res.json({ ok: true, mode: idle ? "queued" : "pending", printer: p.name, transferId: tidOf(rec) });
+}));
 
 // ---- Camera snapshot: delegated entirely to the connector — cooldown/idle-
 // stop timer state (if any) lives inside it, not here. See
@@ -3011,58 +4370,13 @@ function checkSnapshot(p, shot) {
   return { contentType: type, buffer };
 }
 
-// Server-side throttle for the fleet Camera View's automatic polling: that
-// grid re-requests every printer's snapshot on every metadata poll tick
-// (the fast, user-configured fleet refresh interval — deliberately NOT
-// slowed down for this, so temps/progress/status keep updating promptly),
-// independent of how often the actual camera frame should change. Without
-// this, that would hit real camera hardware (RPC + wait on Snapmaker, a
-// fresh MJPEG connection on FlashForge) far more often than intended.
-// Cache TTL follows CFG.cameraViewRefreshInterval (Settings tab) — the knob
-// the user actually sees controls real request frequency, regardless of how
-// often the client happens to ask. ?fresh=1 (the single-printer snapshot
-// modal's open/Refresh — an explicit user action) always bypasses this and
-// re-primes the cache with the new frame.
-const snapshotCache = new Map(); // printer index -> { ts, contentType, buffer }
-const snapshotInflight = new Map(); // printer index -> in-flight Promise, so concurrent requests within one TTL window share one real fetch
-async function getSnapshotThrottled(p, idx) {
-  const ttlMs = (CFG.cameraViewRefreshInterval || 6) * 1000;
-  const cached = snapshotCache.get(idx);
-  if (cached && Date.now() - cached.ts < ttlMs) return cached;
-  if (snapshotInflight.has(idx)) return snapshotInflight.get(idx);
-  const pending = (async () => {
-    try {
-      const { contentType, buffer } = await getSnapshot(p);
-      const entry = { ts: Date.now(), contentType, buffer };
-      snapshotCache.set(idx, entry);
-      return entry;
-    } finally {
-      snapshotInflight.delete(idx);
-    }
-  })();
-  snapshotInflight.set(idx, pending);
-  return pending;
-}
-
-app.get("/api/snapshot", requireAuth, async (req, res) => {
-  const idx = parseInt(req.query.printer, 10);
-  const p   = PRINTERS[idx];
-  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
-  try {
-    let contentType, buffer;
-    if (req.query.fresh) {
-      ({ contentType, buffer } = await getSnapshot(p));
-      snapshotCache.set(idx, { ts: Date.now(), contentType, buffer });
-    } else {
-      ({ contentType, buffer } = await getSnapshotThrottled(p, idx));
-    }
-    res.set("Content-Type", contentType);
-    res.set("Cache-Control", "no-store");
-    res.send(buffer);
-  } catch (e) {
-    res.status(502).json({ error: "No camera frame: " + e.message });
-  }
-});
+// ---- Camera snapshot route: GET /api/snapshot, its throttle and its cache
+// live in routes/snapshot.js. Required and registered here, at the route's
+// original position, so start-up order is unchanged
+// (docs/refactoring-policy.md). getSnapshot and checkSnapshot above stay
+// here: notifications use them too. ----
+const { registerSnapshotRoutes } = require("./routes/snapshot");
+registerSnapshotRoutes(app, { requireAuth, getConfig: () => CFG, getPrinters: () => PRINTERS, printerVisibleTo, getSnapshot });
 
 // ---- Live camera: relay one printer's video to a browser ----
 // For cameras SnapCon has to connect to itself rather than let the browser do
@@ -3213,324 +4527,18 @@ app.post("/api/bedtemp", requireRegular, async (req, res) => {
   }
 });
 
-// ---- Firmware inventory (same Moonraker APIs fluidd reads) ----
-// Full firmware detail is only pulled from printers that aren't moving:
-// standby / complete / cancelled. Busy or offline machines are listed as
-// skipped with the reason. probeCached already has an up-to-date probe();
-// no reason for the connector to probe a second time.
+// ---- Firmware inventory: GET /api/firmware and its helpers live in
+// routes/firmwareInventory.js. Required and registered here, at the route's
+// original position, so start-up order is unchanged
+// (docs/refactoring-policy.md). Firmware deployment stays in this file. ----
+const { registerFirmwareInventoryRoutes } = require("./routes/firmwareInventory");
+registerFirmwareInventoryRoutes(app, { requireAuth, getPrinters: () => PRINTERS, printerVisibleTo, getConnector, getCapabilities, probeCached });
 
-// Which printers the Firmware tab lists at all. firmwareDeploy is the
-// capability meaning "SnapCon can actually flash this machine", which is what
-// the tab exists to do, and it is U1-only today. Gated on the capability
-// rather than a connector name so the brand check stays out of shared code
-// (section 3) and a future flashable connector needs no change here.
-function firmwareTabEligible(p) {
-  return getCapabilities(p.connector, p).firmwareDeploy === true;
-}
-
-// One unreachable printer must cost one row, not the whole inventory
-// (section 6). This is a real ceiling that was learned the hard way: an
-// offline FlashForge ran mode detection that never returned AND never
-// rejected, and the route's Promise.all meant the Firmware tab never rendered
-// at all.
-const FW_PROBE_TIMEOUT_MS = 20000;
-
-// Always resolves to a row. Never throws, never outruns its timeout.
-async function probeFirmware(p, timeoutMs) {
-  const ms = typeof timeoutMs === "number" ? timeoutMs : FW_PROBE_TIMEOUT_MS;
-  const c = getConnector(p.connector);
-  // Gate on the DECLARED capability, not on the method existing. FlashForge
-  // exports getFirmwareInfo while declaring firmwareInfo:false in its native
-  // mode (deliberate defence in depth on its side) — calling it there runs
-  // transport detection against the printer, which is precisely what hung.
-  if (!getCapabilities(p.connector, p).firmwareInfo || !c.getFirmwareInfo) {
-    return { name: p.name, online: true, skipped: true, reason: "not supported", reasonCode: "not_supported" };
-  }
-
-  let st;
-  try { st = await probeCached(p); }
-  catch (e) { return { name: p.name, online: false, skipped: true, reason: e.message || "offline", reasonCode: "offline", detail: e.message || "" }; }
-
-  // Answered here rather than left to each connector, so an unreachable
-  // printer costs no connector call at all. Shape matches what
-  // http-utils.queryFirmwareInfo returns for the same case, detail included —
-  // the UI renders status_offline_detail from it.
-  if (st && st.online === false) {
-    return { name: p.name, online: false, skipped: true, reason: st.error || "offline", reasonCode: "offline", detail: st.error || "" };
-  }
-
-  let timer;
-  try {
-    return await Promise.race([
-      Promise.resolve(c.getFirmwareInfo(p, st)),
-      new Promise(resolve => {
-        timer = setTimeout(() => resolve({
-          name: p.name, online: true, skipped: true,
-          reason: "did not answer within " + Math.round(ms / 1000) + "s",
-          reasonCode: "timeout",
-        }), ms);
-      }),
-    ]);
-  } catch (e) {
-    return { name: p.name, online: true, skipped: true, reason: e.message || "read failed", reasonCode: "error", detail: e.message || "" };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-app.get("/api/firmware", requireAuth, async (req, res) => {
-  // ?printer=<index> reads ONE printer, the same shape /api/fleet?printer=i
-  // uses. The Firmware tab calls it after a deploy finishes so a single row
-  // can be refreshed in place — re-reading the whole fleet would rebuild every
-  // row and throw away the selection and the progress bars on screen.
-  if (req.query.printer !== undefined) {
-    const idx = parseInt(req.query.printer, 10);
-    const p = PRINTERS[idx];
-    if (!p || !printerVisibleTo(req.user, p)) return res.status(404).json({ error: "Unknown printer" });
-    const one = await probeFirmware(p);
-    return res.json({
-      id: idx,
-      // The STABLE identity, additive to the index the rest of the tab is keyed
-      // on. Deploy sends this back so a Settings reorder between rendering this
-      // list and pressing Deploy cannot retarget the flash — see
-      // firmwareTargetFor().
-      pid: p.id,
-      connector: p.connector,
-      uniformMcuVersions: getCapabilities(p.connector, p).uniformMcuVersions === true,
-      ...one,
-    });
-  }
-  const visible = PRINTERS.map((p, i) => ({ p, i }))
-    .filter(({ p }) => printerVisibleTo(req.user, p) && firmwareTabEligible(p));
-
-  let aborted = false;
-  req.on("close", () => { aborted = true; });
-
-  // `connector` is the printer's real connector id, not something inferred
-  // from its brand or model text — the Firmware tab filters on it, and a
-  // brand string is user-editable on generic Klipper.
-  //
-  // `uniformMcuVersions` travels per row because it decides whether a board
-  // reporting a different version is a fault worth flagging or just a
-  // separate component. Sent even on skipped rows so the filter still works
-  // on a printer whose version could not be read.
-  const decorate = (p, i, r) => ({
-    id: i,
-    pid: p.id,
-    connector: p.connector,
-    uniformMcuVersions: getCapabilities(p.connector, p).uniformMcuVersions === true,
-    ...r,
-  });
-
-  // Bounded concurrency: the whole fleet at once is a burst of connections to
-  // every printer, and one slow machine no longer delays the rest regardless.
-  // Identical work whichever way the answer is delivered.
-  const gather = async (onBatch) => {
-    const rows = [];
-    const B = 6;
-    for (let i = 0; i < visible.length && !aborted; i += B) {
-      const done = await Promise.all(visible.slice(i, i + B)
-        .map(({ p, i: idx }) => probeFirmware(p).then(r => decorate(p, idx, r))));
-      done.forEach(r => rows.push(r));
-      if (onBatch) onBatch(done, rows.length);
-    }
-    return rows;
-  };
-
-  // NDJSON is OPT-IN. This endpoint answered with a JSON array for its whole
-  // life, and public/app.js is served with no cache-busting, so a browser
-  // still holding the previous copy after an upgrade calls it expecting that
-  // array. Switching the content type in place broke exactly that client with
-  // a JSON.parse error on line 2 until a hard reload — reported live. The old
-  // shape stays the default; only a client that asks gets the stream.
-  if (!req.query.stream) {
-    const rows = await gather(null);
-    return res.json(rows);
-  }
-
-  // Streamed rather than answered once at the end: reading a fleet takes as
-  // long as its slowest printer, and a single motionless "Reading firmware…"
-  // for that whole time is indistinguishable from the hang this replaced.
-  res.set("Content-Type", "application/x-ndjson");
-  res.set("Cache-Control", "no-store");
-  res.set("X-Content-Type-Options", "nosniff");
-  const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + "\n"); };
-
-  line({ total: visible.length, read: 0 });
-  const rows = await gather((done, read) => line({ total: visible.length, read, rows: done }));
-  if (!aborted) line({ done: true, total: visible.length, rows });
-  res.end();
-});
-
-// ---- Health diagnostics: single-printer, on-demand only (the Health page
-// has no auto-polling — every request here is a real "give me fresh data
-// right now", so this is deliberately uncached, same as /api/firmware
-// above; no probeCached-style wrapper exists for anything but probe()
-// itself). Sectioned response (system/mcus/heaters/storage/history/faults)
-// — see connectors/http-utils.js's queryHealth for why each section is
-// independently isolated against failure. ----
-// Critical disk threshold: <5% free OR <2GB free, whichever triggers first
-// — the only threshold defined for Phase 1 (a separate warning-level
-// threshold is left for later rather than guessed now).
-const DISK_CRITICAL_PCT = 0.05;
-const DISK_CRITICAL_BYTES = 2 * 1024 * 1024 * 1024;
-// The richer, per-printer half of the two-tier attention design (see
-// computeMaintenanceAttention above for the cheap fleet-wide half this
-// extends) — only ever computed against a health object that's already
-// been fetched for this one printer, never triggered fleet-wide. MCU
-// retransmit/invalid-byte counters are deliberately NOT a trigger here:
-// they're cumulative-since-boot with no defensible threshold or "recent
-// increase" detection built, so surfacing them as attention items would be
-// exactly the false-confidence failure mode this design avoids — they stay
-// diagnostics-only (still visible in health.mcus) until real trend-based
-// alerting exists.
-// "Commanded but not spinning" only becomes an attention signal once it's
-// been observed on two checks in a row — Health has no continuous polling
-// to time a startup-transient delay against, so persistence across separate
-// manual checks is the only signal available. First observation just
-// records itself and does not flag (covers a normal spin-up transient
-// landing on the one check that happens to sample it); only a mismatch
-// still present on a LATER check flags. A check that finds the fan fine
-// clears the record immediately, so recovery resets the count right away.
-const fanMismatchSeen = new Map(); // "printerId|fanName" -> true (mismatched last check)
-const FAN_COMMANDED_THRESHOLD = 0.1; // speed above this = "meaningfully commanded on"
-const FAN_STOPPED_RPM_THRESHOLD = 50; // rpm below this while commanded = "not spinning"
-function checkFanMismatch(p, health) {
-  const reasons = [];
-  const fans = (health.fans && health.fans.available) ? health.fans.list : [];
-  for (const f of fans) {
-    const key = p.id + "|" + f.name;
-    // rpm===null means no tachometer wired (confirmed real on this fleet) —
-    // "not measurable", never treated as "stopped".
-    const measurable = typeof f.rpm === "number";
-    const commanded = typeof f.speed === "number" && f.speed > FAN_COMMANDED_THRESHOLD;
-    const mismatched = measurable && commanded && f.rpm < FAN_STOPPED_RPM_THRESHOLD;
-    if (mismatched) {
-      if (fanMismatchSeen.get(key)) {
-        // code/name/rpm are additive — title/detail stay as the existing
-        // English prose for any consumer that isn't the (now code-aware)
-        // client renderer; the client translates from code+params instead
-        // of parsing this English sentence back apart.
-        reasons.push({ severity: "warning", title: "Fan not spinning", detail: `${f.name} is commanded on but reporting ${Math.round(f.rpm)} RPM.`, suggestedComponent: "Fans", code: "fan-not-spinning", name: f.name, rpm: Math.round(f.rpm) });
-      } else {
-        fanMismatchSeen.set(key, true);
-      }
-    } else {
-      fanMismatchSeen.delete(key);
-    }
-  }
-  return reasons;
-}
-// Heater duty is only a trustworthy signal once a reading has held near
-// target for a little while — a heater ramping up legitimately sits at
-// ~100% duty, and a head cooling down from a previous job reports a real
-// power number that has nothing to do with health (confirmed live:
-// "extruder 118° / 65° target · power 0%" is just a cooling head, not a
-// fault). Band and dwell below are starting points, same "unvalidated
-// against real degraded hardware" caveat as every other threshold on this
-// page: within 3°C of target counts as "at target," and it has to stay
-// there for 30 real (wall-clock) seconds before duty is trusted enough to
-// color-judge. A wall-clock dwell is the only way to time this at all given
-// Health's manual-refresh-only cadence — tracked per printer+heater across
-// refreshes in a session-lifetime Map (same pattern as fanMismatchSeen
-// below). Any observation that drops back out of band clears the timer, so
-// a heater has to re-earn the dwell after every overshoot/undershoot.
-// Duty-threshold coloring itself (warn/crit %) stays client-side in app.js,
-// matching how MCU/fan thresholds are applied — this function only decides
-// which of idle/heating/cooling/settling/stable a reading is in, since only
-// that classification needs cross-request memory.
-const HEATER_TARGET_BAND_C = 3;
-const HEATER_DWELL_MS = 30000;
-const heaterStableSince = new Map(); // "printerId|heaterName" -> ms timestamp first seen in-band
-function annotateHeaterStates(p, health) {
-  if (!health.heaters || !health.heaters.available) return;
-  const now = Date.now();
-  for (const h of health.heaters.list) {
-    const key = p.id + "|" + h.name;
-    if (!h.target) { h.state = "idle"; heaterStableSince.delete(key); continue; }
-    const inBand = h.temperature != null && Math.abs(h.temperature - h.target) <= HEATER_TARGET_BAND_C;
-    if (!inBand) {
-      h.state = (h.temperature != null && h.temperature < h.target) ? "heating" : "cooling";
-      heaterStableSince.delete(key);
-      continue;
-    }
-    let since = heaterStableSince.get(key);
-    if (!since) { since = now; heaterStableSince.set(key, since); }
-    h.state = (now - since >= HEATER_DWELL_MS) ? "stable" : "settling";
-  }
-}
-// "Unused" is defined entirely by the G-code sync retention setting — if
-// gcodeSyncRetentionDays isn't configured, there's no threshold to judge by,
-// so this stays undefined and the client simply doesn't show a count rather
-// than inventing a default window. Cross-references the gcodes file listing
-// (already fetched by the storage section) against print history filtered
-// to that same window — confirmed live that history's `filename` field is
-// the exact same string as the file listing's `path`, and that Moonraker's
-// own `since=` filtering keeps this cheap regardless of the printer's full
-// history depth. `fileNames` is deleted from the response afterward — the
-// client only ever needs the final count, not the raw list.
-async function annotateGcodeUnusedCount(p, health) {
-  const gcodes = health.storage && health.storage.available && health.storage.categories && health.storage.categories.gcodes;
-  if (!gcodes || !CFG.gcodeSyncRetentionDays || !Array.isArray(gcodes.fileNames)) return;
-  try {
-    const base = connHttp.baseUrl(p);
-    const sinceSec = Date.now() / 1000 - CFG.gcodeSyncRetentionDays * 86400;
-    const recent = await connHttp.queryRecentlyPrintedFiles(base, sinceSec);
-    gcodes.unusedCount = gcodes.fileNames.filter(name => !recent.has(name)).length;
-    gcodes.unusedThresholdDays = CFG.gcodeSyncRetentionDays;
-  } catch (e) {
-    // Best-effort — leave unusedCount undefined, the client just won't show it.
-  } finally {
-    delete gcodes.fileNames;
-  }
-}
-function computeHealthAttention(p, health) {
-  const reasons = computeMaintenanceAttention(p);
-  if (health.system && health.system.available && health.system.throttledState) {
-    // {bits, flags:[...]} is the real Moonraker shape (confirmed via source/
-    // docs research — it was never observed non-null live, since this
-    // fleet's U1 hardware isn't the Raspberry Pi this check is built for).
-    // A non-array flags falls through to the old generic behavior, so an
-    // unexpected shape degrades safely rather than silently saying nothing.
-    const flags = Array.isArray(health.system.throttledState.flags) ? health.system.throttledState.flags : [];
-    if (flags.includes("Under-Voltage Detected")) {
-      reasons.push({ severity: "critical", title: "Undervoltage", detail: "The printer's controller is reporting a power under-voltage condition right now.", suggestedComponent: "Power Supply", code: "undervoltage" });
-    } else {
-      reasons.push({ severity: "critical", title: "Throttled", detail: "The printer's controller is reporting a throttle condition (power or thermal) right now.", code: "throttled" });
-    }
-  }
-  if (health.storage && health.storage.available) {
-    const du = health.storage.diskUsage;
-    if (du && (du.free < du.total * DISK_CRITICAL_PCT || du.free < DISK_CRITICAL_BYTES)) {
-      reasons.push({ severity: "critical", title: "Low disk space", detail: "Uploads can fail confusingly once the disk fills — free up space soon.", code: "low-disk-space" });
-    }
-  }
-  if (health.faults && health.faults.available && health.faults.list.length) {
-    reasons.push({ severity: "warning", title: "Recent fault", detail: "The printer has reported at least one recent error — see the fault log.", code: "recent-fault" });
-  }
-  reasons.push(...checkFanMismatch(p, health));
-  return reasons;
-}
-app.get("/api/health", requireAuth, async (req, res) => {
-  const idx = parseInt(req.query.printer, 10);
-  const p = PRINTERS[idx];
-  if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: "Unknown printer" });
-  const c = getConnector(p.connector);
-  if (!c.getHealth) return res.json({ id: p.id, name: p.name, online: true, skipped: true, reason: "not supported" });
-  const st = await probeCached(p);
-  const health = await c.getHealth(p, st);
-  if (!health.skipped) annotateHeaterStates(p, health);
-  if (!health.skipped) await annotateGcodeUnusedCount(p, health);
-  const attentionReasons = health.skipped ? [] : computeHealthAttention(p, health);
-  res.json({
-    id: p.id, name: p.name, ...health,
-    ...(attentionReasons.length ? { needsAttention: true, attentionReasons } : {}),
-    // Lets the Storage card decide whether Sync logs/Sync camera can be
-    // enabled at all, without a separate /api/config round-trip.
-    syncFolders: { logs: !!CFG.logsFolder, camera: !!CFG.cameraFolder, gcodes: !!CFG.gcodeSyncFolder },
-    syncSupported: !!c.querySyncFiles
-  });
-});
+// ---- Health diagnostics: GET /api/health and its helpers live in
+// routes/health.js. Required and registered here, at the route's original
+// position, so start-up order is unchanged (docs/refactoring-policy.md). ----
+const { registerHealthRoutes } = require("./routes/health");
+registerHealthRoutes(app, { requireAuth, getConfig: () => CFG, getPrinters: () => PRINTERS, getConnector, printerVisibleTo, probeCached, computeMaintenanceAttention, connHttp });
 
 // ---- Logs/Camera/G-code sync: fire-and-forget trigger + pollable status.
 // The route returns as soon as the sync is STARTED, not when it finishes —
@@ -3823,6 +4831,11 @@ function publicCfg(role) {
     // safe behaviour rather than the fast one.
     firmwareSkipCurrent: CFG.firmwareSkipCurrent !== false,
     firmwareVerify: CFG.firmwareVerify !== false,
+    // Settings > Printers shows its Rediscover button only when this is
+    // present: a page newer than the running server (public/ is served from
+    // disk, so it updates before a restart does) must not offer a button
+    // whose routes are not there yet.
+    rediscover: true,
     gcodeSyncFolder: CFG.gcodeSyncFolder || "",
     logsRetentionDays: CFG.logsRetentionDays || null,
     cameraRetentionDays: CFG.cameraRetentionDays || null,
@@ -3843,12 +4856,12 @@ function publicCfg(role) {
     siteName: CFG.siteName || "",
     allowMapping: CFG.allowMapping !== false,
     suggestMatching: CFG.suggestMatching !== false,
-    skipIdenticalUploads: CFG.skipIdenticalUploads !== false,
     checkForUpdates: CFG.checkForUpdates !== false,
     allowUploadWhilePrinting: CFG.allowUploadWhilePrinting !== false,
     uploadIntoQueue: CFG.uploadIntoQueue === true,
     overwriteDifferentFiles: CFG.overwriteDifferentFiles !== false,
     usersEnabled: !!CFG.usersEnabled,
+    virtualPrintersEnabled: CFG.virtualPrintersEnabled === true,
     configured: PRINTERS.length > 0,
     locale: CFG.locale || "en"
   };
@@ -3930,7 +4943,9 @@ app.post("/api/restart", requireAdmin, (req, res) => {
 // Predefined printer "Connector" types — how SnapCon talks to that printer.
 // Registered in connectors/index.js; this is the single source of truth the
 // client reads (GET /api/connectors) instead of a hardcoded <option> list.
-app.get("/api/connectors", requireAuth, (req, res) => res.json(listConnectorTypes()));
+// Virtual types (Simulator, Virtual U1) are offered only while Enable virtual
+// printers is on, so they cannot be added while it is off.
+app.get("/api/connectors", requireAuth, (req, res) => res.json(listConnectorTypes().filter(c => !c.virtual || CFG.virtualPrintersEnabled === true)));
 
 // ---- Remote Access (Cloudflare Tunnel, managed) — Development Preview ----
 // Every route here is requireAdmin (matches /api/config, /api/restart, /api/
@@ -4029,7 +5044,9 @@ function resolvePrinterAddress(p) {
   // Connectors with no hardware to reach (the simulator) keep whatever
   // synthetic url they were given and get no address fields.
   if (!spec.required) return { url };
-  const ip = String(p.ip == null ? "" : p.ip).trim();
+  // A connector that always runs on one host (the Virtual U1, on this
+  // machine) takes only a port from the client.
+  const ip = spec.fixedHost || String(p.ip == null ? "" : p.ip).trim();
   const addr = isValidHost(ip)
     ? { host: ip, port: p.port, scheme: p.scheme }
     : parseAddressUrl(url);
@@ -4107,6 +5124,13 @@ async function buildPrinterRecord(p, existing) {
   // never be satisfied by a leftover or hand-edited truthy value.
   if (p.allowMoonrakerPrintStart === true) o.allowMoonrakerPrintStart = true;
   if (p.serial) o.serial = String(p.serial);
+  // A virtual printer's simulator settings (the Virtual U1's Firmware and
+  // Timing): only values the connector offers, only on that connector.
+  const virtualOptions = getConnector(o.connector).virtualOptions;
+  if (virtualOptions) {
+    if (virtualOptions.firmware.includes(p.virtualFirmware)) o.virtualFirmware = p.virtualFirmware;
+    if (virtualOptions.timing.includes(p.virtualTiming)) o.virtualTiming = p.virtualTiming;
+  }
   o.id = (existing && existing.id) || newPrinterId();
   // Printer Pool assignment is changed only via the dedicated
   // /api/printer-pool route (it also has to update QueueStore's
@@ -4231,6 +5255,16 @@ function diffConfigForAudit(before, after) {
   return changed;
 }
 
+// The printers a save must keep although the browser never saw them: the
+// virtual printers hidden while Enable virtual printers is off (see
+// activePrinters). The browser posts its whole list, so without these a save
+// would delete them. Kept as they are, after the saved ones, unless the save
+// itself carries one (it cannot: no row shows it).
+function hiddenPrinters(saved) {
+  const ids = new Set(saved.map(p => p.id));
+  return (CFG.printers || []).filter(p => !PRINTERS.includes(p) && !ids.has(p.id));
+}
+
 app.post("/api/config", requireAdmin, async (req, res) => {
   const b = req.body || {};
   if (b.usersEnabled && !USERS.some(u => u.role === "admin")) {
@@ -4267,7 +5301,7 @@ app.post("/api/config", requireAdmin, async (req, res) => {
             const existing = (p.id && PRINTERS.find(ep => ep.id === p.id)) || PRINTERS.find(ep => ep.url === String(p.url));
             return buildPrinterRecord(p, existing);
           })
-      )
+      ).then(saved => saved.concat(hiddenPrinters(saved)))
     : (CFG.printers || []);
   const next = {
     gcodeFolder: (typeof b.gcodeFolder === "string" && b.gcodeFolder.trim()) ? b.gcodeFolder.trim() : (CFG.gcodeFolder || "./gcode"),
@@ -4311,12 +5345,14 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     // value, not to false, or unchecking them would never persist.
     allowMapping: (typeof b.allowMapping === "boolean") ? b.allowMapping : (CFG.allowMapping !== false),
     suggestMatching: (typeof b.suggestMatching === "boolean") ? b.suggestMatching : (CFG.suggestMatching !== false),
-    skipIdenticalUploads: (typeof b.skipIdenticalUploads === "boolean") ? b.skipIdenticalUploads : (CFG.skipIdenticalUploads !== false),
     checkForUpdates: (typeof b.checkForUpdates === "boolean") ? b.checkForUpdates : (CFG.checkForUpdates !== false),
     allowUploadWhilePrinting: (typeof b.allowUploadWhilePrinting === "boolean") ? b.allowUploadWhilePrinting : (CFG.allowUploadWhilePrinting !== false),
     uploadIntoQueue: (typeof b.uploadIntoQueue === "boolean") ? b.uploadIntoQueue : (CFG.uploadIntoQueue === true),
     overwriteDifferentFiles: (typeof b.overwriteDifferentFiles === "boolean") ? b.overwriteDifferentFiles : (CFG.overwriteDifferentFiles !== false),
     usersEnabled: b.usersEnabled ? true : undefined,
+    // Off by default; only an explicit true is stored. Absent (an older page)
+    // keeps the current choice.
+    virtualPrintersEnabled: (typeof b.virtualPrintersEnabled === "boolean" ? b.virtualPrintersEnabled : CFG.virtualPrintersEnabled === true) || undefined,
     resend: (b.resend && typeof b.resend === "object") ? {
       apiKey: (typeof b.resend.apiKey === "string" && b.resend.apiKey.trim()) ? b.resend.apiKey.trim() : ((CFG.resend && CFG.resend.apiKey) || undefined),
       fromAddress: String(b.resend.fromAddress || "").trim()
@@ -4370,6 +5406,23 @@ app.post("/api/config", requireAdmin, async (req, res) => {
     // explicitly copied here is lost the moment this file is rewritten).
     maintenanceHistory: CFG.maintenanceHistory || undefined,
     maintenanceComponents: CFG.maintenanceComponents || undefined,
+    // Set by hand in config.json only (no Settings UI, §37 P1): carried
+    // forward for the same reason.
+    uploadTimeouts: CFG.uploadTimeouts || undefined,
+    // Also set by hand in config.json only, with no Settings field: carried
+    // forward for the same reason (docs/TODO.md §49). Without this a Settings
+    // save silently undid "utilization": { "readPrinterHistory": … } and
+    // dropped the OpenEI key (the ZIP rate lookup fell back to DEMO_KEY).
+    // test/configCarryForward.test.js fails if a key the server reads is
+    // neither a Settings field nor carried forward.
+    utilization: CFG.utilization || undefined,
+    openeiKey: CFG.openeiKey || undefined,
+    // Set only through POST /api/fleet-fast-offline (§48): carried forward,
+    // or a Settings save would silently turn a rollback (false) back on.
+    fleetFastOffline: typeof CFG.fleetFastOffline === "boolean" ? CFG.fleetFastOffline : undefined,
+    // Same: the limits for files kept for busy printers (§37 P3).
+    deferredSends: CFG.deferredSends || undefined,
+    transferResults: CFG.transferResults || undefined,
     // Groups are managed entirely through their own /api/groups CRUD routes,
     // never through this endpoint — carried forward untouched for the same
     // "full rebuild, not a merge" reason as maintenanceHistory above.
@@ -4448,7 +5501,10 @@ app.get("/api/session", (req, res) => {
 app.post("/api/session/theme", requireAuth, (req, res) => {
   if (!req.user.id) return res.status(400).json({ error: "Per-user theme requires User Access Management" });
   const theme = req.body && req.body.theme;
-  if (theme !== "light" && theme !== "dark") return res.status(400).json({ error: "theme must be \"light\" or \"dark\"" });
+  // UI-REFRESH: "awareness" (the design refresh's third theme) is accepted
+  // whether or not this browser has the preview on; the browser shows it as
+  // dark while the preview is off, without changing what is saved.
+  if (theme !== "light" && theme !== "dark" && theme !== "awareness") return res.status(400).json({ error: "theme must be \"light\", \"dark\" or \"awareness\"" });
   const u = USERS.find(x => x.id === req.user.id);
   if (!u) return res.status(404).json({ error: "User not found" });
   u.theme = theme;
@@ -4878,18 +5934,19 @@ app.delete("/api/groups/:id", requireAdmin, (req, res) => {
   // validate-then-mutate pattern the user CRUD routes above already use.
   const removedGroup = CFG.groups[idx];
   const groupsBackup = CFG.groups.slice();
-  const printerBackups = PRINTERS.map(p => p.allowedGroups);
+  const printerBackups = (CFG.printers || []).map(p => p.allowedGroups);
   const userBackups = USERS.map(u => u.groupIds);
 
   CFG.groups.splice(idx, 1);
-  removeGroupReferences(id, PRINTERS, USERS);
+  // Every printer, the hidden virtual ones too: none may keep a deleted group.
+  removeGroupReferences(id, CFG.printers || [], USERS);
 
   try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2));
     saveUsers();
   } catch (e) {
     CFG.groups = groupsBackup;
-    PRINTERS.forEach((p, i) => { p.allowedGroups = printerBackups[i]; });
+    (CFG.printers || []).forEach((p, i) => { p.allowedGroups = printerBackups[i]; });
     USERS.forEach((u, i) => { u.groupIds = userBackups[i]; });
     return res.status(500).json({ error: e.message });
   }
@@ -4921,20 +5978,41 @@ app.get("/api/queue-management/status", requireAuth, (req, res) => {
   res.json({ enabled: !!(CFG.queueManagement && CFG.queueManagement.enabled), mode: (CFG.queueManagement && CFG.queueManagement.mode) || "per-printer", store: queueStore.getGlobalStatus() });
 });
 
+// The three routes that change config.json together with the queue store
+// save it as a whole (temporary file, flush, rename, folder flush — see
+// configLoader.js replaceConfigFile) and are refused while config.json could
+// not be read at start-up. queue/poolChange.js decides what each kind of
+// failed save means; this only logs and audits it.
+const saveConfigReplacing = () => replaceConfigFile(CONFIG_PATH, JSON.stringify(CFG, null, 2));
+function reportConfigSaveProblem(req, r, what) {
+  if (r.code !== "config_save_not_durable") return;
+  console.error("[config] " + what + ": config.json was replaced but could not be confirmed as safely stored (" + ((r.cause && r.cause.code) || "error") + ")");
+  auditLog.log({ category: "admin", event: "config-save-problem", ...actorFromReq(req), detail: { action: what, code: r.code, reason: (r.cause && r.cause.code) || null } });
+}
+
 app.post("/api/queue-management/enable", requireAdmin, (req, res) => {
   if (!CFG.queueManagement || typeof CFG.queueManagement !== "object") CFG.queueManagement = { enabled: false, mode: "per-printer" };
   if (!CFG.queueManagement.enabled) {
-    CFG.queueManagement.enabled = true;
-    ensurePrinterPoolSchema(); // creates the protected Unassigned pool + persists
     // Auto-assign every currently-unmanaged printer — both systems of
     // record (config.json's printerPoolId, and QueueStore's own queueState)
-    // need updating together (design doc A3).
-    let changed = false;
-    for (const p of PRINTERS) {
-      if (!p.printerPoolId) { p.printerPoolId = PRINTER_POOL_DEFAULT_MANUAL_ID; changed = true; }
-      if (queueStore.getPrinterState(p.id).queueState === "unmanaged") queueStore.assignPool(p.id);
+    // need updating together (design doc A3). queue/poolChange.js does it in
+    // that order, checks each step, and undoes a half-done change: nothing
+    // is switched on while the queue store cannot save, and a failed
+    // config.json save is an error here, no longer swallowed.
+    const r = enableQueueManagement({
+      queueStore, printers: PRINTERS, defaultPoolId: PRINTER_POOL_DEFAULT_MANUAL_ID, configLoadFailed: CONFIG_LOAD_FAILED,
+      setEnabled: on => { CFG.queueManagement.enabled = on; if (on) ensurePrinterPoolSchema({ save: false }); },   // creates the protected Unassigned pool
+      saveConfig: saveConfigReplacing,
+    });
+    if (!r.ok) {
+      reportConfigSaveProblem(req, r, "enabling Queue Management");
+      if (r.code === "queue_enable_incomplete") {
+        console.error("[queue] enabling Queue Management was only partly undone (" + r.undoReason + "): the queue store has printers as managed that config.json does not");
+        auditLog.log({ category: "admin", event: "queue-management-enable-incomplete", ...actorFromReq(req), detail: { reason: r.undoReason } });
+      }
+      if (r.applied) auditLog.log({ category: "admin", event: "queue-management-enabled", ...actorFromReq(req), detail: { saveConfirmed: false } });
+      return res.status(r.status).json({ error: r.error, code: r.code });
     }
-    if (changed) { try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {} }
     auditLog.log({ category: "admin", event: "queue-management-enabled", ...actorFromReq(req) });
   }
   res.json({ ok: true });
@@ -4942,8 +6020,15 @@ app.post("/api/queue-management/enable", requireAdmin, (req, res) => {
 
 app.post("/api/queue-management/disable", requireAdmin, (req, res) => {
   if (!CFG.queueManagement) CFG.queueManagement = {};
-  CFG.queueManagement.enabled = false;
-  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); } catch {}
+  const r = disableQueueManagement({
+    isEnabled: () => CFG.queueManagement.enabled, setEnabled: on => { CFG.queueManagement.enabled = on; },
+    configLoadFailed: CONFIG_LOAD_FAILED, saveConfig: saveConfigReplacing,
+  });
+  if (!r.ok) {
+    reportConfigSaveProblem(req, r, "disabling Queue Management");
+    if (r.applied) auditLog.log({ category: "admin", event: "queue-management-disabled", ...actorFromReq(req), detail: { saveConfirmed: false } });
+    return res.status(r.status).json({ error: r.error, code: r.code });
+  }
   auditLog.log({ category: "admin", event: "queue-management-disabled", ...actorFromReq(req) });
   res.json({ ok: true });
 });
@@ -5026,8 +6111,7 @@ app.post("/api/printer-pool", requireAdmin, (req, res) => {
   if (qs.queue.length) return res.status(409).json({ error: "Clear this printer's queue before changing its pool", code: "queue_not_empty" });
 
   if (!printerPoolId) {
-    p.printerPoolId = undefined;
-    queueStore.unassignPool(p.id);
+    // Leaving a pool: nothing to validate (the change itself is made below).
   } else {
     const pool = (CFG.printerPools || []).find(x => x.id === printerPoolId);
     if (!pool) return res.status(400).json({ error: "Unknown printer pool", code: "unknown_pool" });
@@ -5045,11 +6129,20 @@ app.post("/api/printer-pool", requireAdmin, (req, res) => {
         code: "incompatible_file_types"
       });
     }
-    p.printerPoolId = printerPoolId;
-    queueStore.assignPool(p.id);
   }
-  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
-  catch (e) { return res.status(500).json({ error: e.message }); }
+  // Both records — the queue store, then config.json — with every answer
+  // checked and a half-done change undone (queue/poolChange.js). Refused
+  // with 503 before anything is touched while the queue store cannot save.
+  const r = changePrinterPool({ queueStore, printer: p, printerPoolId: printerPoolId || null, configLoadFailed: CONFIG_LOAD_FAILED, saveConfig: saveConfigReplacing });
+  if (!r.ok) {
+    reportConfigSaveProblem(req, r, "changing a printer's pool");
+    if (r.applied) auditLog.log({ category: "admin", event: "printer-pool-changed", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { printerPoolId: printerPoolId || null, saveConfirmed: false } });
+    if (r.code === "pool_change_incomplete") {
+      console.error("[queue] a pool change for " + p.name + " was only partly undone (" + r.undoReason + "): the queue store has it, config.json does not");
+      auditLog.log({ category: "admin", event: "printer-pool-change-incomplete", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { printerPoolId: printerPoolId || null, reason: r.undoReason } });
+    }
+    return res.status(r.status).json({ error: r.error, code: r.code });
+  }
   auditLog.log({ category: "admin", event: "printer-pool-changed", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { printerPoolId: printerPoolId || null } });
   res.json({ ok: true, printerPoolId: p.printerPoolId || null });
 });
@@ -5074,6 +6167,8 @@ async function resolveQueuedFile(req, res, f, name, sub) {
   let ref, hash, ident = null;
   try {
     ref = name ? await resolveFileRef(req.user, root, sub ? sub + "/" + name : name) : null;
+    // Held before anything reads it; the route is wrapped in withGcodeHolds.
+    if (ref && !holdGcodeFile(req, ref.fp)) { res.status(409).json({ error: BEING_DELETED(name), code: "file_being_deleted" }); return null; }
     if (!ref || !(await fileExists(ref.fp))) { res.status(400).json({ error: "File not found: " + name }); return null; }
     if (f.library) ident = await libraryPrintIdentity(ref, f.library);
     hash = await queueStore.computeFileHash(ref.fp);
@@ -5094,7 +6189,7 @@ async function resolveQueuedFile(req, res, f, name, sub) {
   return { root: ref.root, hash, ident };
 }
 
-app.post("/api/queue/:printerId/items", requireRegular, async (req, res) => {
+app.post("/api/queue/:printerId/items", requireRegular, withGcodeHolds(async (req, res) => {
   const p = printerById(req.params.printerId);
   if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
@@ -5102,6 +6197,11 @@ app.post("/api/queue/:printerId/items", requireRegular, async (req, res) => {
   const b = req.body || {};
   const files = Array.isArray(b.files) ? b.files : [];
   if (!files.length) return res.status(400).json({ error: "No files given" });
+
+  for (const f of files) {
+    const { error } = checkToolMap((f || {}).map, p);
+    if (error) return res.status(400).json({ error, code: "bad_tool_map" });
+  }
 
   const actor = actorFromReq(req);
   const items = [];
@@ -5123,13 +6223,16 @@ app.post("/api/queue/:printerId/items", requireRegular, async (req, res) => {
     }
   }
 
+  // Checked with nothing awaited before the items are stored.
+  const deleting = items.find(i => queueFileBeingDeleted(i.file));
+  if (deleting) return res.status(409).json({ error: BEING_DELETED(deleting.file.name), code: "file_being_deleted" });
   const result = queueStore.applyIntent(p.id, (state) => ({ ...state, queue: [...state.queue, ...items], updatedAt: Date.now() }));
   if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now — " + (result.reason || "unknown error"), code: "queue_save_failed", detail: result.reason || null });
   const libs = items.filter(i => i.library).map(i => libraryAudit(i.library));
   auditLog.log({ category: "job", event: "queue-item-added", ...actor, printerId: p.id, printerName: p.name, detail: { count: items.length, ...(libs.length ? { library: libs[0] } : {}) } });
   if (b.startImmediately) attemptQueueDispatch(p.id).catch(e => console.error("[queue] immediate dispatch error:", e.message));
   res.json({ ok: true, added: items.length, state: redactQueueStateForResponse(result.nextState) });
-});
+}));
 
 app.delete("/api/queue/:printerId/items/:itemId", requireRegular, (req, res) => {
   const p = printerById(req.params.printerId);
@@ -5237,6 +6340,35 @@ app.post("/api/queue/:printerId/stop", requireRegular, (req, res) => {
   res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
 
+// Queue decisions for one printer (resolve, accept-file-change, Clear) run one
+// at a time. A decision can wait on the printer (Resume probes and resumes it, the
+// file check hashes a file), and two people deciding at once used to both pass
+// their checks before either changed the queue: both could resume, or one
+// could retry an item the other had just skipped. A second decision now waits
+// its turn and is checked again against the queue as it is by then. Clear
+// waits on the printer too (it cancels the print), so it takes its turn the
+// same way (docs/TODO.md §36).
+//
+// The chain is released in a finally whatever the decision does, and a failed
+// decision doesn't fail the next one. Different printers don't wait on each
+// other. A printer that stops answering holds its own decisions only for as
+// long as the connector's own timeouts allow.
+const QUEUE_DECISIONS = new Map();   // printer id -> the decision chain's tail
+function serializeQueueDecision(printerId, fn) {
+  const prev = QUEUE_DECISIONS.get(printerId) || Promise.resolve();
+  const run = prev.then(() => fn());
+  const tail = run.catch(() => {});
+  QUEUE_DECISIONS.set(printerId, tail);
+  tail.then(() => { if (QUEUE_DECISIONS.get(printerId) === tail) QUEUE_DECISIONS.delete(printerId); });
+  return run;
+}
+// The item a decision was made about. The page names it; a decision for an
+// item the queue has since moved past (resolved, retried, replaced by the next
+// one) is refused rather than applied to whatever is waiting now.
+function sameQueueDecisionItem(state, itemId) {
+  return (state.currentItem ? state.currentItem.id : null) === (itemId == null ? null : itemId);
+}
+
 // Clear — the actual "abort everything" action Stop deliberately isn't
 // (Stop only blocks the next auto-dispatch; the current print, if any, keeps
 // running and every queued item stays queued). This cancels whatever's
@@ -5245,17 +6377,55 @@ app.post("/api/queue/:printerId/clear", requireRegular, async (req, res) => {
   const p = printerById(req.params.printerId);
   if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
-  const qs = queueStore.getPrinterState(p.id);
-  const wasPrinting = qs.queueState === "dispatching" || qs.queueState === "printing";
-  if (wasPrinting) {
-    try { await getConnector(p.connector).cancel(p); }
-    catch (e) { return res.status(502).json({ error: "Could not cancel the current print: " + e.message }); }
+  // The job the page showed (none for a queue with nothing current). A Clear
+  // sent while a Resume waits on the printer runs after it and sees the print
+  // the Resume started, so it cancels it; a second Clear finds nothing left to
+  // cancel. A Clear about a job the queue has moved past is refused before any
+  // command: it never cancels a print the person didn't see.
+  const { itemId } = req.body || {};
+  try {
+    await serializeQueueDecision(p.id, async () => {
+      const store = queueStore.getGlobalStatus();
+      if (store.queueStoreRecoveryRequired || store.storeDegraded || store.storeStoppedByAdmin) {
+        return res.status(503).json({ error: "The queue can't save changes right now", code: "queue_store_unavailable" });
+      }
+      const qs = queueStore.getPrinterState(p.id);
+      if (!sameQueueDecisionItem(qs, itemId)) {
+        return res.status(409).json({ error: "The queue has moved on since this page showed it. Refresh to see what it's doing now.", code: "stale_decision" });
+      }
+      const wasPrinting = qs.queueState === "dispatching" || qs.queueState === "printing";
+      // A dispatch that has not sent its start has nothing printing: clearing the
+      // queue is enough, since the dispatch will not start an item that is no
+      // longer the queue's, and an upload still going out is stopped below (§28).
+      // No dispatch record (after a restart) or a start already sent: cancel the
+      // print, as always.
+      // Only a job the queue has current is ever cancelled: a page that showed
+      // an idle queue names no job, and a print started since (by the queue,
+      // which makes it current, or outside it) is never cancelled by its Clear.
+      const dispatch = qs.queueState === "dispatching" ? queueDispatchJob(p.id) : null;
+      let cancelledItemId = null;
+      if (qs.currentItem && (qs.queueState === "printing" || (qs.queueState === "dispatching" && (!dispatch || dispatch.phase === "starting")))) {
+        try { await getConnector(p.connector).cancel(p); }
+        catch (e) { return res.status(502).json({ error: "Could not cancel the current print: " + e.message, code: "cancel_failed", detail: e.message }); }
+        cancelledItemId = qs.currentItem.id;
+      }
+      const removedQueuedCount = qs.queue.length;
+      // The printer's own updates keep arriving during the cancel (the print
+      // can end, failed or complete, in the meantime): cleared only while the
+      // same job is current, and its outcome is recorded once.
+      const result = queueStore.applyIntent(p.id, state => {
+        if (!sameQueueDecisionItem(state, qs.currentItem ? qs.currentItem.id : null)) throw new Error("The queue moved on while the print was being cancelled");
+        return QueueEngine.clearQueue(state, { cancelledItemId });
+      });
+      if (!result.ok && result.reason === "invalid-transition") return res.status(409).json({ error: "The print was cancelled, but the queue moved on before it could be cleared, so nothing else was removed. Check what it shows now.", code: "queue_moved_during_clear" });
+      if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
+      if (dispatch && dispatch.cancelUpload) dispatch.cancelUpload();
+      auditLog.log({ category: "job", event: "queue-cleared", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { cancelledCurrent: wasPrinting, removedQueuedCount } });
+      res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+    });
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ error: "Could not clear the queue right now", code: "clear_failed" });
   }
-  const removedQueuedCount = qs.queue.length;
-  const result = queueStore.applyIntent(p.id, QueueEngine.clearQueue);
-  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
-  auditLog.log({ category: "job", event: "queue-cleared", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { cancelledCurrent: wasPrinting, removedQueuedCount } });
-  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
 
 // Manual bed-clear confirmation — always a real, audited, server-side
@@ -5264,9 +6434,19 @@ app.post("/api/queue/:printerId/confirm-bed-clear", requireRegular, (req, res) =
   const p = printerById(req.params.printerId);
   if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
+  // The finished job the page showed. A confirmation from a page that is
+  // behind (it showed an earlier print's bed) is refused before anything is
+  // started. Checked and applied with nothing awaited between, so no other
+  // request can change the queue in between; that is also why this needs no
+  // place in the decision chain.
+  const { itemId } = req.body || {};
+  if (!sameQueueDecisionItem(queueStore.getPrinterState(p.id), itemId)) {
+    return res.status(409).json({ error: "This is about a print the queue has moved past. Refresh to see what it's waiting on now.", code: "stale_decision" });
+  }
   const actor = actorFromReq(req);
   const result = queueStore.confirmManualBedClear(p.id, actor);
-  if (!result.ok) return res.status(409).json({ error: "Could not confirm right now — " + (result.reason || "invalid state") });
+  if (!result.ok && result.reason === "invalid-transition") return res.status(409).json({ error: "This printer isn't waiting for its bed to be cleared", code: "not_awaiting_bed_clear" });
+  if (!result.ok) return res.status(503).json({ error: "Could not save the queue right now", code: "queue_save_failed" });
   const hadWork = result.nextState.queue.length > 0;
   result.auditEvent.detail.resultedInDispatch = hadWork;
   auditLog.log(result.auditEvent);
@@ -5282,23 +6462,57 @@ app.post("/api/queue/:printerId/resolve", requireRegular, async (req, res) => {
   const p = printerById(req.params.printerId);
   if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
-  const { action } = req.body || {};
+  const { action, itemId } = req.body || {};
+  try {
+    await serializeQueueDecision(p.id, async () => {
+      // Everything that can refuse is checked BEFORE any command reaches the
+      // printer, and inside the chain, so it is checked against the queue as
+      // the previous decision left it. The dry run is the engine's own rule,
+      // so the two can't disagree.
+      const store = queueStore.getGlobalStatus();
+      if (store.queueStoreRecoveryRequired || store.storeDegraded || store.storeStoppedByAdmin) {
+        return res.status(503).json({ error: "The queue can't save changes right now", code: "queue_store_unavailable" });
+      }
+      const current = queueStore.getPrinterState(p.id);
+      if (current.queueState !== "queue_attention_required") {
+        return res.status(409).json({ error: "This printer's queue isn't waiting for a decision", code: "not_in_attention" });
+      }
+      if (!sameQueueDecisionItem(current, itemId)) {
+        return res.status(409).json({ error: "This decision is about a job the queue has already moved past. Refresh to see what it's waiting on now.", code: "stale_decision" });
+      }
+      try { QueueEngine.resolveAttention(current, action); }
+      catch { return res.status(400).json({ error: "That action isn't available for this queue right now", code: "invalid_action" }); }
 
-  if (action === "resume") {
-    let probe;
-    try { probe = await getConnector(p.connector).probe(p); } catch { probe = { online: false }; }
-    if (!probe.online || probe.state !== "paused") return res.status(409).json({ error: "This printer isn't in a resumable state right now" });
-    try { await getConnector(p.connector).resume(p); }
-    catch (e) { return res.status(502).json({ error: "Resume failed: " + e.message }); }
-  }
+      if (action === "resume") {
+        let probe;
+        try { probe = await getConnector(p.connector).probe(p); } catch { probe = { online: false }; }
+        if (!probe.online || probe.state !== "paused") return res.status(409).json({ error: "This printer isn't in a resumable state right now" });
+        try { await getConnector(p.connector).resume(p); }
+        catch (e) { return res.status(502).json({ error: "Resume failed: " + e.message }); }
+      }
 
-  const result = queueStore.applyIntent(p.id, QueueEngine.resolveAttention, action);
-  if (!result.ok) return res.status(400).json({ error: result.reason === "invalid-transition" ? (result.error && result.error.message) : "Could not resolve right now" });
-  auditLog.log({ category: "job", event: "queue-attention-resolved", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail: { action } });
-  if (result.nextState.queueState === "idle" || result.nextState.queueState === "dispatching") {
-    attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-resolve dispatch error:", e.message));
+      // Applied only to the item the checks above passed for. Nothing outside
+      // this chain moves a queue out of attention, so this can't fail here
+      // today; it is the last guard should that ever change.
+      const result = queueStore.applyIntent(p.id, (state, a) => {
+        if (!sameQueueDecisionItem(state, itemId)) throw new Error("The queue moved on while this decision was made");
+        return QueueEngine.resolveAttention(state, a);
+      }, action);
+      if (!result.ok) return res.status(400).json({ error: result.reason === "invalid-transition" ? (result.error && result.error.message) : "Could not resolve right now" });
+      // A completion a person confirmed names its file and who decided. Not a
+      // print-completed event: the Library imports those as printer-reported.
+      const detail = action === "mark-completed" && current.currentItem
+        ? { action, file: current.currentItem.file && current.currentItem.file.name, completedBy: "user" }
+        : { action };
+      auditLog.log({ category: "job", event: "queue-attention-resolved", ...actorFromReq(req), printerId: p.id, printerName: p.name, detail });
+      if (result.nextState.queueState === "idle" || result.nextState.queueState === "dispatching") {
+        attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-resolve dispatch error:", e.message));
+      }
+      res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+    });
+  } catch (e) {
+    if (!res.headersSent) res.status(500).json({ error: "Could not resolve right now" });
   }
-  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
 
 // file-changed's dedicated accept path — forces a fresh, uncached hash
@@ -5308,36 +6522,48 @@ app.post("/api/queue/:printerId/accept-file-change", requireRegular, async (req,
   const p = printerById(req.params.printerId);
   if (!p) return res.status(400).json({ error: "Unknown printer", code: "unknown_printer" });
   if (!printerVisibleTo(req.user, p)) return res.status(403).json({ error: "You don't have access to this printer", code: "no_printer_access" });
-  const qs = queueStore.getPrinterState(p.id);
-  if (qs.attentionReason !== "file-changed" || !qs.currentItem) return res.status(409).json({ error: "Nothing to accept right now" });
-  const item = qs.currentItem;
-  let hash;
+  const { itemId } = req.body || {};
+  // One decision at a time per printer, like /resolve: a Skip and an accept
+  // sent together can't both act on the same item.
   try {
-    // The file where the item lives: the G-code folder, or the Library
-    // location it was queued from (M8 review: this hashed the G-code folder's
-    // path for a Library item, so it could never be accepted).
-    const ref = await resolveFileRef(req.user, item.file.root, (item.file.sub ? item.file.sub + "/" : "") + item.file.name);
-    if (!ref || !(await fileExists(ref.fp))) return res.status(400).json({ error: "File no longer exists" });
-    hash = await queueStore.computeFileHash(ref.fp, { force: true });
+    await serializeQueueDecision(p.id, async () => {
+      const qs = queueStore.getPrinterState(p.id);
+      if (qs.attentionReason !== "file-changed" || !qs.currentItem) return res.status(409).json({ error: "Nothing to accept right now" });
+      if (!sameQueueDecisionItem(qs, itemId)) {
+        return res.status(409).json({ error: "This decision is about a job the queue has already moved past. Refresh to see what it's waiting on now.", code: "stale_decision" });
+      }
+      const item = qs.currentItem;
+      let hash;
+      try {
+        // The file where the item lives: the G-code folder, or the Library
+        // location it was queued from (M8 review: this hashed the G-code folder's
+        // path for a Library item, so it could never be accepted).
+        const ref = await resolveFileRef(req.user, item.file.root, (item.file.sub ? item.file.sub + "/" : "") + item.file.name);
+        if (!ref || !(await fileExists(ref.fp))) return res.status(400).json({ error: "File no longer exists" });
+        hash = await queueStore.computeFileHash(ref.fp, { force: true });
+      } catch (e) {
+        if (replyFileRefError(res, e, item.file.root)) return;
+        return res.status(400).json({ error: e.message });
+      }
+      const actor = actorFromReq(req);
+      // The hash took a while: accept only if the item it describes is still the
+      // one waiting on this decision.
+      const result = queueStore.applyIntent(p.id, (state, args) => {
+        if (!state.currentItem || state.currentItem.id !== item.id) throw new Error("The queue changed while the file was being checked");
+        return QueueEngine.acceptFileChange(state, args);
+      }, { sizeBytes: hash.sizeBytes, sha256: hash.sha256, actor });
+      if (!result.ok) return res.status(400).json({ error: "Could not accept the file change" });
+      auditLog.log({ category: "job", event: "queue-file-change-accepted", ...actor, printerId: p.id, printerName: p.name, detail: { file: item.file.name } });
+      attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-accept dispatch error:", e.message));
+      res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
+    });
   } catch (e) {
-    if (replyFileRefError(res, e, item.file.root)) return;
-    return res.status(400).json({ error: e.message });
+    if (!res.headersSent) res.status(500).json({ error: "Could not accept the file change" });
   }
-  const actor = actorFromReq(req);
-  // The hash took a while: accept only if the item it describes is still the
-  // one waiting on this decision.
-  const result = queueStore.applyIntent(p.id, (state, args) => {
-    if (!state.currentItem || state.currentItem.id !== item.id) throw new Error("The queue changed while the file was being checked");
-    return QueueEngine.acceptFileChange(state, args);
-  }, { sizeBytes: hash.sizeBytes, sha256: hash.sha256, actor });
-  if (!result.ok) return res.status(400).json({ error: "Could not accept the file change" });
-  auditLog.log({ category: "job", event: "queue-file-change-accepted", ...actor, printerId: p.id, printerName: p.name, detail: { file: item.file.name } });
-  attemptQueueDispatch(p.id).catch(e => console.error("[queue] post-accept dispatch error:", e.message));
-  res.json({ ok: true, state: redactQueueStateForResponse(result.nextState) });
 });
 
 // ---- Bulk "Send to Queue" (file-manager multiselect → Printer Pool) ----
-app.post("/api/queue/send", requireRegular, async (req, res) => {
+app.post("/api/queue/send", requireRegular, withGcodeHolds(async (req, res) => {
   const b = req.body || {};
   const files = Array.isArray(b.files) ? b.files : [];
   const poolId = b.poolId;
@@ -5347,6 +6573,10 @@ app.post("/api/queue/send", requireRegular, async (req, res) => {
   if (!pool) return res.status(400).json({ error: "Unknown printer pool", code: "unknown_pool" });
   const targetPrinters = PRINTERS.filter(p => p.printerPoolId === poolId && printerVisibleTo(req.user, p));
   if (!targetPrinters.length) return res.status(400).json({ error: "No printers available in this pool" });
+  for (const f of files) for (const p of targetPrinters) {
+    const { error } = checkToolMap((f || {}).map, p);
+    if (error) return res.status(400).json({ error, code: "bad_tool_map" });
+  }
 
   // Validate + resolve every file BEFORE computing or writing anything —
   // one invalid file fails the whole request, never a partial distribution
@@ -5374,6 +6604,9 @@ app.post("/api/queue/send", requireRegular, async (req, res) => {
   // a separate concept (design doc A5).
   const expanded = [];
   for (const f of resolved) for (let i = 0; i < f.qty; i++) expanded.push(f);
+  // Checked with nothing awaited before the items are stored.
+  const deleting = resolved.find(f => queueFileBeingDeleted(f));
+  if (deleting) return res.status(409).json({ error: BEING_DELETED(deleting.name), code: "file_being_deleted" });
 
   const result = queueStore.applyBulkIntent((current) => {
     const updates = {};
@@ -5390,14 +6623,21 @@ app.post("/api/queue/send", requireRegular, async (req, res) => {
   auditLog.log({ category: "job", event: "queue-bulk-send", ...actor, detail: { poolId, mode, fileCount: resolved.length, totalItems: expanded.length, printerCount: targetPrinters.length, ...(libs.length ? { library: libs } : {}) } });
   if (b.startImmediately) targetPrinters.forEach(p => attemptQueueDispatch(p.id).catch(e => console.error("[queue] bulk-send dispatch error:", e.message)));
   res.json({ ok: true, printers: targetPrinters.map(p => p.id), totalItems: expanded.length });
-});
+}));
 
 // ---- Global store status/controls (round-4 issue #1/#8) ----
 app.get("/api/queue-store/status", requireAuth, (req, res) => res.json(queueStore.getGlobalStatus()));
 app.post("/api/queue-store/retry-save", requireAdmin, (req, res) => {
   const r = queueStore.retrySave();
   auditLog.log({ category: "admin", event: r.ok ? "queue-store-recovered" : "queue-store-retry-failed", ...actorFromReq(req) });
-  res.json(r);
+  if (r.ok) return res.json({ ok: true });
+  // r.error is an Error: sent as it is, it reaches the browser as an object
+  // (shown as "[object Object]") carrying the server's full path. Only its
+  // code goes out, and only if it looks like one.
+  const code = r.error && r.error.code;
+  const reason = typeof code === "string" && /^[A-Z][A-Z0-9_]{1,39}$/.test(code) ? code : "error";
+  res.json({ ok: false, code: "queue_save_retry_failed", reason,
+    error: reason === "QUEUE_RECOVERY_REQUIRED" ? "Nothing was saved: queue recovery is required first." : "The queue could not be saved (" + reason + ")." });
 });
 app.post("/api/queue-store/stop-all", requireAdmin, (req, res) => {
   queueStore.stopAll();
@@ -5411,7 +6651,10 @@ app.post("/api/queue-store/resume-all", requireAdmin, (req, res) => {
 });
 app.post("/api/queue-store/acknowledge-reset", requireAdmin, (req, res) => {
   const r = queueStore.acknowledgeReset((req.body || {}).confirm);
-  if (!r.ok) return res.status(400).json(r);
+  // A reset that began and did not finish is a server-side failure, and is
+  // audited: recovery stays required (see QueueStore.js acknowledgeReset).
+  if (!r.ok && r.code === "queue_reset_incomplete") auditLog.log({ category: "admin", event: "queue-store-reset-failed", ...actorFromReq(req) });
+  if (!r.ok) return res.status(r.code === "queue_reset_incomplete" ? 500 : 400).json(r);
   auditLog.log({ category: "admin", event: "queue-store-reset-acknowledged", ...actorFromReq(req) });
   res.json(r);
 });
@@ -5613,6 +6856,80 @@ const NOTIFY_POLL_MS = 30 * 1000;
 const NOTIFY_STATE = new Map();   // printer url -> { state, filename, progress, milestones:Set }
 const DEFAULT_MILESTONES = [25, 50, 75];
 
+// ---- A queue print the printer went idle on (docs/TODO.md §34) ----
+// The queue leaves "printing" when the printer reports complete, error or
+// cancelled (notifyTick, below). A printer that goes back to standby without
+// one of those, or never starts the item, would leave it "printing" forever.
+// Standby is not completion: after it is confirmed, the queue asks a person
+// (recovery-unknown-outcome, the reason startup reconciliation gives the same
+// case) and nothing advances, retries or resends on its own.
+//
+// Confirmed means QUEUE_IDLE_CHECKS idle readings in a row that also span
+// QUEUE_IDLE_MIN_MS, so polls that come close together cannot confirm it
+// early. A printer never seen printing since the dispatch may look idle during
+// its own start, so that case also waits QUEUE_START_GRACE_MS from the
+// dispatch. Printing, paused, busy or any other reading starts the count over,
+// and so does the printer going offline (queueIdleWatchOffline).
+const QUEUE_IDLE_CHECKS = 3;
+const QUEUE_IDLE_MIN_MS = 60 * 1000;
+const QUEUE_START_GRACE_MS = 10 * 60 * 1000;
+const QUEUE_IDLE_LIKE = new Set(["standby", "idle", "complete", "cancelled", "error"]);
+const QUEUE_IDLE_WATCH = new Map(); // printer id -> { itemId, seenPrinting, checks, firstIdleAt }
+
+// One reading. Pure: returns the next watch and a verdict, null until confirmed.
+function queueIdleWatchStep(watch, { itemId, dispatchedAt, state, now }) {
+  const w = watch && watch.itemId === itemId ? { ...watch } : { itemId, seenPrinting: false, checks: 0, firstIdleAt: null };
+  if (!QUEUE_IDLE_LIKE.has(state)) {
+    if (state === "printing" || state === "paused") w.seenPrinting = true;
+    w.checks = 0; w.firstIdleAt = null;
+    return { watch: w, verdict: null };
+  }
+  w.checks += 1;
+  if (w.firstIdleAt == null) w.firstIdleAt = now;
+  if (w.checks < QUEUE_IDLE_CHECKS || now - w.firstIdleAt < QUEUE_IDLE_MIN_MS) return { watch: w, verdict: null };
+  if (w.seenPrinting) return { watch: w, verdict: "printer-idle" };
+  const since = dispatchedAt != null ? dispatchedAt : w.firstIdleAt;
+  return { watch: w, verdict: now - since >= QUEUE_START_GRACE_MS ? "start-not-seen" : null };
+}
+
+// The printer did not answer: the idle count starts over; whether it was seen
+// printing is kept.
+function queueIdleWatchOffline(p) {
+  const w = QUEUE_IDLE_WATCH.get(p.id);
+  if (w) QUEUE_IDLE_WATCH.set(p.id, { ...w, checks: 0, firstIdleAt: null });
+}
+
+// Called by notifyTick with each online reading, after its complete/error/
+// cancelled handling, so a queue that reading already moved on is left alone.
+function watchQueuePrinting(p, st) {
+  const qs = p.printerPoolId ? queueStore.getPrinterState(p.id) : null;
+  if (!qs || qs.queueState !== "printing" || !qs.currentItem) { QUEUE_IDLE_WATCH.delete(p.id); return; }
+  const item = qs.currentItem;
+  const { watch, verdict } = queueIdleWatchStep(QUEUE_IDLE_WATCH.get(p.id), { itemId: item.id, dispatchedAt: item.dispatchedAt, state: st.state, now: Date.now() });
+  QUEUE_IDLE_WATCH.set(p.id, watch);
+  if (!verdict) return;
+  QUEUE_IDLE_WATCH.delete(p.id);
+  const name = item.file && item.file.name;
+  const message = verdict === "printer-idle"
+    ? `The printer went idle without reporting that "${name}" finished, failed or was cancelled. Check the printer before choosing what to do.`
+    : `The printer has not been seen printing "${name}" in the ${Math.round(QUEUE_START_GRACE_MS / 60000)} minutes since it was sent. Check the printer before choosing what to do.`;
+  queueStore.applyObserved(p.id, QueueEngine.onPrinterIdleWhilePrinting, item.id, { code: verdict, message });
+  auditLog.log({ category: "job", event: "queue-outcome-unknown", printerId: p.id, printerName: p.name, detail: { file: name, reason: verdict, printerState: st.state } });
+}
+
+// Energy for one print (docs/TODO.md §45): the printer's own power draw
+// (Settings > Printers "Power draw, watts" — stored as `costKwh` despite its
+// name) × the print's hours × the electricity rate. An estimate — nothing
+// measures the draw — and none at all when the watts, the rate or the time is
+// unknown: never the old implied 1,000 W. Returned with its basis so a
+// measured figure from a real meter can replace it later.
+function printEnergyEstimate(p, hours) {
+  const watts = Number(p && p.costKwh), rate = Number(CFG.electricityRate);
+  if (!(watts > 0) || !(rate > 0) || !(hours > 0)) return null;
+  const kwh = watts * hours / 1000;
+  return { kwhEst: Math.round(kwh * 1000) / 1000, watts, ratePerKwh: rate, cost: kwh * rate, basis: "estimate" };
+}
+
 async function notifyTick() {
   const nf = CFG.notifications || {};
   const ntfyReady = !!nf.ntfyEnabled && !!nf.ntfyTopic;
@@ -5629,9 +6946,13 @@ async function notifyTick() {
   const canNotifyIntervals = notifyReady && nf.onIntervals;
   const milestones = (Array.isArray(nf.milestonePercents) && nf.milestonePercents.length) ? nf.milestonePercents : DEFAULT_MILESTONES;
 
+  utilization.beginTick(CFG.printers, PRINTERS);
   await Promise.all(PRINTERS.map(async (p, i) => {
     const st = await probeCached(p);
-    if (!st.online) return;
+    // Fleet utilization: the reading as it is, offline included. Cannot throw.
+    utilization.observe(p, st);
+    // Unreachable: a queue print's idle count starts over (§34).
+    if (!st.online) { queueIdleWatchOffline(p); return; }
 
     // A printer that was unreachable during startup reconciliation
     // (round-3 issue #11) gets a real reconciliation attempt the moment a
@@ -5696,9 +7017,11 @@ async function notifyTick() {
         const elapsedSec = st.elapsed;
         const hours = (typeof elapsedSec === "number") ? elapsedSec / 3600 : 0;
         const fCost = (CFG.filamentCost > 0 && filamentGramsEst) ? (CFG.filamentCost / 1000) * filamentGramsEst : 0;
-        const eCost = (CFG.electricityRate > 0 && hours) ? CFG.electricityRate * hours : 0;
+        const energy = printEnergyEstimate(p, hours);   // §45: this printer's watts, not 1 kW
+        const eCost = energy ? energy.cost : 0;
         const costEst = (fCost + eCost) > 0 ? Math.round((fCost + eCost) * 100) / 100 : null;
-        auditLog.log({ category: "job", event: "print-completed", printerId: p.id, printerName: p.name, detail: { file: st.filename, elapsedSec, filamentUsedMm, filamentGramsEst, costEst } });
+        auditLog.log({ category: "job", event: "print-completed", printerId: p.id, printerName: p.name, detail: { file: st.filename, elapsedSec, filamentUsedMm, filamentGramsEst, costEst,
+          ...(energy ? { energy: { kwhEst: energy.kwhEst, watts: energy.watts, ratePerKwh: energy.ratePerKwh, basis: energy.basis } } : {}) } });
         library.recordPrintOutcome({ printerId: p.id, remoteName: st.filename, outcome: "completed", at: Date.now(), elapsedSec, filamentG: filamentGramsEst, costEst });
       } else if (st.state === "error" || st.state === "cancelled") {
         // A "cancelled" state can be the direct downstream result of a
@@ -5739,6 +7062,7 @@ async function notifyTick() {
         }
       }
     }
+    watchQueuePrinting(p, st);
 
     try {
       if (canNotifyEvent) {
@@ -5765,8 +7089,15 @@ async function notifyTick() {
       console.log("notify: " + p.name + ": " + e.message);
     }
   }));
+  // Fleet utilization: what this poll observed is saved now, after it, in
+  // bounded turns.
+  utilization.endTick();
 }
 setInterval(notifyTick, NOTIFY_POLL_MS).unref();
+
+// Fleet utilization reports (Phase 3): read only, signed-in users, each
+// printer as visible to them (utilization/routes.js).
+utilization.registerRoutes(app, { requireAuth, getConfig: () => CFG.utilization, getPrinters: () => PRINTERS, printerVisibleTo });
 notifyTick();   // prime NOTIFY_STATE at startup (first sight never notifies)
 
 app.post("/api/notify-test", requireAdmin, async (req, res) => {
@@ -5862,171 +7193,6 @@ app.get("/api/electricity-rate", requireAuth, async (req, res) => {
   }
 });
 
-// ---- Auto-discovery: scan the local subnet(s) for Moonraker printers ----
-// IPv4 <-> integer, via multiplication rather than bit-shifts — shifting an
-// octet into bit 24-31 overflows into JS's signed 32-bit bitwise range and
-// flips negative for anything with a high first octet (>=128).
-function ipToInt(ip) {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || "").trim());
-  if (!m) return null;
-  const parts = m.slice(1, 5).map(Number);
-  if (parts.some(o => o < 0 || o > 255)) return null;
-  return parts[0] * 16777216 + parts[1] * 65536 + parts[2] * 256 + parts[3];
-}
-function intToIp(n) {
-  return [Math.floor(n / 16777216) % 256, Math.floor(n / 65536) % 256, Math.floor(n / 256) % 256, n % 256].join(".");
-}
-// A dotted mask (255.255.255.128) is only valid if it's a contiguous run of
-// 1-bits followed by 0-bits — reject anything else (e.g. 255.0.255.0) rather
-// than silently misinterpreting it.
-function maskToPrefixLen(mask) {
-  const n = ipToInt(mask);
-  if (n === null) return null;
-  let ones = 0, seenZero = false;
-  for (let i = 31; i >= 0; i--) {
-    if ((n >>> i) & 1) { if (seenZero) return null; ones++; }
-    else seenZero = true;
-  }
-  return ones;
-}
-const MIN_SCAN_PREFIX = 20; // /20 = 4096 addresses — below this a typo could kick off a scan that takes forever
-// Accepts either the legacy bare "x.x.x.0" (whole /24, unchanged behavior)
-// or CIDR notation with a prefix length ("192.168.22.128/25") or a dotted
-// mask ("192.168.22.128/255.255.255.128") — the IP need not be block-aligned,
-// the network is derived by zeroing the host bits either way. Returns the
-// FULL address block inclusive of what strict subnetting would call the
-// network/broadcast addresses (e.g. .0/25 scans .0-.127, not .1-.126) —
-// deliberate: this is a printer-discovery sweep, not a routing table, and a
-// printer can legitimately sit at either boundary address.
-function parseSubnetSpec(spec) {
-  spec = String(spec || "").trim();
-  const slash = spec.indexOf("/");
-  if (slash === -1) {
-    const parts = spec.split(".");
-    if (parts.length !== 4 || parts.some(p => isNaN(p) || +p < 0 || +p > 255)) {
-      return { error: "Invalid subnet. Expected x.x.x.0, or CIDR like 192.168.1.0/24" };
-    }
-    const base = parts.slice(0, 3).join(".");
-    return { ips: Array.from({ length: 254 }, (_, i) => base + "." + (i + 1)), label: base + ".0/24" };
-  }
-  const ipInt = ipToInt(spec.slice(0, slash));
-  if (ipInt === null) return { error: "Invalid IP address before the /" };
-  const suffix = spec.slice(slash + 1).trim();
-  const prefixLen = /^\d{1,2}$/.test(suffix) ? parseInt(suffix, 10) : maskToPrefixLen(suffix);
-  if (prefixLen === null || prefixLen < 0 || prefixLen > 32) return { error: "Invalid prefix length or subnet mask after the /" };
-  if (prefixLen < MIN_SCAN_PREFIX) return { error: "Subnet too large to scan — use /" + MIN_SCAN_PREFIX + " or smaller (max " + Math.pow(2, 32 - MIN_SCAN_PREFIX) + " addresses)" };
-  const blockSize = Math.pow(2, 32 - prefixLen);
-  const networkInt = Math.floor(ipInt / blockSize) * blockSize;
-  const ips = [];
-  for (let n = networkInt; n <= networkInt + blockSize - 1; n++) ips.push(intToIp(n));
-  return { ips, label: intToIp(networkInt) + "/" + prefixLen };
-}
-// Interfaces that are not a LAN a printer could be sitting on: VPN tunnels and
-// the virtual switches Docker, WSL, Hyper-V, VirtualBox and VMware create. Each
-// one costs a full 254-address sweep and finds nothing, and every one of them
-// ends up named in the "no printers found on …" message, which is how this was
-// noticed: a machine reported scanning 100.83.148.0/24 and 172.17.64.0/24
-// alongside its real 192.168.2.0/24.
-//
-// Matching on the interface NAME rather than the address, because the address
-// ranges these use (172.16.0.0/12 especially) are legitimate private networks
-// somebody's real printers live on.
-const SKIP_INTERFACE_RE = /^(vEthernet|vmnet|vboxnet|VirtualBox|VMware|Hyper-?V|docker|br-|veth|virbr|tailscale|ts\d|zt[a-z0-9]|ZeroTier|utun|tun\d|tap\d|wg\d|Bluetooth|Loopback|isatap|Teredo)/i;
-// …and addresses that cannot be a LAN whatever the interface is called:
-// carrier-grade NAT (100.64.0.0/10, which Tailscale hands out) and the
-// link-local block a machine gives itself when DHCP fails.
-const SKIP_ADDRESS_RE = /^(100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|169\.254\.)/;
-
-// The address this machine would use to reach the wider network — its own
-// answer to "which adapter is my default route".
-//
-// A UDP socket is `connect`ed, which sends NOTHING on the wire: it only makes
-// the OS consult its routing table and bind a local address, which is then read
-// back. Cheap, needs no privileges, and works the same on every platform, where
-// parsing `route print` / `ip route` output would not.
-function defaultRouteAddress({ timeoutMs = 300 } = {}) {
-  return new Promise(resolve => {
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; try { sock.close(); } catch {} resolve(v); } };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    if (timer.unref) timer.unref();
-    let sock;
-    try { sock = dgram.createSocket("udp4"); } catch { clearTimeout(timer); resolve(null); return; }
-    sock.on("error", () => { clearTimeout(timer); finish(null); });
-    try {
-      // A public address that is never actually contacted; only the route to it
-      // matters.
-      sock.connect(53, "8.8.8.8", () => {
-        clearTimeout(timer);
-        let addr = null;
-        try { addr = sock.address().address; } catch {}
-        finish(addr && addr !== "0.0.0.0" ? addr : null);
-      });
-    } catch { clearTimeout(timer); finish(null); }
-  });
-}
-
-// Which /24 to sweep, given the address the machine actually routes through.
-//
-// A hub can sit on two real networks at once — a second NIC, a lab VLAN, wifi
-// still connected alongside ethernet — and sweeping both is slow and turns up
-// printers on a network nobody asked about. The default route is the machine's
-// own answer to "which of these is my network", so the scan follows it.
-//
-// Falls back to every real network when the routing answer is missing or points
-// at something that is not a LAN (a full-tunnel VPN, an exit node): scanning
-// them all is worse than scanning one, and much better than scanning nothing.
-function scanSubnets(ifs = os.networkInterfaces(), sourceIp = null) {
-  const all = localSubnets(ifs);
-  if (!sourceIp) return all;
-  const base = String(sourceIp).split(".").slice(0, 3).join(".");
-  return all.includes(base) ? [base] : all;
-}
-
-// The /24s worth sweeping for printers. `ifs` is injectable so the choice can
-// be tested against a real machine's interface list rather than this one's.
-function localSubnets(ifs = os.networkInterfaces()) {
-  const out = new Set();
-  for (const name in ifs) for (const a of ifs[name] || []) {
-    if (a.family !== "IPv4" || a.internal) continue;
-    if (SKIP_INTERFACE_RE.test(name) || SKIP_ADDRESS_RE.test(a.address)) continue;
-    // A /32 is a single host, not a network — scanning the 254 addresses around
-    // it is a guess about somebody else's routing.
-    if (a.netmask === "255.255.255.255") continue;
-    out.add(a.address.split(".").slice(0, 3).join("."));
-  }
-  return [...out];
-}
-// Port 80 catches the common case (Fluidd/Mainsail/KIAUH nginx proxying
-// straight to Moonraker) — but plenty of stock images (e.g. Creality's K1
-// series) run Moonraker directly on its own default port 7125 with nothing
-// on 80 at all. Try both so those aren't invisible to the scan.
-const DISCOVER_PORTS = [80, 7125];
-// Tries every connector that supports discovery (discoverAt is optional —
-// most future brands won't fingerprint this way at all) against one base
-// URL, so adding a connector automatically joins the scan with no changes
-// here.
-async function discoverAt(base) {
-  for (const { type } of listConnectorTypes()) {
-    const c = getConnector(type);
-    if (!c.discoverAt) continue;
-    try {
-      const hit = await c.discoverAt(base);
-      if (hit) return { ...hit, connector: type };
-    } catch { /* try the next connector */ }
-  }
-  return null;
-}
-async function discoverIp(ip) {
-  for (const port of DISCOVER_PORTS) {
-    const base = port === 80 ? `http://${ip}` : `http://${ip}:${port}`;
-    try {
-      const hit = await discoverAt(base);
-      if (hit) return { ip, ...hit };
-    } catch { /* try the next port */ }
-  }
-  return null;
-}
 app.get("/api/probe-printer", requireAdmin, async (req, res) => {
   const url = (req.query.url || "").trim().replace(/\/+$/, "");
   if (!url) return res.status(400).json({ error: "url required" });
@@ -6090,53 +7256,108 @@ app.post("/api/test-connection", requireAdmin, async (req, res) => {
   }
 });
 
-// A sweep of 254 addresses takes long enough that a motionless "Scanning…" box
-// reads as a hang, so this streams: one JSON object per line (NDJSON), a
-// progress line after every batch and a final line carrying the result. The
-// client shows a real bar and can say what it has found before the sweep ends.
-//
-// Streaming rather than a job id and polling: a scan is worthless once the page
-// that asked for it has gone, so tying it to the request is exactly right — and
-// it needs no server-side registry to leak.
-app.get("/api/discover", requireAdmin, async (req, res) => {
-  const found = [];
-  let ips, labels;
-  if (req.query.subnet) {
-    const spec = parseSubnetSpec(req.query.subnet);
-    if (spec.error) return res.status(400).json({ error: spec.error });
-    ips = spec.ips;
-    labels = [spec.label];
-  } else {
-    // The adapter this machine actually routes through, falling back to every
-    // real network when that cannot be determined.
-    const bases = scanSubnets(os.networkInterfaces(), await defaultRouteAddress());
-    // Every interface was virtual or a VPN: there is no local network to sweep,
-    // which is a different answer from "swept it and found nothing".
-    if (!bases.length) {
-      return res.status(400).json({
-        error: "SnapCon could not find a local network to scan — every network adapter on this machine is a VPN or a virtual switch. Enter a subnet to scan, or add the printer by its address.",
-        code: "no_local_network"
-      });
+// ---- Auto-discovery: GET /api/discover and its helpers live in
+// routes/discover.js. Required and registered here, at the route's original
+// position, so the order of the routes is unchanged (docs/refactoring-policy.md). ----
+const { registerDiscoverRoutes } = require("./routes/discover");
+registerDiscoverRoutes(app, { requireAdmin, getConnector, listConnectorTypes });
+
+// ---- Settings > Printers "Rediscover" (docs/TODO.md §35) ----
+// Matching is public/rediscover.js, in the browser; these two routes are its
+// evidence and its save. Only printers whose connector can be asked for a
+// serial (the inventory capability, U1 today) are read or changed: on
+// FlashForge and Bambu the serial is a credential the printer won't tell.
+const rediscoverCheckable = p => !!(getConnector(p.connector).capabilities || {}).inventory && typeof getConnector(p.connector).getInventory === "function";
+
+// Every saved printer, plus what each checkable one's saved address answers
+// right now. Read-only: the same /machine/system_info the Inventory page asks.
+app.get("/api/rediscover/printers", requireAdmin, async (req, res) => {
+  const printers = PRINTERS.map(p => ({
+    id: p.id, name: p.name, url: p.url, ip: p.ip || null, serial: p.serial || "", connector: p.connector,
+    checkable: rediscoverCheckable(p), fixedHost: !!getAddress(p.connector).fixedHost,
+  }));
+  const live = {};
+  await Promise.all(PRINTERS.filter(rediscoverCheckable).map(async p => {
+    try {
+      const r = await getConnector(p.connector).getInventory(p);
+      live[p.id] = r && r.online ? { online: true, serial: r.serial || null, name: r.device_name || null } : { online: false };
+    } catch { live[p.id] = { online: false }; }
+  }));
+  res.json({ printers, live });
+});
+
+// Applies a set of corrections at once, so a swap (two printers trading
+// addresses) never passes through a state with one address on both. Each
+// change names the values it was planned against (expect); a printer changed
+// since the scan is refused rather than overwritten. The result may not give
+// a changed field the same value as another printer's (Rediscover.conflicts),
+// which is also what keeps a rename from breaking the slicer hook's lookup by
+// name. Everything else on the record — id, history, maintenance, pool,
+// tokens, settings — is the same object, untouched.
+const REDISCOVER_SERIAL_RE = /^[A-Za-z0-9._-]{1,64}$/;
+app.post("/api/rediscover/apply", requireAdmin, (req, res) => {
+  const changes = Array.isArray(req.body && req.body.changes) ? req.body.changes : null;
+  if (!changes || !changes.length || changes.length > 500) return res.status(400).json({ error: "No changes given" });
+  if (CONFIG_LOAD_FAILED) return res.status(409).json({ error: "Config could not be read; not overwriting it" });
+  const list = (CFG.printers || []).map(p => ({ ...p }));
+  const clean = [];
+  for (const c of changes) {
+    const p = c && list.find(x => x.id === c.id);
+    if (!p || !PRINTERS.some(x => x.id === p.id)) return res.status(400).json({ error: "Unknown printer" });
+    if (clean.some(x => x.id === p.id)) return res.status(400).json({ error: "A printer is named twice" });
+    if (!rediscoverCheckable(p)) return res.status(400).json({ error: p.name + " can't be checked this way" });
+    const e = c.expect || {};
+    if (e.url !== p.url || (e.serial || "") !== (p.serial || "") || e.name !== p.name) {
+      return res.status(409).json({ error: p.name + " was changed after the scan. Run Rediscover again.", code: "stale" });
     }
-    ips = bases.flatMap(base => Array.from({ length: 254 }, (_, i) => base + "." + (i + 1)));
-    labels = bases.map(b => b + ".0/24");
+    const one = { id: p.id };
+    if (c.ip !== undefined) {
+      const ip = String(c.ip || "").trim();
+      if (!isValidHost(ip) || getAddress(p.connector).fixedHost) return res.status(400).json({ error: "Invalid address for " + p.name });
+      one.ip = ip;
+    }
+    if (c.serial !== undefined) {
+      const serial = String(c.serial || "").trim();
+      if (!REDISCOVER_SERIAL_RE.test(serial)) return res.status(400).json({ error: "Invalid serial for " + p.name });
+      one.serial = serial;
+    }
+    if (c.name !== undefined) {
+      const name = String(c.name || "").trim();
+      if (!name || name.length > 100 || /[\u0000-\u001f]/.test(name)) return res.status(400).json({ error: "Invalid name for " + p.name });
+      one.name = name;
+    }
+    if (Object.keys(one).length === 1) return res.status(400).json({ error: "Nothing to change for " + p.name });
+    clean.push(one);
   }
-  res.set("Content-Type", "application/x-ndjson");
-  res.set("Cache-Control", "no-store");
-  res.set("X-Content-Type-Options", "nosniff");
-  const line = (obj) => { if (!res.writableEnded) res.write(JSON.stringify(obj) + "\n"); };
-  line({ subnets: labels, total: ips.length, scanned: 0 });
-  // A browser that navigated away should not leave the scan running.
-  let aborted = false;
-  req.on("close", () => { aborted = true; });
-  const B = 40;
-  for (let i = 0; i < ips.length && !aborted; i += B) {
-    const results = await Promise.all(ips.slice(i, i + B).map(discoverIp));
-    results.forEach(r => { if (r) found.push(r); });
-    line({ scanned: Math.min(i + B, ips.length), total: ips.length, found: found.length });
+  // The address goes through the same composer a Settings save uses, so the
+  // stored ip/port/scheme/url are exactly what saving the row would store.
+  for (const c of clean) {
+    const p = list.find(x => x.id === c.id);
+    if (c.ip !== undefined) Object.assign(p, resolvePrinterAddress({ ...p, ip: c.ip }));
+    if (c.serial !== undefined) p.serial = c.serial;
+    if (c.name !== undefined) p.name = c.name;
   }
-  if (!aborted) line({ done: true, subnets: labels, found });
-  res.end();
+  const clash = Rediscover.conflicts(list, clean)[0];
+  if (clash) {
+    const me = list.find(x => x.id === clash.id), other = list.find(x => x.id === clash.other);
+    const what = { address: "address", serial: "serial", name: "name" }[clash.field] || "identity";
+    return res.status(409).json({ error: "That would give " + (me ? me.name : "a printer") + " the same " + what + " as " + (other ? other.name : "another printer") + ".", code: "duplicate" });
+  }
+  const before = new Map((CFG.printers || []).map(p => [p.id, p]));
+  const prev = CFG.printers;
+  CFG.printers = list;
+  try { fs.writeFileSync(CONFIG_PATH, JSON.stringify(CFG, null, 2)); }
+  catch (e) { CFG.printers = prev; return res.status(500).json({ error: "Could not save: " + e.message }); }
+  loadConfig();
+  for (const c of clean) {
+    const b = before.get(c.id), a = list.find(x => x.id === c.id);
+    const detail = { source: "rediscover", changed: [] };
+    if (c.ip !== undefined) { detail.changed.push("address"); detail.address = { from: b.url, to: a.url }; }
+    if (c.serial !== undefined) detail.changed.push("serial");
+    if (c.name !== undefined) { detail.changed.push("name"); detail.name = { from: b.name, to: a.name }; }
+    auditLog.log({ category: "admin", event: "printer-identity-updated", ...actorFromReq(req), printerId: a.id, printerName: a.name, detail });
+  }
+  res.json({ ok: true, printers: publicCfg(req.user.role).printers });
 });
 
 // ---- Queue Management: startup crash recovery (design doc Part E) ----
@@ -6204,23 +7425,29 @@ function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log("\n  Received " + signal + " — shutting down...");
-  httpServer.close(); // stop accepting new connections; lets in-flight ones finish
-  updateChecker.stop();
 
-  // Independent, unconditional deadline — scheduled up front, not nested
-  // inside the graceful path's .finally(). A .finally() only ever runs once
-  // the promise it's attached to actually settles, so if disableForShutdown()
-  // (or anything several layers beneath it — a subprocess spawn with no
-  // timeout of its own, say) ever hung, the "bounded" exit would silently
-  // stop being bounded at all. This timer fires no matter what.
+  // Independent, unconditional deadline — scheduled up front, before any
+  // cleanup, not nested inside the graceful path's .finally(). A .finally()
+  // only ever runs once the promise it's attached to actually settles, so if
+  // disableForShutdown() (or anything several layers beneath it — a subprocess
+  // spawn with no timeout of its own, say) ever hung, the "bounded" exit would
+  // silently stop being bounded at all. This timer fires no matter what.
   const forceExitTimer = setTimeout(() => process.exit(0), 8000);
   if (forceExitTimer.unref) forceExitTimer.unref();
 
-  Promise.all([
+  httpServer.close(); // stop accepting new connections; lets in-flight ones finish
+  updateChecker.stop();
+
+  // Fleet utilization stops first, as before, but asynchronously (at most 1 s,
+  // the event loop free throughout); Remote Access and the Library then stop
+  // as they always have.
+  Promise.resolve().then(() => utilization.stop())
+    .catch(e => console.error("[utilization] shutdown:", e.message))
+    .then(() => Promise.all([
     Promise.resolve(remoteAccess.disableForShutdown()) // stop cloudflared only — token/config are retained so the next boot reconnects
       .catch(e => console.error("[remote-access] shutdown:", e.message)),
     library.stop().catch(e => console.error("[library] shutdown:", e.message)),
-  ]).finally(() => { clearTimeout(forceExitTimer); process.exit(0); });
+  ])).finally(() => { clearTimeout(forceExitTimer); process.exit(0); });
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

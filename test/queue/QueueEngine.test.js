@@ -270,6 +270,45 @@ test("clearQueue: no currentItem -> only queued items go to history, nothing 'ca
   assert.equal(next.recentHistory[0].status, "removed");
 });
 
+test("clearQueue: an item whose outcome is already in history isn't recorded again as cancelled (§36 F3)", () => {
+  for (const [queueState, status] of [["awaiting_bed_clear", "completed"], ["bed_clear_running", "completed"], ["queue_attention_required", "failed"], ["queue_attention_required", "skipped"]]) {
+    const cur = item("i1", { status });
+    const next = E.clearQueue(baseState({ queueState, currentItem: cur, recentHistory: [cur], queue: [item("i2")] }));
+    assert.deepEqual(next.recentHistory.map(i => [i.id, i.status]), [["i1", status], ["i2", "removed"]], queueState + "/" + status);
+  }
+});
+
+test("clearQueue: a print that failed, was resumed and is printing again is recorded as cancelled", () => {
+  const next = E.clearQueue(baseState({ queueState: "printing", currentItem: item("i1", { status: "failed" }), recentHistory: [item("i1", { status: "failed" })] }));
+  assert.deepEqual(next.recentHistory.map(i => [i.id, i.status]), [["i1", "failed"], ["i1", "cancelled"]]);
+});
+
+test("clearQueue: another item with the same file name in history doesn't stop the current one being recorded", () => {
+  const next = E.clearQueue(baseState({ queueState: "printing", currentItem: item("i2", { status: "printing" }), recentHistory: [{ ...item("i1"), file: item("i2").file, status: "completed" }] }));
+  assert.deepEqual(next.recentHistory.map(i => [i.id, i.status]), [["i1", "completed"], ["i2", "cancelled"]]);
+});
+
+test("clearQueue: Clear's own cancel is cancelled by the user; an outcome nobody saw is unknown; a job never sent is removed", () => {
+  const rows = s => s.recentHistory.map(i => [i.id, i.status, i.cancelledBy || null]);
+  // Printing: cancelled now.
+  assert.deepEqual(rows(E.clearQueue(baseState({ queueState: "printing", currentItem: item("i1", { status: "printing" }) }), { cancelledItemId: "i1" })), [["i1", "cancelled", "user"]]);
+  // The printer reported the stop the cancel caused: that "failed" becomes the cancel, in place.
+  const failed = item("i1", { status: "failed", finishedAt: 7 });
+  const raced = E.clearQueue(baseState({ queueState: "queue_attention_required", attentionReason: "print-failed", currentItem: failed, recentHistory: [failed] }), { cancelledItemId: "i1" });
+  assert.deepEqual(rows(raced), [["i1", "cancelled", "user"]]);
+  assert.equal(raced.recentHistory[0].finishedAt, 7, "when the printer said it stopped");
+  // The same failure with no cancel sent by this Clear stays a failure.
+  assert.deepEqual(rows(E.clearQueue(baseState({ queueState: "queue_attention_required", attentionReason: "print-failed", currentItem: failed, recentHistory: [failed] }))), [["i1", "failed", null]]);
+  // A completion is never overwritten, cancel or not.
+  const done = item("i1", { status: "completed" });
+  assert.deepEqual(rows(E.clearQueue(baseState({ queueState: "awaiting_bed_clear", currentItem: done, recentHistory: [done] }), { cancelledItemId: "i1" })), [["i1", "completed", null]]);
+  // Unknown outcome, no cancel: unknown, not a guessed cancel.
+  assert.deepEqual(rows(E.clearQueue(baseState({ queueState: "queue_attention_required", attentionReason: "recovery-unknown-outcome", currentItem: item("i1", { status: "printing" }) }))), [["i1", "unknown", null]]);
+  assert.deepEqual(rows(E.clearQueue(baseState({ queueState: "queue_attention_required", attentionReason: "recovery-interrupted", currentItem: item("i1", { status: "dispatching" }) }))), [["i1", "unknown", null]]);
+  // Never sent to the printer.
+  assert.deepEqual(rows(E.clearQueue(baseState({ queueState: "queue_attention_required", attentionReason: "file-missing", currentItem: item("i1", { status: "dispatching" }) }))), [["i1", "removed", null]]);
+});
+
 test("clearQueue: leaves queuePaused/queueStopped untouched", () => {
   const state = baseState({ queueState: "printing", queueStopped: true, currentItem: item("i1") });
   assert.equal(E.clearQueue(state).queueStopped, true);
@@ -327,6 +366,95 @@ test("reconcileOnStartup: printing + printer still printing the same file -> unc
   const next = E.reconcileOnStartup(state, { online: true, state: "printing", filename: "i1.gcode" });
   assert.equal(next.queueState, "printing");
   assert.equal(next.attentionReason, null);
+});
+
+// ---- onPrinterIdleWhilePrinting (docs/TODO.md §34) ----
+function idleUnknown() {
+  const state = baseState({ queueState: "printing", queue: [item("i2")], recentHistory: [item("h0", { status: "completed" })], currentItem: item("i1", { status: "printing", dispatchedAt: 5 }) });
+  return E.onPrinterIdleWhilePrinting(state, "i1", { code: "printer-idle", message: "went idle" });
+}
+
+test("onPrinterIdleWhilePrinting: needs attention as an unknown outcome; the item stays, history and queue untouched, nothing advances", () => {
+  const next = idleUnknown();
+  assert.equal(next.queueState, "queue_attention_required");
+  assert.equal(next.attentionReason, "recovery-unknown-outcome");
+  assert.deepEqual(next.attentionDetail, { code: "printer-idle", message: "went idle", resumable: false });
+  assert.equal(next.currentItem.id, "i1");
+  assert.equal(next.currentItem.status, "printing", "not marked completed, failed or skipped");
+  assert.equal(next.currentItem.finishedAt, null);
+  assert.deepEqual(next.recentHistory.map(i => i.id), ["h0"]);
+  assert.deepEqual(next.queue.map(i => i.id), ["i2"], "the next item is still waiting, not claimed");
+});
+
+test("onPrinterIdleWhilePrinting: only from printing, and only for the item observed", () => {
+  const printing = baseState({ queueState: "printing", currentItem: item("i1", { status: "printing" }) });
+  assert.throws(() => E.onPrinterIdleWhilePrinting(printing, "other", {}), /no matching printing item/);
+  for (const queueState of ["idle", "dispatching", "awaiting_bed_clear", "queue_attention_required"]) {
+    assert.throws(() => E.onPrinterIdleWhilePrinting({ ...printing, queueState }, "i1", {}), /no matching printing item/, queueState);
+  }
+});
+
+test("onPrinterIdleWhilePrinting: Retry and Skip go through bed-clear, since the print may have run", () => {
+  const retry = E.resolveAttention(idleUnknown(), "retry");
+  assert.equal(retry.queueState, "awaiting_bed_clear");
+  assert.equal(retry.queue[0].retryOfItemId, "i1", "a fresh retry item at the front");
+  assert.deepEqual(retry.queue.slice(1).map(i => i.id), ["i2"]);
+  const skip = E.resolveAttention(idleUnknown(), "skip");
+  assert.equal(skip.queueState, "awaiting_bed_clear");
+  assert.equal(skip.currentItem.status, "skipped");
+  assert.deepEqual(skip.recentHistory.map(i => i.id), ["h0", "i1"]);
+});
+
+test("onPrinterIdleWhilePrinting: Stop keeps the reason and the item", () => {
+  const stopped = E.resolveAttention(idleUnknown(), "stop");
+  assert.equal(stopped.queueStopped, true);
+  assert.equal(stopped.attentionReason, "recovery-unknown-outcome");
+  assert.equal(stopped.currentItem.id, "i1");
+});
+
+// §34 item 5: an unknown outcome is raised for a printer that is not paused on
+// the item, so Resume could only fail or resume a print the queue never sent.
+test("recovery-unknown-outcome offers no Resume; print-failed keeps it", () => {
+  assert.deepEqual([...E.RESOLUTIONS_BY_REASON["recovery-unknown-outcome"]], ["mark-completed", "retry", "skip", "stop"]);
+  assert.throws(() => E.resolveAttention(idleUnknown(), "resume"), /not valid for reason "recovery-unknown-outcome"/);
+  assert.ok(E.RESOLUTIONS_BY_REASON["print-failed"].includes("resume"), "a failed print may still be paused and resumable");
+});
+
+// §34 item 6: a person who saw the print finish says so.
+test("mark-completed: recorded like a printer-reported completion, plus who decided; then bed-clear, nothing dispatched", () => {
+  const before = Date.now();
+  const s0 = idleUnknown();
+  const next = E.resolveAttention(s0, "mark-completed");
+  assert.equal(next.queueState, "awaiting_bed_clear");
+  assert.equal(next.attentionReason, null);
+  assert.equal(next.attentionDetail, null);
+  assert.equal(next.currentItem.id, "i1");
+  assert.equal(next.currentItem.status, "completed");
+  assert.equal(next.currentItem.completedBy, "user");
+  assert.ok(next.currentItem.finishedAt >= before);
+  assert.deepEqual(next.recentHistory.map(i => [i.id, i.status]), [["h0", "completed"], ["i1", "completed"]]);
+  assert.equal(next.recentHistory[1].completedBy, "user");
+  assert.deepEqual(next.queue.map(i => i.id), ["i2"], "the next item waits");
+  assert.equal(E.claimTransition(next).canClaim, false, "nothing dispatches until the bed is confirmed clear");
+  // The same shape a printer-reported completion gives, except completedBy.
+  const viaPrinter = E.onProbeComplete({ ...s0, queueState: "printing", attentionReason: null, attentionDetail: null });
+  const strip = st => ({ ...st, updatedAt: 0, currentItem: { ...st.currentItem, finishedAt: 0, completedBy: undefined }, recentHistory: st.recentHistory.map(i => ({ ...i, finishedAt: 0, completedBy: undefined })) });
+  assert.deepEqual(strip(next), strip(viaPrinter));
+  assert.equal(viaPrinter.currentItem.completedBy, undefined, "a printer-reported completion carries no completedBy");
+});
+
+test("mark-completed: a stopped queue stays stopped", () => {
+  const next = E.resolveAttention({ ...idleUnknown(), queueStopped: true }, "mark-completed");
+  assert.equal(next.queueStopped, true);
+  assert.equal(next.queueState, "awaiting_bed_clear");
+});
+
+test("mark-completed is only for an unknown outcome", () => {
+  for (const reason of ["print-failed", "dispatch-failed", "bed-clear-failed", "file-missing", "file-changed", "pool-invalid", "recovery-mismatch", "recovery-interrupted"]) {
+    const state = baseState({ queueState: "queue_attention_required", attentionReason: reason, currentItem: item("i1") });
+    assert.throws(() => E.resolveAttention(state, "mark-completed"), /not valid for reason/, reason);
+  }
+  assert.throws(() => E.resolveAttention(baseState({ queueState: "printing", currentItem: item("i1") }), "mark-completed"), /not in attention state/);
 });
 
 test("reconcileOnStartup: bed_clear_running at crash time -> always surfaces as bed-clear-failed, never assumed", () => {

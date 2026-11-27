@@ -1,0 +1,306 @@
+{
+  "boundary": "health",
+  "comment": "Health extraction (Phase 3). Executed only after the owner approves; produced mechanically by tools/refactor/codemods/extract-health.js.",
+  "base": "f0a917f00bc2902c87449d29764c72b3d1ce52c9",
+  "movedFrom": "server.js",
+  "sourceRange": "server.js lines 4647-4844 at the base (198 lines): the \"Health diagnostics\" header comment through the end of the route. Module-level part 4647-4807 (10 constants/Maps with their comments; 4 functions with theirs), route 4808-4844. Line 4646 (blank) stays in server.js.",
+  "newFiles": [
+    "routes/health.js"
+  ],
+  "allowedFiles": [
+    "server.js",
+    "Dockerfile",
+    "test/healthRoute.test.js",
+    "test/health-maintenance.test.js",
+    "test/connectorCoreMethods.test.js",
+    "test/helpers/healthCode.js"
+  ],
+  "moved": [
+    "DISK_CRITICAL_PCT",
+    "DISK_CRITICAL_BYTES",
+    "fanMismatchSeen",
+    "FAN_COMMANDED_THRESHOLD",
+    "FAN_STOPPED_RPM_THRESHOLD",
+    "checkFanMismatch",
+    "HEATER_TARGET_BAND_C",
+    "HEATER_DWELL_MS",
+    "heaterStableSince",
+    "annotateHeaterStates",
+    "annotateGcodeUnusedCount",
+    "computeHealthAttention",
+    "HEALTH_DEADLINE_MS",
+    "HEALTH_TIMED_OUT",
+    "GET /api/health"
+  ],
+  "rewrites": [
+    {
+      "from": "CFG",
+      "to": "getConfig()"
+    },
+    {
+      "from": "PRINTERS",
+      "to": "getPrinters()"
+    }
+  ],
+  "injected": {
+    "requireAuth": "server.js:397 const (from auth)",
+    "getConfig": "() => CFG",
+    "getPrinters": "() => PRINTERS",
+    "getConnector": "server.js:21 const (connectors)",
+    "printerVisibleTo": "server.js:242 const (groupAccess)",
+    "probeCached": "server.js:2954 function",
+    "computeMaintenanceAttention": "server.js:5030 function (hoisted; available at registration)",
+    "connHttp": "server.js:23 const (connectors/http-utils)",
+    "how": "parameters of registerHealthRoutes(app, { … }) — no module-level dependency slots; the helpers are declared inside registerHealthRoutes and reach them through the closure"
+  },
+  "strictMode": "routes/health.js has no \"use strict\" (server.js is sloppy mode; semantics kept identical).",
+  "moduleState": {
+    "fanMismatchSeen": "module scope of routes/health.js; created once when server.js requires the module at the original position (same point in start-up as before); process lifetime; not reset by config reloads; cleared only by a restart",
+    "heaterStableSince": "same",
+    "constants": "DISK_*, FAN_*, HEATER_*, HEALTH_* stay at module scope"
+  },
+  "pinningTests": [
+    "test/healthBehaviour.test.js",
+    "test/healthRoute.test.js",
+    "test/health-maintenance.test.js",
+    "test/fleetProbe.test.js",
+    "test/connectorCoreMethods.test.js"
+  ],
+  "declaredTestFiles": [
+    "test/helpers/healthCode.js"
+  ],
+  "declaredHarness": {
+    "test/healthRoute.test.js": [
+      {
+        "base": "^const serverSrc = fs\\.readFileSync\\(path\\.join\\(ROOT, \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const serverSrc = \\[\"server\\.js\", \"routes/health\\.js\"\\]\\.map\\(f => fs\\.readFileSync\\(path\\.join\\(ROOT, f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$"
+      },
+      {
+        "base": "^  const src = serverSrc\\.slice\\(start, routeEnd\\(serverSrc, at\\) \\+ 4\\)\\.replace\\(\"const HEALTH_DEADLINE_MS = 25 \\* 1000;\", `const HEALTH_DEADLINE_MS = \\$\\{DEADLINE_MS\\};`\\);$",
+        "head": "^  const src = serverSrc\\.slice\\(start, serverSrc\\.indexOf\\(\"function registerHealthRoutes\", start\\)\\)\\.replace\\(\"const HEALTH_DEADLINE_MS = 25 \\* 1000;\", `const HEALTH_DEADLINE_MS = \\$\\{DEADLINE_MS\\};`\\) \\+ serverSrc\\.slice\\(at, serverSrc\\.indexOf\\(\"\\\\n  \\}\\);\\\\n\", at\\) \\+ 6\\)\\.replace\\(/\\^  /gm, \"\"\\);$"
+      },
+      {
+        "base": "^    PRINTERS: \\[P\\], printerVisibleTo: \\(\\) => true, getConnector: \\(\\) => conn, CFG: \\{\\},$",
+        "head": "^    getPrinters: \\(\\) => \\[P\\], printerVisibleTo: \\(\\) => true, getConnector: \\(\\) => conn, getConfig: \\(\\) => \\(\\{\\}\\),$"
+      }
+    ],
+    "test/health-maintenance.test.js": [
+      {
+        "base": "^const src = fs\\.readFileSync\\(path\\.join\\(__dirname, \"\\.\\.\", \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const src = \\[\"server\\.js\", \"routes/health\\.js\"\\]\\.map\\(f => fs\\.readFileSync\\(path\\.join\\(__dirname, \"\\.\\.\", f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$"
+      }
+    ],
+    "test/connectorCoreMethods.test.js": [
+      {
+        "base": "^const serverSrc = require\\(\"fs\"\\)\\.readFileSync\\(require\\(\"path\"\\)\\.join\\(__dirname, \"\\.\\.\", \"server\\.js\"\\), \"utf8\"\\);$",
+        "head": "^const serverSrc = \\[\"server\\.js\", \"routes/health\\.js\"\\]\\.map\\(f => require\\(\"fs\"\\)\\.readFileSync\\(require\\(\"path\"\\)\\.join\\(__dirname, \"\\.\\.\", f\\), \"utf8\"\\)\\)\\.join\\(\"\\\\n\"\\);$"
+      }
+    ]
+  },
+  "mutations": [
+    {
+      "name": "visibility-removed",
+      "base": {
+        "file": "server.js",
+        "find": "if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: \"Unknown printer\" });\n  const c = getConnector(p.connector);\n  if (!c.getHealth)",
+        "replace": "if (!p) return res.status(400).json({ error: \"Unknown printer\" });\n  const c = getConnector(p.connector);\n  if (!c.getHealth)"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "if (!p || !printerVisibleTo(req.user, p)) return res.status(400).json({ error: \"Unknown printer\" });\n    const c = getConnector(p.connector);\n    if (!c.getHealth)",
+        "replace": "if (!p) return res.status(400).json({ error: \"Unknown printer\" });\n    const c = getConnector(p.connector);\n    if (!c.getHealth)"
+      }
+    },
+    {
+      "name": "requireAuth-dropped",
+      "base": {
+        "file": "server.js",
+        "find": "app.get(\"/api/health\", requireAuth, async (req, res) => {",
+        "replace": "app.get(\"/api/health\", requireAuth && ((q, s, n) => n()), async (req, res) => {"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "app.get(\"/api/health\", requireAuth, async (req, res) => {",
+        "replace": "app.get(\"/api/health\", requireAuth && ((q, s, n) => n()), async (req, res) => {"
+      }
+    },
+    {
+      "name": "dwell-20s",
+      "base": {
+        "file": "server.js",
+        "find": "const HEATER_DWELL_MS = 30000;",
+        "replace": "const HEATER_DWELL_MS = 20000;"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "const HEATER_DWELL_MS = 30000;",
+        "replace": "const HEATER_DWELL_MS = 20000;"
+      }
+    },
+    {
+      "name": "dwell-strict-greater",
+      "base": {
+        "file": "server.js",
+        "find": "h.state = (now - since >= HEATER_DWELL_MS)",
+        "replace": "h.state = (now - since > HEATER_DWELL_MS)"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "h.state = (now - since >= HEATER_DWELL_MS)",
+        "replace": "h.state = (now - since > HEATER_DWELL_MS)"
+      }
+    },
+    {
+      "name": "band-5C",
+      "base": {
+        "file": "server.js",
+        "find": "const HEATER_TARGET_BAND_C = 3;",
+        "replace": "const HEATER_TARGET_BAND_C = 5;"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "const HEATER_TARGET_BAND_C = 3;",
+        "replace": "const HEATER_TARGET_BAND_C = 5;"
+      }
+    },
+    {
+      "name": "dwell-keyed-by-heater",
+      "base": {
+        "file": "server.js",
+        "find": "const key = p.id + \"|\" + h.name;",
+        "replace": "const key = h.name;"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "const key = p.id + \"|\" + h.name;",
+        "replace": "const key = h.name;"
+      }
+    },
+    {
+      "name": "fan-first-observation",
+      "base": {
+        "file": "server.js",
+        "find": "if (fanMismatchSeen.get(key)) {",
+        "replace": "if (true) {"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "if (fanMismatchSeen.get(key)) {",
+        "replace": "if (true) {"
+      }
+    },
+    {
+      "name": "fan-memory-reset",
+      "base": {
+        "file": "server.js",
+        "find": "function checkFanMismatch(p, health) {\n  const reasons = [];",
+        "replace": "function checkFanMismatch(p, health) {\n  fanMismatchSeen.clear();\n  const reasons = [];"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "function checkFanMismatch(p, health) {\n    const reasons = [];",
+        "replace": "function checkFanMismatch(p, health) {\n    fanMismatchSeen.clear();\n    const reasons = [];"
+      }
+    },
+    {
+      "name": "heater-keyed-by-name",
+      "base": {
+        "file": "server.js",
+        "find": "const key = p.id + \"|\" + h.name;",
+        "replace": "const key = p.name + \"|\" + h.name;"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "const key = p.id + \"|\" + h.name;",
+        "replace": "const key = p.name + \"|\" + h.name;"
+      }
+    },
+    {
+      "name": "heater-cleared-per-request",
+      "base": {
+        "file": "server.js",
+        "find": "function annotateHeaterStates(p, health) {\n  if (!health.heaters || !health.heaters.available) return;",
+        "replace": "function annotateHeaterStates(p, health) {\n  heaterStableSince.clear();\n  if (!health.heaters || !health.heaters.available) return;"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "function annotateHeaterStates(p, health) {\n    if (!health.heaters || !health.heaters.available) return;",
+        "replace": "function annotateHeaterStates(p, health) {\n    heaterStableSince.clear();\n    if (!health.heaters || !health.heaters.available) return;"
+      }
+    },
+    {
+      "name": "gcode-list-left",
+      "base": {
+        "file": "server.js",
+        "find": "  } finally {\n    delete gcodes.fileNames;\n  }",
+        "replace": "  } finally {\n  }"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "  } finally {\n      delete gcodes.fileNames;\n    }",
+        "replace": "  } finally {\n    }"
+      }
+    },
+    {
+      "name": "retention-in-hours",
+      "base": {
+        "file": "server.js",
+        "find": "const sinceSec = Date.now() / 1000 - CFG.gcodeSyncRetentionDays * 86400;",
+        "replace": "const sinceSec = Date.now() / 1000 - CFG.gcodeSyncRetentionDays * 3600;"
+      },
+      "head": {
+        "file": "routes/health.js",
+        "find": "const sinceSec = Date.now() / 1000 - getConfig().gcodeSyncRetentionDays * 86400;",
+        "replace": "const sinceSec = Date.now() / 1000 - getConfig().gcodeSyncRetentionDays * 3600;"
+      }
+    }
+  ],
+  "contractSets": [
+    "health",
+    "smoke"
+  ],
+  "rollback": {
+    "beforeTheExtractionIsCommitted": "git restore --source=f0a917f --staged --worktree Dockerfile server.js test/connectorCoreMethods.test.js test/health-maintenance.test.js test/healthRoute.test.js test/helpers/healthCode.js && rm -r routes  (removes only the uncommitted extraction)",
+    "undoTheExtractionOnly": "git revert <extraction commit>  (a new commit that removes routes/health.js and restores server.js, Dockerfile and the four test files; keeps both tooling commits)",
+    "resetToTheManifestCorrection": "git reset --keep <manifest-correction commit>  (removes only the extraction commit; worktree refactor/health only)",
+    "resetToTheVerifiedBaseline": "git reset --keep f0a917f  (removes the extraction commit AND the manifest-correction commit; keeps the verified tooling)",
+    "neverUse": "git reset --keep d9e14f8 — it would also remove tooling commit f0a917f (this manifest, the codemod and the verifier corrections)",
+    "production": "untouched: production main is 9bd447a; nothing has been merged, pushed or deployed"
+  },
+  "reconciliation": {
+    "sourceLines": 198,
+    "firstLine": 4647,
+    "lastLine": 4844,
+    "rewriteOccurrences": {
+      "CFG": 6,
+      "PRINTERS": 1
+    },
+    "movedCount": 15,
+    "moduleScope": [
+      "DISK_CRITICAL_PCT",
+      "DISK_CRITICAL_BYTES",
+      "fanMismatchSeen",
+      "FAN_COMMANDED_THRESHOLD",
+      "FAN_STOPPED_RPM_THRESHOLD",
+      "HEATER_TARGET_BAND_C",
+      "HEATER_DWELL_MS",
+      "heaterStableSince",
+      "HEALTH_DEADLINE_MS",
+      "HEALTH_TIMED_OUT"
+    ],
+    "insideRegister": [
+      "checkFanMismatch",
+      "annotateHeaterStates",
+      "annotateGcodeUnusedCount",
+      "computeHealthAttention"
+    ],
+    "route": "GET /api/health"
+  },
+  "helperExposure": "registerHealthRoutes returns { checkFanMismatch, annotateHeaterStates, annotateGcodeUnusedCount, computeHealthAttention } for test/helpers/healthCode.js; server.js ignores it.",
+  "placement": "server.js lines 4646-4844 are replaced at the same position by the require and the registerHealthRoutes(app, { requireAuth, getConfig: () => CFG, getPrinters: () => PRINTERS, getConnector, printerVisibleTo, probeCached, computeMaintenanceAttention, connHttp }) call.",
+  "verifiedBaseline": {
+    "commit": "f0a917f00bc2902c87449d29764c72b3d1ce52c9",
+    "meaning": "the verified pre-extraction baseline: tooling commit f0a917f (on d9e14f8, on production 9bd447a). V1-V11 ran with base = this commit's files and head = the extracted worktree files (report tools/refactor/out/verify/phase3-actual/report.json, gitignored)."
+  },
+  "extractionParent": "The extraction commit's immediate parent is the tooling-only commit that corrected this manifest (it changes nothing but this file). Its application and test files are identical to the verified baseline f0a917f; the verifier's --base for re-runs may be either."
+}

@@ -30,7 +30,7 @@ const assert = require("node:assert/strict");
 const ws = require("../../connectors/snapmaker-u1-klipper-ws");
 const { normalizeU1State, OBJECTS, handleMessage, isHealthy, newConn } = ws._internal;
 
-const P = { id: "u1-black", name: "U1 Black", url: "http://192.168.4.191" };
+const P = { id: "u1-black", name: "U1 Black", url: "http://192.168.40.191" };
 
 function healthyConn() {
   const c = newConn(P);

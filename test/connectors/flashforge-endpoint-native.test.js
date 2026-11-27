@@ -27,11 +27,14 @@ const STORED_URL = "http://" + HOST + ":7125";
 const json = b => new Response(JSON.stringify(b), { status: 200, headers: { "content-type": "application/json" } });
 
 // A STOCK FlashForge printer: the native API answers on 8898, nothing else does.
+// Once sent a start it reports printing, so the start's confirmation ends at
+// once instead of waiting out its window. Reset by installSpy().
+let started = false;
 function respond(url) {
   const u = new URL(url);
   if (u.port !== "8898") return new Response("", { status: 502 });
   const detail = {
-    status: "ready", printProgress: 0, platTemp: 20, platTargetTemp: 0, rightTemp: 21, rightTargetTemp: 0,
+    status: started ? "printing" : "ready", printProgress: 0, platTemp: 20, platTargetTemp: 0, rightTemp: 21, rightTargetTemp: 0,
     hasMatlStation: true,
     matlStationInfo: {
       slotCnt: 4, currentSlot: 1,
@@ -40,12 +43,13 @@ function respond(url) {
   };
   if (u.pathname === "/detail") return json({ code: 0, detail });
   if (u.pathname === "/control") return json({ code: 0 });
-  if (u.pathname === "/printGcode") return json({ code: 0 });
+  if (u.pathname === "/printGcode") { started = true; return json({ code: 0 }); }
   if (u.pathname === "/gcodeList") return json({ code: 0, gcodeListDetail: [] });
   return json({ code: 0 });
 }
 
 function installSpy() {
+  started = false;
   const calls = [];
   const original = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {

@@ -22,6 +22,10 @@ const statOf = st => ({ size: st.size, mtimeMs: st.mtimeMs, isFile: st.isFile(),
 const ops = {
   stat: p => statOf(fs.statSync(p)),
   lstat: p => statOf(fs.lstatSync(p)),
+  // What a file is, finely enough to tell that it changed (§37 P2/A4): an
+  // in-place edit of the same size still moves its modified and changed
+  // times. Nanosecond times, inode and device as strings (bigint stat).
+  identity: p => { const s = fs.statSync(p, { bigint: true }); return { size: Number(s.size), mtimeMs: Number(s.mtimeMs), mtimeNs: String(s.mtimeNs), ctimeNs: String(s.ctimeNs), ino: String(s.ino), dev: String(s.dev) }; },
   // false only for "not there"; any other failure (an unreachable share) throws.
   exists: p => { try { fs.statSync(p); return true; } catch (e) { if (e.code === "ENOENT" || e.code === "ENOTDIR") return false; throw e; } },
   realpath: p => fs.realpathSync.native(p),
@@ -85,6 +89,26 @@ const ops = {
   writeFileExclusive: (p, data) => { fs.writeFileSync(p, Buffer.from(data.buffer, data.byteOffset, data.byteLength), { flag: "wx" }); return true; },
   mkdir: (p, { recursive = false } = {}) => { fs.mkdirSync(p, { recursive }); return true; },
   rename: (a, b) => { fs.renameSync(a, b); return true; },
+  // A move that never replaces an existing target (moveNoReplace.js).
+  moveNoReplace: (a, b) => require("./moveNoReplace").moveNoReplace(fs, a, b),
+  // Removes one file for good (the File Browser's permanent delete), only if
+  // it is still the regular file the caller checked: its identity (as the
+  // identity op reports it, BigInt-exact) must be unchanged — size, modified
+  // and change times in ns, inode, device. On an SMB mount the inode is the
+  // server's own file id (serverino): a file replaced by another of the same
+  // size and modified time has a different one (measured on a NAS share,
+  // 2026-11-05). Anything else is ECHANGED and nothing is removed. The removal
+  // itself is by path: a change in the instant between this check and the
+  // unlink cannot be ruled out. The only removal netfs offers.
+  unlinkFile: (p, expect) => {
+    const s = fs.lstatSync(p, { bigint: true });
+    const now = { size: Number(s.size), mtimeNs: String(s.mtimeNs), ctimeNs: String(s.ctimeNs), ino: String(s.ino), dev: String(s.dev) };
+    if (!s.isFile() || !expect || ["size", "mtimeNs", "ctimeNs", "ino", "dev"].some(k => expect[k] == null || String(expect[k]) !== String(now[k]))) {
+      throw Object.assign(new Error("the file changed since it was checked"), { code: "ECHANGED" });
+    }
+    fs.unlinkSync(p);
+    return true;
+  },
   // File search: a recursive walk matching names, capped. Dot-directories
   // (.thumbs) are skipped, as the file browser's own walk always did.
   walk: (dir, { query, filter, limit = 300 }) => {

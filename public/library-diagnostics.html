@@ -92,7 +92,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const stem = n => String(n || "").replace(/\.[^./\\]+$/, "");
 const base = p => String(p || "").split("/").pop();
 const PAGE = 100;
 let DATA = null, TAB = "models", shown = PAGE;
@@ -177,7 +176,7 @@ function fileRow(f) {
   const titleInfo = t ? `<details><summary>Title</summary><ul class="ev"><li><span class="k">original</span> ${esc(t.original)}</li><li><span class="k">normalised</span> ${esc(t.normalized) || "∅"}${t.genericScore ? ` <span class="k">(generic ${esc(t.genericScore)})</span>` : ""}</li>${(t.transformations || []).map(x => `<li><span class="k">${esc(x.rule)}</span> removed “${esc(x.removed)}”</li>`).join("")}</ul></details>` : "";
   const proj = f.project ? `<span class="path">3MF ${esc(f.project.flavour)} · ${f.project.plates} plate(s), ${f.project.printablePlates} printable${f.project.designer ? " · " + esc(f.project.designer) : ""}${f.project.designModelId ? " · design " + esc(f.project.designModelId) : ""}</span>` : "";
   const lin = f.lineage.length ? `<details><summary>Lineage (${f.lineage.length})</summary><ul class="ev">${f.lineage.map(l => `<li><span class="k">${esc(l.relation)} ${l.direction === "out" ? "→" : "←"}</span> ${esc(l.other)} ${pill(l.state, l.confidence + " · " + l.state)} <span class="k">${esc(l.method)}</span></li>`).join("")}</ul></details>` : "";
-  return `<tr><td class="file"><span class="name" title="${esc(base(f.location))}">${esc(stem(base(f.location)))}</span><span class="path" title="${esc(f.location)}">${esc(f.location)}</span>
+  return `<tr><td class="file"><span class="name" title="${esc(base(f.location))}">${esc(base(f.location))}</span><span class="path" title="${esc(f.location)}">${esc(f.location)}</span>
       <span class="path">${esc(f.role)}${f.state !== "present" ? " · " + esc(f.state) : ""}${f.identity && f.identity !== "verified" ? " · " + esc(f.identity) : ""}</span>${proj}${titleInfo}${lin}</td>
     <td>${printers || '<span class="sub">—</span>'}</td>
     <td>${pill(conf, conf === "none" ? "standalone" : conf)} <span class="sub">${esc(w.method)}</span>${w.note ? `<div class="why">${esc(w.note)}</div>` : ""}

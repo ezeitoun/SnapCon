@@ -17,7 +17,8 @@ const REGISTRY = {
   "flashforge-adventurer": () => require("./flashforge-adventurer"),
   "flashforge-ad5x": () => require("./flashforge-ad5x"),
   "bambu-lab": () => require("./bambu-lab"),
-  "simulator": () => require("./dummy-simulator")
+  "simulator": () => require("./dummy-simulator"),
+  "virtual-u1": () => require("./virtual-u1")
 };
 
 const DEFAULT_TYPE = "snapmaker-u1-klipper-ws";
@@ -33,8 +34,16 @@ function getConnector(type) {
 function listConnectorTypes() {
   return Object.keys(REGISTRY).map(type => {
     const c = getConnector(type);
-    return { type, label: c.label || type, brand: c.brand || c.label || type, capabilities: c.capabilities, address: getAddress(type) };
+    return { type, label: c.label || type, brand: c.brand || c.label || type, capabilities: c.capabilities, address: getAddress(type), virtual: isVirtualType(type), virtualOptions: c.virtualOptions || null };
   });
+}
+
+// A virtual printer is one with no real machine behind it (the Simulator, the
+// Virtual U1): the connector says so with `virtual: true`. They are shown only
+// while Settings › General › Enable virtual printers is on. An unknown type
+// is not virtual — it falls back to the default connector, a real printer.
+function isVirtualType(type) {
+  return !!REGISTRY[type] && getConnector(type).virtual === true;
 }
 
 // How a printer on this connector is addressed. `scheme` and `defaultPort`
@@ -61,4 +70,4 @@ function getCapabilities(type, printer) {
   return typeof c.getCapabilities === "function" ? c.getCapabilities(printer) : c.capabilities;
 }
 
-module.exports = { getConnector, listConnectorTypes, getCapabilities, getAddress, DEFAULT_TYPE, CONNECTOR_TYPES: Object.keys(REGISTRY) };
+module.exports = { getConnector, listConnectorTypes, isVirtualType, getCapabilities, getAddress, DEFAULT_TYPE, CONNECTOR_TYPES: Object.keys(REGISTRY) };

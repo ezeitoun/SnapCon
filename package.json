@@ -1,6 +1,6 @@
 {
   "name": "snapcon",
-  "version": "0.8.0",
+  "version": "2026.11.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ezeitoun/SnapCon.git"
@@ -14,6 +14,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test \"test/**/*.test.js\"",
+    "bench:utilization": "node scripts/bench-utilization.js",
+    "test:update-golden": "node test/fixtures/card-golden/regenerate.js",
     "build": "pkg . --targets node22-win-x64,node22-macos-x64,node22-macos-arm64,node22-linux-x64 --out-path dist --no-bytecode --public"
   },
   "dependencies": {
@@ -26,7 +28,9 @@
     "assets": [
       "public/**/*",
       "parser.js",
-      "locales-default/**/*"
+      "locales-default/**/*",
+      "fixtures/virtual-u1/captures/**/*",
+      "THIRD_PARTY_NOTICES.md"
     ],
     "targets": [
       "node22-win-x64",
@@ -37,7 +41,8 @@
     "outputPath": "dist",
     "scripts": [
       "library/indexer-worker.js",
-      "netfs/netfs-worker.js"
+      "netfs/netfs-worker.js",
+      "utilization/checkpoint-worker.js"
     ]
   },
   "allowScripts": {

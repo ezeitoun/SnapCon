@@ -1,0 +1,11 @@
+id: route-module-no-server-require
+valid:
+  - 'const { printerVisibleTo } = require("../groupAccess");'
+  - 'const x = require("../serverless");'
+  - 'const y = require("./server-utils");'
+  - 'const s = "../server";'
+invalid:
+  - 'const s = require("../server");'
+  - "const s = require('../server.js');"
+  - 'require("./server")'
+  - 'const s = require("../../server");'

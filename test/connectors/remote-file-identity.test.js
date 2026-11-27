@@ -55,7 +55,7 @@ function withMockFetch(handler, fn) {
   global.fetch = handler;
   return Promise.resolve(fn()).finally(() => { global.fetch = real; });
 }
-const P = { url: "http://192.168.4.193" };
+const P = { url: "http://192.168.40.193" };
 
 test("a file the printer does not have is reported absent, and nothing is read", async () => {
   const local = tmpFile(filled(5000, 1));

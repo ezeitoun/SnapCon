@@ -28,7 +28,7 @@ const sandbox = {
   esc: s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
 };
 vm.createContext(sandbox);
-vm.runInContext(["printerShowsOffline", "cardMode", "offlineSeenText", "printerHost", "preheatAttrs", "fmtDuration", "stripExt", "queuedFileBannerHtml", "statusColorText"].map(extractFn).join("\n"), sandbox);
+vm.runInContext(["printerShowsOffline", "cardMode", "offlineSeenText", "printerHost", "preheatAttrs", "fmtDuration", "queuedFileBannerHtml", "stagedBannerActions", "statusColorText"].map(extractFn).join("\n"), sandbox);
 const call = (name, ...a) => vm.runInContext(name, sandbox)(...a);
 
 // ---- which card ----
@@ -87,11 +87,18 @@ test("never reached since SnapCon started (null, or anything unparsable)", () =>
 
 // ---- the staged file on an offline card ----
 
-test("a ready staged file shows on the offline card only, extension stripped, full name in the title", () => {
+test("a ready staged file shows on the offline card only, with its extension, full name also in the title", () => {
   const p = { queuedFile: { name: "Beardie <v2>.gcode", status: "ready" } };
   assert.equal(call("queuedFileBannerHtml", p), "", "the normal card says it with its Loaded badge instead");
   const html = call("queuedFileBannerHtml", p, { readyToo: true });
-  assert.match(html, /^<div class="queued-banner ready" title="Beardie &lt;v2&gt;\.gcode"><span class="queued-banner-text">fleet\.queued\.ready_banner \{"name":"Beardie <v2>"\}<\/span><\/div>$/);
+  assert.match(html, /^<div class="queued-banner ready" title="Beardie &lt;v2&gt;\.gcode"><span class="queued-banner-text">fleet\.queued\.ready_banner \{"name":"Beardie <v2>\.gcode"\}<\/span><\/div>$/);
+});
+
+test("queued, staging and failed banners carry the file's full name in a title", () => {
+  for (const status of ["queued", "uploading", "error"]) {
+    const html = call("queuedFileBannerHtml", { queuedFile: { name: "Beardie <v2>.gcode", status, error: "x" } });
+    assert.match(html, /^<div class="queued-banner (work|err)" title="Beardie &lt;v2&gt;\.gcode">/, status);
+  }
 });
 
 // ---- the card's structure ----
@@ -121,7 +128,7 @@ test("offline and updating/rebooting cards keep only the web-interface link; nor
 test("the link's tooltip carries the host, so the address the card no longer shows is still reachable", () => {
   assert.match(build, /t\("printer\.action_web_interface_title",\{host:printerHost\(p\.url\)\}\)/);
   assert.equal(call("printerHost", "http://192.168.1.47"), "192.168.1.47");
-  assert.equal(call("printerHost", "http://192.168.4.212:8898"), "192.168.4.212:8898");
+  assert.equal(call("printerHost", "http://192.168.40.212:8898"), "192.168.40.212:8898");
   assert.equal(call("printerHost", "not a url"), "not a url");
   assert.equal(call("printerHost", undefined), "");
 });

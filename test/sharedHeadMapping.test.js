@@ -7,6 +7,7 @@
 // filament), and every connector sends one assignment per color, so the
 // refusal is gone. /api/printfile never had it.
 const test = require("node:test");
+const { routeEnd } = require("./helpers/routeEnd");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const http = require("node:http");
@@ -16,7 +17,7 @@ const serverSrc = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8
 
 test("/api/print no longer refuses colors that share a head", () => {
   assert.doesNotMatch(serverSrc, /mapped to the same/);
-  const route = serverSrc.slice(serverSrc.indexOf('app.post("/api/print"'), serverSrc.indexOf("\n});", serverSrc.indexOf('app.post("/api/print"')));
+  const route = serverSrc.slice(serverSrc.indexOf('app.post("/api/print"'), routeEnd(serverSrc, serverSrc.indexOf('app.post("/api/print"')));
   assert.doesNotMatch(route, /new Set\(heads\)\.size/);
   assert.match(route, /tools = Object\.keys\(map\)\.map\(Number\)\.sort\(\(a, b\) => a - b\);/, "the mapping still reaches the connector");
 });

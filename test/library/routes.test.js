@@ -111,10 +111,16 @@ test("M2: the raw diagnostic view and scan statistics are admin-only; thumbnails
   const s = await server(t);
   fs.writeFileSync(path.join(s.base, "gcode", "a.gcode"), require("./helpers/gcode").gcodeFile({ printerModel: "Snapmaker U1" }));
   assert.equal((await s.call("admin", "POST", "/api/library/roots/gcode/rescan")).status, 200);
+  // The thumbnail is written with the file, the printer family by a separate
+  // targets_printer claim: wait for the indexer, then for both (docs/TODO.md
+  // §41 #7 — polling for the thumbnail alone rarely raced the claim under a
+  // full parallel run).
   let raw;
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < 400; i++) {
+    await s.library._idle();
     raw = await s.call("admin", "GET", "/api/library/diagnostics/raw");
-    if (raw.body.files && raw.body.files.length && raw.body.files[0].thumb) break;
+    const f = raw.body.files && raw.body.files[0];
+    if (f && f.thumb && f.printer && f.printer.family) break;
     await new Promise(r => setTimeout(r, 25));
   }
   assert.equal(raw.status, 200);

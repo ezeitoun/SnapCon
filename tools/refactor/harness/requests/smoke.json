@@ -1,0 +1,18 @@
+{
+  "comment": "Lightweight read-only regression smoke set: GET routes only; nothing that writes or sends a printer command.",
+  "steps": [
+    { "do": "login", "user": "admin", "password": "admin-pass-1" },
+    { "do": "request", "id": "smoke-version-anon", "path": "/api/version" },
+    { "do": "request", "id": "smoke-session-anon", "path": "/api/session" },
+    { "do": "request", "id": "smoke-session-admin", "path": "/api/session", "as": "admin" },
+    { "do": "request", "id": "smoke-public-locales", "path": "/api/public-locales" },
+    { "do": "request", "id": "smoke-printers", "path": "/api/printers", "as": "admin" },
+    { "do": "request", "id": "smoke-fleet", "path": "/api/fleet", "as": "admin" },
+    { "do": "request", "id": "smoke-config", "path": "/api/config", "as": "admin" },
+    { "do": "request", "id": "smoke-connectors", "path": "/api/connectors", "as": "admin" },
+    { "do": "request", "id": "smoke-maintenance", "path": "/api/maintenance?printer=0", "as": "admin" },
+    { "do": "request", "id": "smoke-queue-store-status", "path": "/api/queue-store/status", "as": "admin" },
+    { "do": "request", "id": "smoke-library-status", "path": "/api/library/status", "as": "admin" },
+    { "do": "request", "id": "smoke-fleet-anon-401", "path": "/api/fleet" }
+  ]
+}

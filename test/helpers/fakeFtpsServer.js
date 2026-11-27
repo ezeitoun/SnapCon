@@ -10,7 +10,12 @@ const tls = require("tls");
 // refuseStor: answer STOR with 550 before any data moves (what a full disk or a
 // read-only path looks like). cutUploadAfter: accept that many bytes and then
 // drop the data connection, which is how a truncated file gets onto a printer.
-function createFakeFtpsServer({ key, cert, accessCode, files = {}, noRest = false, noSize = false, refuseStor = false, cutUploadAfter = 0 }) {
+// endUploadAfter: accept that many bytes and then close the data connection
+// cleanly (TLS close, no reset), keeping what arrived, as a printer that hangs
+// up early would; afterStor then applies to it as to a whole upload.
+// afterStor: what happens once a whole upload is in — "silent" stores it and
+// never sends 226, "drop" stores it and closes the control connection.
+function createFakeFtpsServer({ key, cert, accessCode, files = {}, noRest = false, noSize = false, sizeReply = null, refuseStor = false, cutUploadAfter = 0, endUploadAfter = 0, afterStor = null }) {
   const state = { logins: 0, commands: [], bytesSent: 0, retrs: 0, sockets: new Set(), stored: {} };
   const server = tls.createServer({ key, cert }, (sock) => {
     state.sockets.add(sock);
@@ -45,6 +50,7 @@ function createFakeFtpsServer({ key, cert, accessCode, files = {}, noRest = fals
       if (cmd === "TYPE") return reply("200 Type set");
       if (cmd === "SIZE") {
         if (noSize) return reply("502 Command not implemented");
+        if (sizeReply) return reply(sizeReply(arg));   // a test's own answer, verbatim
         return files[arg] ? reply("213 " + files[arg].length) : reply("550 No such file");
       }
       if (cmd === "REST") {
@@ -69,16 +75,19 @@ function createFakeFtpsServer({ key, cert, accessCode, files = {}, noRest = fals
             if (cut) return;
             got += c.length; chunks.push(c);
             if (cutUploadAfter && got >= cutUploadAfter) { cut = true; d.destroy(); resolve(); }
+            else if (endUploadAfter && got >= endUploadAfter) { cut = "ended"; d.end(); resolve(); }
           });
           d.on("end", resolve);
           d.on("close", resolve);
           d.on("error", resolve);
         });
         p.ds.close();
-        if (cut) return reply("426 Transfer aborted");
+        if (cut === true) return reply("426 Transfer aborted");
         const body = Buffer.concat(chunks);
         state.stored[arg] = body;
         files[arg] = body;          // a stored file is readable and SIZE-able afterwards
+        if (afterStor === "silent") return;
+        if (afterStor === "drop") return sock.destroy();
         return reply("226 Transfer complete");
       }
       if (cmd === "DELE") {

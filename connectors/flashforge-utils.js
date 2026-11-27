@@ -11,7 +11,7 @@
 const netfs = require("../netfs").getNetFs();
 const http = require("http");
 const net = require("net");
-const { Transform } = require("stream");
+const httpUtils = require("./http-utils");
 const { normHex } = require("../parser");
 
 // Port 8898 is FlashForge's HTTP API port — not the obvious default the way
@@ -308,7 +308,14 @@ const bedTemp = (p, t) => ffControl(p, "temperatureCtl_cmd", { platform: Math.ro
 // attempts override so the behaviour remains testable/measurable, but no
 // production path re-issues a start today.
 const PRINT_CONFIRM_ATTEMPTS = 1;
-const PRINT_CONFIRM_WINDOW_MS = 2500;
+// How long a start may take to show as "printing". A healthy 5.1.7 start
+// took 2674ms in all, past the old 2500ms window, which would have reported
+// a real print as failed (docs/TODO.md §2). 15s leaves a wide margin, also
+// for the AD5X's material station, which is unmeasured. Only a start that is
+// slow or never shows costs the extra wait: the loop returns as soon as the
+// printer reports printing, and the start sequence lock (STARTING in
+// server.js) keeps any other start off this printer meanwhile.
+const PRINT_CONFIRM_WINDOW_MS = 15000;
 const PRINT_CONFIRM_POLL_MS = 500;
 // Mapped states (STATE_MAP output) that mean "a person has to act", not
 // "the command was dropped".
@@ -350,12 +357,60 @@ async function issuePrintAndConfirm(p, body, opts = {}) {
     + " attempts) — this can happen right after a large upload. Try again.");
 }
 
-const startPrintFile = (p, filename) => issuePrintAndConfirm(p, { fileName: filename, levelingBeforePrint: false });
+// levelingBeforePrint: the job's Auto-level choice, else the printer's own
+// default (Settings > printer > Auto-level) — the U1's withPrefFallback rule.
+// On a 5M PRO it adds about 4–5 min before the print (docs/TODO.md §40).
+const startPrintFile = (p, filename, opts = {}) => {
+  const asked = opts.prefs && opts.prefs.autoLevel;
+  const levelingBeforePrint = asked !== undefined ? !!asked : !!p.autoLevel;
+  return issuePrintAndConfirm(p, { fileName: filename, levelingBeforePrint });
+};
 
 // ---- File management ----
 async function listFiles(p) {
   const j = await ffPost(p, "/gcodeList", {}, 8000);
   return (j.gcodeList || []).map(name => ({ path: name, size: null, modified: null }));
+}
+
+// Read back after an upload (docs/TODO.md §37 P2, decision D1). The stock API
+// lists names only — no size, no ranged reads — so the most it can say is that
+// the printer has a file by that name: "acknowledged", never "verified". Not
+// listed after a few tries is "absent"; a list that cannot be read is
+// "unverifiable". The server starts nothing on either.
+// opts (tests shorten them): attempts, retryMs.
+// The list is read from /gcodeList's gcodeList (a 5M PRO: names, newest
+// first, ten of them — seen 2026-10-27, files uploaded and never printed
+// included) or gcodeListDetail[].gcodeFileName (an AD5X). An answer with
+// neither is not a listing. Each read has one deadline, body included: ffPost
+// times the headers only.
+const FF_LIST_CAP = 10;
+async function verifyUpload(p, name, localPath, { attempts = 3, retryMs = 1500, readTimeoutMs = 10000 } = {}) {
+  const base = s => String(s).replace(/\\/g, "/").split("/").pop();
+  const read = async () => {
+    let timer;
+    const deadline = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(readTimeoutMs / 1000)} s`)), readTimeoutMs); });
+    try { return await Promise.race([ffPost(p, "/gcodeList", {}, readTimeoutMs), deadline]); }
+    finally { clearTimeout(timer); }
+  };
+  let listed = false, lastError = null, lastLength = 0;
+  for (let i = 0; i < attempts; i++) {
+    if (i) await new Promise(r => setTimeout(r, retryMs));
+    try {
+      const j = await read();
+      const names = Array.isArray(j.gcodeList) ? j.gcodeList
+        : Array.isArray(j.gcodeListDetail) ? j.gcodeListDetail.map(d => d && d.gcodeFileName) : null;
+      if (!names) { lastError = "the printer's answer is not a file list"; continue; }
+      listed = true;
+      lastLength = names.length;
+      if (names.some(n => n != null && base(n) === name)) return { result: "acknowledged", basis: "name", evidence: `${name} is in the printer's file list (the stock firmware lists names only)` };
+    } catch (e) { lastError = e.message; }
+  }
+  // Absent only from a list that is provably whole: a 5M PRO lists its ten
+  // newest files, so a name missing from a full list may simply be older.
+  if (listed && lastLength >= FF_LIST_CAP) return { result: "unverifiable", evidence: `the printer lists only its ${lastLength} newest files, and ${name} is not among them` };
+  return listed
+    ? { result: "absent", evidence: `${name} is not in the printer's file list` }
+    : { result: "unverifiable", evidence: "the printer's file list could not be read" + (lastError ? ": " + lastError : "") };
 }
 async function getThumbnail(p, file) {
   const j = await ffPost(p, "/gcodeThumb", { fileName: file }, 8000);
@@ -393,54 +448,30 @@ async function getFileMetadata(p, file) {
 
 // Upload: unlike Moonraker's plain multipart POST, FlashForge's /uploadGcode
 // puts auth + print options in HEADERS (not form fields) alongside a
-// multipart body carrying just the file bytes.
+// multipart body carrying just the file bytes. The transfer itself, with its
+// deadlines and cancel, is the shared one (http-utils sendMultipartUpload).
+//
+// The printer's answer is {code, message}: code 0 accepts the file, any other
+// code refuses it. An answer that is not that JSON (empty, HTML, cut off) says
+// nothing about the file, so it is Unknown, never success (docs/TODO.md §37 D1).
 async function uploadFile(p, fp, name, job) {
   const fileSize = (await netfs.stat(fp)).size;   // the job file may be on a NAS — see http-utils
-  return new Promise((resolve, reject) => {
-    const boundary = "----snapcon" + Math.random().toString(16).slice(2);
-    const pre = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="gcodeFile"; filename="${name}"\r\nContent-Type: application/octet-stream\r\n\r\n`);
-    const post = Buffer.from(`\r\n--${boundary}--\r\n`);
-    job.total = pre.length + fileSize + post.length;
-    job.sent = 0;
-    const u = new URL(baseUrl(p) + "/uploadGcode");
-    const req = http.request({
-      protocol: u.protocol, hostname: u.hostname, port: u.port || 80, path: u.pathname, method: "POST",
-      headers: {
-        "Content-Type": "multipart/form-data; boundary=" + boundary, "Content-Length": job.total,
-        serialNumber: p.serial || "", checkCode: p.verificationCode || "",
-        fileSize: String(fileSize), printNow: "false", levelingBeforePrint: "false"
+  return httpUtils.sendMultipartUpload({
+    url: baseUrl(p) + "/uploadGcode", field: "gcodeFile", name, fp, job,
+    headers: {
+      serialNumber: p.serial || "", checkCode: p.verificationCode || "",
+      fileSize: String(fileSize), printNow: "false", levelingBeforePrint: "false"
+    },
+    judge: (status, body) => {
+      // UPLOAD_REJECTED: the printer answered and refused the file (see http-utils).
+      if (status >= 300) throw httpUtils.uploadError("Upload " + status + ": " + body.slice(0, 160), "UPLOAD_REJECTED", "failed");
+      let reply;
+      try { reply = JSON.parse(body); } catch { reply = undefined; }
+      if (!reply || typeof reply !== "object") {
+        throw httpUtils.uploadError("The printer's answer to the upload could not be read: " + (body.slice(0, 80) || "(empty)"), "UPLOAD_UNCONFIRMED", "unknown", { reason: "unreadable-reply" });
       }
-    }, res => {
-      let b = ""; res.setEncoding("utf8"); res.on("data", d => b += d);
-      res.on("end", () => {
-        // UPLOAD_REJECTED: the printer answered and refused the file (see http-utils).
-        const rejected = msg => Object.assign(new Error(msg), { code: "UPLOAD_REJECTED" });
-        if (res.statusCode >= 300) return reject(rejected("Upload " + res.statusCode + ": " + b.slice(0, 160)));
-        try { if (JSON.parse(b).code !== 0) return reject(rejected(JSON.parse(b).message || "Upload failed")); }
-        catch { /* non-JSON 2xx body — treat as success */ }
-        resolve(b);
-      });
-    });
-    req.on("error", e => { job.cancelUpload = null; reject(e); });
-    req.write(pre); job.sent += pre.length;
-    const fileStream = netfs.createReadStream(fp);
-    const counter = new Transform({ transform(chunk, _e, cb) { job.sent += chunk.length; cb(null, chunk); } });
-    // A failed local read aborts the request: never a short body the printer
-    // could take as a whole file.
-    fileStream.on("error", e => { job.cancelUpload = null; req.destroy(e); reject(e); });
-    // Cancel (POST /api/print-cancel), possible only while bytes are still
-    // going out: the printer gets a body shorter than its Content-Length, a
-    // broken upload, never a complete-looking file (same as http-utils). Cleared once the last
-    // byte is written, after which it is too late to cancel.
-    job.cancelUpload = () => {
-      job.cancelUpload = null;
-      const e = new Error("Upload cancelled"); e.code = "UPLOAD_CANCELLED";
-      fileStream.destroy(); req.destroy(e); reject(e);
-    };
-    counter.on("error", reject);
-    counter.on("data", chunk => { if (!req.write(chunk)) { counter.pause(); req.once("drain", () => counter.resume()); } });
-    counter.on("end", () => { job.cancelUpload = null; req.write(post); job.sent += post.length; req.end(); });
-    fileStream.pipe(counter);
+      if (reply.code !== 0) throw httpUtils.uploadError(reply.message || "Upload failed", "UPLOAD_REJECTED", "failed");
+    },
   });
 }
 
@@ -530,5 +561,5 @@ module.exports = {
   _internal: { sendTcpSequence },
   baseUrl, fetchTimeout, ffPost, ffDetail, ffControl, STATE_MAP, decodeCommonStatus,
   pause, resume, cancel, eject, estop, bedTemp, startPrintFile, issuePrintAndConfirm,
-  listFiles, getThumbnail, getFileMetadata, uploadFile, getCameraSnapshot
+  listFiles, verifyUpload, getThumbnail, getFileMetadata, uploadFile, getCameraSnapshot
 };

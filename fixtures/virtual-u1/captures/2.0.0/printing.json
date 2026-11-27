@@ -1,0 +1,3559 @@
+{
+ "capturedAt": "2026-10-11",
+ "label": "printing",
+ "firmware": "2.0.0",
+ "klipperVersion": "2.0.0.205_20260914173503",
+ "moonrakerVersion": "2.0.0",
+ "printerInfo": {
+  "state": "ready",
+  "state_message": "Printer is ready",
+  "hostname": "lava",
+  "klipper_path": "/home/lava/klipper",
+  "python_path": "/usr/bin/python3",
+  "process_id": 1255,
+  "user_id": 1000,
+  "group_id": 1000,
+  "log_file": "/oem/klippylogs/klippy.log",
+  "config_file": "/home/lava/printer_data/config/printer.cfg",
+  "software_version": "2.0.0.205_20260914173503",
+  "cpu_info": "4 core ?"
+ },
+ "serverInfo": {
+  "klippy_connected": true,
+  "klippy_state": "ready",
+  "components": [
+   "secrets",
+   "template",
+   "klippy_connection",
+   "jsonrpc",
+   "internal_transport",
+   "application",
+   "websockets",
+   "database",
+   "dbus_manager",
+   "file_manager",
+   "authorization",
+   "klippy_apis",
+   "shell_command",
+   "machine",
+   "data_store",
+   "proc_stats",
+   "job_state",
+   "job_queue",
+   "history",
+   "http_client",
+   "httpx_client",
+   "announcements",
+   "webcam",
+   "extensions",
+   "snapmakercloud",
+   "octoprint_compat",
+   "client_manager",
+   "repeater",
+   "mqtt",
+   "exception_manager",
+   "zeroconf"
+  ],
+  "failed_components": [],
+  "registered_directories": [
+   "config",
+   "logs",
+   "gcodes",
+   "camera"
+  ],
+  "warnings": [],
+  "websocket_count": 3,
+  "moonraker_version": "2.0.0",
+  "missing_klippy_requirements": [],
+  "api_version": [
+   1,
+   4,
+   0
+  ],
+  "api_version_string": "1.4.0"
+ },
+ "systemInfo": {
+  "system_info": {
+   "python": {
+    "version": [
+     3,
+     11,
+     8,
+     "final",
+     0
+    ],
+    "version_string": "3.11.8 (main, Sep 14 2026, 17:15:06) [GCC 12.4.0]"
+   },
+   "product_info": {
+    "machine_type": "Snapmaker U1",
+    "nozzle_diameter": [
+     0.4,
+     0.4,
+     0.4,
+     0.4
+    ],
+    "serial_number": "VIRTUALU1000000000000",
+    "device_name": "Virtual U1",
+    "firmware_version": "2.0.0",
+    "software_version": "2.0.0"
+   },
+   "cpu_info": {
+    "cpu_count": 4,
+    "bits": "64bit",
+    "processor": "aarch64",
+    "cpu_desc": "",
+    "serial_number": "0000000000000000",
+    "hardware_desc": "",
+    "model": "",
+    "total_memory": 984740,
+    "memory_units": "kB"
+   },
+   "sd_info": {
+    "manufacturer_id": "32",
+    "manufacturer": "Unknown",
+    "oem_id": "0101",
+    "product_name": "MMC32",
+    "product_revision": "4.7",
+    "serial_number": "VIRTUALU1000000000000",
+    "manufacturer_date": "12/2022",
+    "capacity": "Unknown",
+    "total_bytes": 0
+   },
+   "distribution": {
+    "name": "Buildroot 2024.02",
+    "id": "buildroot",
+    "version": "2024.02",
+    "version_parts": {
+     "major": "2024",
+     "minor": "02",
+     "build_number": ""
+    },
+    "like": "buildroot",
+    "codename": "",
+    "release_info": {},
+    "kernel_version": "6.1.99"
+   },
+   "virtualization": {
+    "virt_type": "unknown",
+    "virt_identifier": "unknown"
+   },
+   "network": {
+    "wlan0": {
+     "mac_address": "02:00:00:00:00:01",
+     "ip_addresses": [
+      {
+       "family": "ipv4",
+       "address": "127.0.0.1",
+       "is_link_local": false
+      },
+      {
+       "family": "ipv6",
+       "address": "::1",
+       "is_link_local": true
+      }
+     ]
+    }
+   },
+   "canbus": {},
+   "provider": "none",
+   "available_services": [],
+   "service_state": {},
+   "instance_ids": {
+    "moonraker": "moonraker",
+    "klipper": "klipper"
+   }
+  }
+ },
+ "filesRoots": [
+  {
+   "name": "config",
+   "path": "/oem/printer_data/config",
+   "permissions": "rw"
+  },
+  {
+   "name": "logs",
+   "path": "/userdata/logs",
+   "permissions": "r"
+  },
+  {
+   "name": "gcodes",
+   "path": "/userdata/gcodes",
+   "permissions": "rw"
+  },
+  {
+   "name": "camera",
+   "path": "/oem/printer_data/camera",
+   "permissions": "r"
+  }
+ ],
+ "webcams": {
+  "webcams": []
+ },
+ "objectsList": [
+  "gcode",
+  "webhooks",
+  "exception_manager",
+  "configfile",
+  "mcu",
+  "mcu e0",
+  "mcu e1",
+  "mcu e2",
+  "mcu e3",
+  "gcode_move",
+  "print_stats",
+  "gcode_macro _PL_SAVE_VARIABLE",
+  "virtual_sdcard",
+  "pause_resume",
+  "display_status",
+  "gcode_macro M600",
+  "gcode_macro T4",
+  "gcode_macro T5",
+  "gcode_macro T6",
+  "gcode_macro T7",
+  "gcode_macro T8",
+  "gcode_macro T9",
+  "gcode_macro T10",
+  "gcode_macro T11",
+  "gcode_macro T12",
+  "gcode_macro T13",
+  "gcode_macro T14",
+  "gcode_macro T15",
+  "gcode_macro T16",
+  "gcode_macro T17",
+  "gcode_macro T18",
+  "gcode_macro T19",
+  "gcode_macro T20",
+  "gcode_macro T21",
+  "gcode_macro T22",
+  "gcode_macro T23",
+  "gcode_macro T24",
+  "gcode_macro T25",
+  "gcode_macro T26",
+  "gcode_macro T27",
+  "gcode_macro T28",
+  "gcode_macro T29",
+  "gcode_macro T30",
+  "gcode_macro T31",
+  "gcode_macro MOVE_TO_DISCARD_FILAMENT_POSITION",
+  "gcode_macro SHAPER_CALIBRATE",
+  "gcode_macro PRINT_START",
+  "gcode_macro PRINT_PRESTART_CHECK",
+  "gcode_macro PRINT_END",
+  "gcode_macro CANCEL_PRINT",
+  "gcode_macro INNER_PAUSE",
+  "gcode_macro INNER_RESUME",
+  "gcode_macro SET_PAUSE_NEXT_LAYER",
+  "gcode_macro SET_PAUSE_AT_LAYER",
+  "gcode_macro SET_PRINT_STATS_INFO",
+  "gcode_macro _CLIENT_EXTRUDE",
+  "gcode_macro _CLIENT_RETRACT",
+  "gcode_macro INNER_FILAMENT_UNLOAD",
+  "gcode_macro AUTO_FEEDING",
+  "gcode_macro AUTO_FEEDING_PREHEAT",
+  "gcode_macro MANUAL_FEEDING",
+  "gcode_macro FEEDING_RUNOUT_EVENT_HANDLE",
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE",
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE_WITH_DISCARD",
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_1",
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_2",
+  "gcode_macro SM_PRINT_CHECK_SWITCH_EXTRUDER",
+  "gcode_macro SM_PRINT_EXTRUDER_PREHEAT",
+  "gcode_macro SM_PRINT_AUTO_FEED",
+  "gcode_macro SM_PRINT_END_AUTO_UNLOAD_FILAMENT",
+  "gcode_macro SM_PRINT_START_LINE",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_0",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_1",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_2",
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_3",
+  "gcode_macro INNER_ROUGHLY_CLEAN_NOZZLE_BASE_DISCARD",
+  "gcode_macro INNER_DISCARD_FILAMENT_BASE_DISCARD",
+  "gcode_macro INNER_CUTOFF_BASE_DISCARD",
+  "gcode_macro INNER_FLUSH_FILAMENT",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_PREPARE",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_EXTRUDE",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FLUSH",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FINISH",
+  "gcode_macro INNER_MANUAL_FEED_STAGE_CANCEL",
+  "gcode_macro INNER_FLOW_MEASURE_END_BASE_DISCARD",
+  "gcode_macro INNER_FLOW_CALIB_END_BASE_DISCARD",
+  "gcode_macro INNER_PREEXTRUDE_FILAMENT",
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_1",
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_2",
+  "gcode_macro CONTROL_EXTRUDE_ACTION",
+  "gcode_macro CONTROL_RETRACT_ACTION",
+  "gcode_macro FEED_HANG_NEUTRAL",
+  "gcode_macro AUTO_FEEDING_BATCH",
+  "exclude_object",
+  "print_task_config",
+  "mqtt",
+  "timelapse",
+  "filament_detect",
+  "resonance_tester",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PRESTART",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHOMING",
+  "gcode_macro _DETECT_PLATE",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHEAT",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T3",
+  "gcode_macro EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_ALL",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T0",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T1",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T2",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T3",
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_EXIT",
+  "gcode_macro XYZ_OFFSET_CALIBRATE",
+  "gcode_macro XYZ_OFFSET_CALIBRATE_ALL",
+  "heaters",
+  "stepper_enable",
+  "tmc2240 stepper_x",
+  "tmc2240 stepper_y",
+  "tmc2209 stepper_z",
+  "heater_bed",
+  "temperature_sensor cavity",
+  "fan_generic cavity_fan",
+  "led cavity_led",
+  "purifier",
+  "bed_mesh",
+  "homing_precise_corexy",
+  "heater_fan power_fan",
+  "adc_current_sensor I_AD",
+  "power_loss_check",
+  "auto_screws_tilt_adjust",
+  "gcode_macro AUTO_BED_MESH_CALIBRATE",
+  "gcode_macro SHAKE_Z",
+  "gcode_macro SENSORLESS_HOME_X",
+  "gcode_macro SENSORLESS_HOME_Y",
+  "gcode_macro SENSORLESS_HOME_Z",
+  "gcode_macro _HOMING_PRECISE_COREXY_ADVANCED",
+  "gcode_macro _CLIENT_VARIABLE",
+  "tmc2209 extruder",
+  "fan",
+  "heater_fan e0_nozzle_fan",
+  "output_pin e0_heat_sw",
+  "filament_motion_sensor e0_filament",
+  "filament_entangle_detect e0_filament",
+  "extruder_offset_calibration",
+  "probe",
+  "sensor_accelerometer_identify e0_accelerometer",
+  "power_loss_check e0",
+  "tmc2209 extruder1",
+  "fan_generic e1_fan",
+  "heater_fan e1_nozzle_fan",
+  "output_pin e1_heat_sw",
+  "filament_motion_sensor e1_filament",
+  "filament_entangle_detect e1_filament",
+  "power_loss_check e1",
+  "tmc2209 extruder2",
+  "fan_generic e2_fan",
+  "heater_fan e2_nozzle_fan",
+  "output_pin e2_heat_sw",
+  "filament_motion_sensor e2_filament",
+  "filament_entangle_detect e2_filament",
+  "power_loss_check e2",
+  "tmc2209 extruder3",
+  "fan_generic e3_fan",
+  "heater_fan e3_nozzle_fan",
+  "output_pin e3_heat_sw",
+  "filament_motion_sensor e3_filament",
+  "filament_entangle_detect e3_filament",
+  "power_loss_check e3",
+  "filament_feed left",
+  "filament_feed right",
+  "gcode_macro _FILAMENT_FEED_VARIABLE",
+  "idle_timeout",
+  "filament_parameters",
+  "defect_detection",
+  "motion_report",
+  "query_endstops",
+  "system_stats",
+  "manual_probe",
+  "machine_state_manager",
+  "toolhead",
+  "extruder",
+  "extruder1",
+  "extruder2",
+  "extruder3"
+ ],
+ "status": {
+  "webhooks": {
+   "state": "ready",
+   "state_message": "Printer is ready"
+  },
+  "exception_manager": {
+   "exceptions": []
+  },
+  "mcu": {
+   "mcu_version": "lava_2.0.0_20260903-2-g3ebf909a",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "BUS_PINS_spi3a": "PC11,PC12,PC10",
+    "BUS_PINS_spi4": "PE13,PE14,PE11",
+    "CANBUS_BRIDGE": 1,
+    "CLOCK_FREQ": 240000000,
+    "INITIAL_PINS": "!PE9,PB2,PC8,PC9,!PA10,!PA15,!PD4,!PD5,!PD6,!PD7,!PE15",
+    "MCU": "stm32f103xe",
+    "PWM_MAX": 255,
+    "RECEIVE_WINDOW": 192,
+    "RESERVE_PINS_CAN": "PB5,PB6",
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "RESERVE_PINS_serial": "PB9,PB8",
+    "SERIAL_BAUD": 921600,
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.02,
+    "mcu_task_avg": 0.00001,
+    "mcu_task_stddev": 0.000005,
+    "err_len": 1,
+    "err_dest": 0,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 3053497246,
+    "bytes_read": 1562082848,
+    "bytes_retransmit": 0,
+    "bytes_invalid": 0,
+    "send_seq": 54671115,
+    "receive_seq": 54671115,
+    "retransmit_seq": 0,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 46,
+    "upcoming_bytes": 7383,
+    "freq": 239997604
+   }
+  },
+  "mcu e0": {
+   "mcu_version": "lava_2.0.0_20260903-2-g3ebf909a",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.003,
+    "mcu_task_avg": 0.000007,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 2,
+    "err_dest": 0,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 6785223,
+    "bytes_read": 244685969,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 703777,
+    "receive_seq": 703777,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 143999488,
+    "adj": 144001077
+   }
+  },
+  "mcu e1": {
+   "mcu_version": "lava_2.0.0_20260903-2-g3ebf909a",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.003,
+    "mcu_task_avg": 0.000007,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 2,
+    "err_dest": 1,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 322804442,
+    "bytes_read": 278294195,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 6672948,
+    "receive_seq": 6672948,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 143998742,
+    "adj": 144000308
+   }
+  },
+  "mcu e2": {
+   "mcu_version": "lava_2.0.0_20260903-2-g3ebf909a",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.01,
+    "mcu_task_avg": 0.000011,
+    "mcu_task_stddev": 0.00001,
+    "err_len": 2,
+    "err_dest": 0,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 172961605,
+    "bytes_read": 266767999,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 4023667,
+    "receive_seq": 4023667,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 143998741,
+    "adj": 144000388
+   }
+  },
+  "mcu e3": {
+   "mcu_version": "lava_2.0.0_20260903-2-g3ebf909a",
+   "mcu_build_versions": "gcc: (GNU Arm Embedded Toolchain 10.3-2021.10) 10.3.1 20210824 (release) binutils: (GNU Arm Embedded Toolchain 10.3-2021.10) 2.36.1.20210621",
+   "mcu_constants": {
+    "ADC_MAX": 4095,
+    "BUS_PINS_i2c1": "PB6,PB7",
+    "BUS_PINS_i2c1a": "PB8,PB9",
+    "BUS_PINS_i2c2": "PB10,PB11",
+    "BUS_PINS_spi1": "PA6,PA7,PA5",
+    "BUS_PINS_spi1a": "PB4,PB5,PB3",
+    "BUS_PINS_spi2": "PB14,PB15,PB13",
+    "BUS_PINS_spi3": "PB4,PB5,PB3",
+    "CLOCK_FREQ": 144000000,
+    "INITIAL_PINS": "PB2,!PB5,PB0,!PB3",
+    "MCU": "stm32f105xc",
+    "PWM_MAX": 255,
+    "RESERVE_PINS_USB": "PA11,PA12",
+    "STATS_SUMSQ_BASE": 256,
+    "STEPPER_BOTH_EDGE": 1
+   },
+   "last_stats": {
+    "mcu_awake": 0.003,
+    "mcu_task_avg": 0.000007,
+    "mcu_task_stddev": 0.000004,
+    "err_len": 3,
+    "err_dest": 1,
+    "err_sync": 0,
+    "err_crc": 0,
+    "bytes_write": 330700012,
+    "bytes_read": 278463711,
+    "bytes_retransmit": 9,
+    "bytes_invalid": 0,
+    "send_seq": 6822864,
+    "receive_seq": 6822864,
+    "retransmit_seq": 2,
+    "srtt": 0,
+    "rttvar": 0,
+    "rto": 0.025,
+    "ready_bytes": 0,
+    "upcoming_bytes": 0,
+    "freq": 143998833,
+    "adj": 144000367
+   }
+  },
+  "gcode_move": {
+   "speed_factor": 1,
+   "speed": 30000,
+   "extrude_factor": 1,
+   "absolute_coordinates": true,
+   "absolute_extrude": false,
+   "homing_origin": [
+    -0.05417622167208336,
+    -0.05538125924738324,
+    -0.16599999999499992,
+    0
+   ],
+   "position": [
+    168.91282377832792,
+    207.29761874075263,
+    18.684000000005,
+    130293.12441387313
+   ],
+   "gcode_position": [
+    168.967,
+    207.353,
+    18.85,
+    126.71075000222481
+   ]
+  },
+  "print_stats": {
+   "filename": "Virtual print.gcode",
+   "total_duration": 34907.065303562034,
+   "print_duration": 34763.78704336804,
+   "filament_used": 71538.85627085553,
+   "state": "printing",
+   "exception": {},
+   "message": "",
+   "info": {
+    "total_layer": 177,
+    "current_layer": 94
+   }
+  },
+  "gcode_macro _PL_SAVE_VARIABLE": {
+   "start_save_line": 5,
+   "z_compensation_value": 0,
+   "save_line_interval": 1000,
+   "z_hop_temp": 140,
+   "pre_extrude_len": 20,
+   "speed_pre_extrude": 10,
+   "retract": 1,
+   "unretract": 1.1,
+   "speed_retract": 30,
+   "speed_unretract": 10,
+   "speed_resume_z": 30,
+   "speed_move": 350,
+   "move_extrude_macro": "MOVE_TO_DISCARD_FILAMENT_POSITION",
+   "after_extrude_macro": "ROUGHLY_CLEAN_NOZZLE"
+  },
+  "virtual_sdcard": {
+   "file_path": "/home/lava/printer_data/gcodes/Virtual print.gcode",
+   "progress": 0.7507954084802783,
+   "is_active": true,
+   "file_position": 87200927,
+   "file_size": 116144726,
+   "pl_env_valid": false
+  },
+  "pause_resume": {
+   "is_paused": false
+  },
+  "display_status": {
+   "progress": 0.75,
+   "message": null
+  },
+  "gcode_macro M600": {},
+  "gcode_macro T4": {},
+  "gcode_macro T5": {},
+  "gcode_macro T6": {},
+  "gcode_macro T7": {},
+  "gcode_macro T8": {},
+  "gcode_macro T9": {},
+  "gcode_macro T10": {},
+  "gcode_macro T11": {},
+  "gcode_macro T12": {},
+  "gcode_macro T13": {},
+  "gcode_macro T14": {},
+  "gcode_macro T15": {},
+  "gcode_macro T16": {},
+  "gcode_macro T17": {},
+  "gcode_macro T18": {},
+  "gcode_macro T19": {},
+  "gcode_macro T20": {},
+  "gcode_macro T21": {},
+  "gcode_macro T22": {},
+  "gcode_macro T23": {},
+  "gcode_macro T24": {},
+  "gcode_macro T25": {},
+  "gcode_macro T26": {},
+  "gcode_macro T27": {},
+  "gcode_macro T28": {},
+  "gcode_macro T29": {},
+  "gcode_macro T30": {},
+  "gcode_macro T31": {},
+  "gcode_macro MOVE_TO_DISCARD_FILAMENT_POSITION": {},
+  "gcode_macro SHAPER_CALIBRATE": {},
+  "gcode_macro PRINT_START": {},
+  "gcode_macro PRINT_PRESTART_CHECK": {},
+  "gcode_macro PRINT_END": {},
+  "gcode_macro CANCEL_PRINT": {},
+  "gcode_macro INNER_PAUSE": {
+   "pause_temp": 40
+  },
+  "gcode_macro INNER_RESUME": {
+   "last_extruder_index": 0,
+   "last_extruder_temp": 0,
+   "extruder0_temp": 0,
+   "extruder1_temp": 0,
+   "extruder2_temp": 0,
+   "extruder3_temp": 0,
+   "is_pause_on_err": false,
+   "is_runout": 0,
+   "flow_calibrating": false,
+   "flow_calibrate_temp": 220,
+   "pos_e_compensation": false
+  },
+  "gcode_macro SET_PAUSE_NEXT_LAYER": {},
+  "gcode_macro SET_PAUSE_AT_LAYER": {},
+  "gcode_macro SET_PRINT_STATS_INFO": {
+   "pause_next_layer": {
+    "enable": false,
+    "call": "PAUSE"
+   },
+   "pause_at_layer": {
+    "enable": false,
+    "layer": 0,
+    "call": "PAUSE"
+   }
+  },
+  "gcode_macro _CLIENT_EXTRUDE": {},
+  "gcode_macro _CLIENT_RETRACT": {},
+  "gcode_macro INNER_FILAMENT_UNLOAD": {},
+  "gcode_macro AUTO_FEEDING": {},
+  "gcode_macro AUTO_FEEDING_PREHEAT": {},
+  "gcode_macro MANUAL_FEEDING": {},
+  "gcode_macro FEEDING_RUNOUT_EVENT_HANDLE": {},
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE": {},
+  "gcode_macro ROUGHLY_CLEAN_NOZZLE_WITH_DISCARD": {},
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_1": {},
+  "gcode_macro FINELY_CLEAN_NOZZLE_STAGE_2": {},
+  "gcode_macro SM_PRINT_CHECK_SWITCH_EXTRUDER": {},
+  "gcode_macro SM_PRINT_EXTRUDER_PREHEAT": {},
+  "gcode_macro SM_PRINT_AUTO_FEED": {},
+  "gcode_macro SM_PRINT_END_AUTO_UNLOAD_FILAMENT": {},
+  "gcode_macro SM_PRINT_START_LINE": {},
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_0": {
+   "has_finished": false
+  },
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_1": {
+   "has_finished": false
+  },
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_2": {
+   "has_finished": false
+  },
+  "gcode_macro SM_PRINT_START_LINE_EXTRUDER_3": {
+   "has_finished": false
+  },
+  "gcode_macro INNER_ROUGHLY_CLEAN_NOZZLE_BASE_DISCARD": {},
+  "gcode_macro INNER_DISCARD_FILAMENT_BASE_DISCARD": {
+   "random_pos": 151
+  },
+  "gcode_macro INNER_CUTOFF_BASE_DISCARD": {},
+  "gcode_macro INNER_FLUSH_FILAMENT": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_PREPARE": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_EXTRUDE": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FLUSH": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_FINISH": {},
+  "gcode_macro INNER_MANUAL_FEED_STAGE_CANCEL": {},
+  "gcode_macro INNER_FLOW_MEASURE_END_BASE_DISCARD": {},
+  "gcode_macro INNER_FLOW_CALIB_END_BASE_DISCARD": {},
+  "gcode_macro INNER_PREEXTRUDE_FILAMENT": {},
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_1": {},
+  "gcode_macro INNER_DETECT_NOZZLE_STAGE_2": {},
+  "gcode_macro CONTROL_EXTRUDE_ACTION": {},
+  "gcode_macro CONTROL_RETRACT_ACTION": {},
+  "gcode_macro FEED_HANG_NEUTRAL": {},
+  "gcode_macro AUTO_FEEDING_BATCH": {
+   "extruder0_temp": 0,
+   "extruder1_temp": 0,
+   "extruder2_temp": 0,
+   "extruder3_temp": 0,
+   "doing": false
+  },
+  "exclude_object": {
+   "objects": [
+    {
+     "name": "OBJECT_1_ID_1_COPY_0",
+     "center": [
+      192.098,
+      213.244
+     ],
+     "polygon": [
+      [
+       114.4,
+       209.4
+      ],
+      [
+       115.7,
+       204.6
+      ],
+      [
+       119.4,
+       201.1
+      ],
+      [
+       169.8,
+       174.6
+      ],
+      [
+       216.7,
+       160.6
+      ],
+      [
+       219.1,
+       162.2
+      ],
+      [
+       269,
+       214.1
+      ],
+      [
+       269.8,
+       215.7
+      ],
+      [
+       268.8,
+       217.2
+      ],
+      [
+       214.5,
+       264.5
+      ],
+      [
+       212,
+       265.9
+      ],
+      [
+       167.4,
+       248.6
+      ],
+      [
+       118.6,
+       217.2
+      ],
+      [
+       115.7,
+       214.1
+      ],
+      [
+       114.4,
+       209.4
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_2_ID_2_COPY_0",
+     "center": [
+      127.917,
+      115.677
+     ],
+     "polygon": [
+      [
+       76.4,
+       126.5
+      ],
+      [
+       101,
+       85.3
+      ],
+      [
+       139.6,
+       43
+      ],
+      [
+       143.6,
+       40.1
+      ],
+      [
+       147,
+       39.6
+      ],
+      [
+       149.7,
+       40
+      ],
+      [
+       153.6,
+       42.3
+      ],
+      [
+       156,
+       46.6
+      ],
+      [
+       173.8,
+       101.1
+      ],
+      [
+       179.2,
+       149.1
+      ],
+      [
+       117.9,
+       191.2
+      ],
+      [
+       116.2,
+       191.7
+      ],
+      [
+       114.9,
+       190.6
+      ],
+      [
+       77.3,
+       129
+      ],
+      [
+       76.4,
+       126.5
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_3_ID_3_COPY_0",
+     "center": [
+      55.089,
+      202.497
+     ],
+     "polygon": [
+      [
+       4.3,
+       209.6
+      ],
+      [
+       20.1,
+       136.9
+      ],
+      [
+       21,
+       135.3
+      ],
+      [
+       22.8,
+       135.3
+      ],
+      [
+       94.4,
+       155.4
+      ],
+      [
+       105,
+       202.5
+      ],
+      [
+       105.8,
+       259.8
+      ],
+      [
+       104.9,
+       264.6
+      ],
+      [
+       100.6,
+       268.9
+      ],
+      [
+       97,
+       269.8
+      ],
+      [
+       94.2,
+       269.6
+      ],
+      [
+       42.1,
+       241.4
+      ],
+      [
+       4.3,
+       209.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_4_ID_4_COPY_0",
+     "center": [
+      215.117,
+      80.8992
+     ],
+     "polygon": [
+      [
+       163.8,
+       114.6
+      ],
+      [
+       168.3,
+       67.1
+      ],
+      [
+       185,
+       12.3
+      ],
+      [
+       187.3,
+       8
+      ],
+      [
+       190.2,
+       6
+      ],
+      [
+       192.7,
+       5.2
+      ],
+      [
+       197.3,
+       5.6
+      ],
+      [
+       201.3,
+       8.4
+      ],
+      [
+       240.8,
+       50
+      ],
+      [
+       266.4,
+       91
+      ],
+      [
+       229.3,
+       155.4
+      ],
+      [
+       227.9,
+       156.6
+      ],
+      [
+       226.2,
+       156.1
+      ],
+      [
+       165.8,
+       116.8
+      ],
+      [
+       163.8,
+       114.6
+      ]
+     ]
+    },
+    {
+     "name": "OBJECT_5_ID_5_COPY_0",
+     "center": [
+      64.6528,
+      67.3956
+     ],
+     "polygon": [
+      [
+       12.4,
+       58.7
+      ],
+      [
+       12.8,
+       56.2
+      ],
+      [
+       52.1,
+       27.4
+      ],
+      [
+       105.9,
+       2.7
+      ],
+      [
+       108.7,
+       2.7
+      ],
+      [
+       112.2,
+       3.8
+      ],
+      [
+       116.2,
+       8.4
+      ],
+      [
+       116.8,
+       13.3
+      ],
+      [
+       112.3,
+       70.5
+      ],
+      [
+       98.7,
+       116.8
+      ],
+      [
+       26,
+       132.2
+      ],
+      [
+       24.2,
+       132
+      ],
+      [
+       23.4,
+       130.3
+      ],
+      [
+       12.4,
+       58.7
+      ]
+     ]
+    }
+   ],
+   "excluded_objects": [],
+   "current_object": "OBJECT_1_ID_1_COPY_0",
+   "in_excluded_region": false
+  },
+  "print_task_config": {
+   "filament_vendor": [
+    "NONE",
+    "Generic",
+    "Generic",
+    "Snapmaker"
+   ],
+   "filament_type": [
+    "NONE",
+    "PLA",
+    "PLA",
+    "PLA"
+   ],
+   "filament_sub_type": [
+    "NONE",
+    "",
+    "",
+    "Matte"
+   ],
+   "filament_color": [
+    4294967295,
+    4294967295,
+    4281179737,
+    4278190080
+   ],
+   "filament_color_rgba": [
+    "FFFFFFFF",
+    "FFFFFFFF",
+    "2D9E59FF",
+    "000000FF"
+   ],
+   "filament_official": [
+    false,
+    false,
+    false,
+    true
+   ],
+   "filament_sku": [
+    0,
+    0,
+    0,
+    34079
+   ],
+   "filament_edit": [
+    false,
+    true,
+    true,
+    false
+   ],
+   "filament_exist": [
+    false,
+    true,
+    true,
+    true
+   ],
+   "filament_soft": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "extruder_map_table": [
+    2,
+    3,
+    1,
+    3,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "extruders_used": [
+    false,
+    true,
+    true,
+    true
+   ],
+   "extruders_replenished": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "time_lapse_camera": false,
+   "auto_bed_leveling": true,
+   "flow_calibrate": true,
+   "shaper_calibrate": false,
+   "auto_replenish_filament": true,
+   "filament_entangle_detect": false,
+   "filament_entangle_sen": "medium",
+   "reprint_info": {
+    "auto_bed_leveling": true,
+    "flow_calibrate": true,
+    "flow_calib_extruders": [
+     true,
+     true,
+     true,
+     true
+    ],
+    "time_lapse_camera": false,
+    "extruder_map_table": [
+     2,
+     3,
+     1,
+     3,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "extruders_used": [
+     false,
+     true,
+     true,
+     true
+    ],
+    "end_unload_filament": [
+     false,
+     false,
+     false,
+     false
+    ],
+    "flow_calibrate_extruders": [
+     true,
+     true,
+     true,
+     true
+    ]
+   },
+   "flow_calib_extruders": [
+    true,
+    true,
+    true,
+    true
+   ],
+   "filament_color_multi": [
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "FFFFFF"
+     ]
+    },
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "FFFFFF"
+     ]
+    },
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "2D9E59"
+     ]
+    },
+    {
+     "nums": 1,
+     "alpha": 255,
+     "mode": 0,
+     "colors": [
+      "000000"
+     ]
+    }
+   ],
+   "replenish_ignore_color": false,
+   "end_led_turn_off": false,
+   "end_unload_filament": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "flow_calibrate_extruders": [
+    true,
+    true,
+    true,
+    true
+   ]
+  },
+  "mqtt": {
+   "connected": true
+  },
+  "timelapse": {
+   "is_active": false
+  },
+  "filament_detect": {
+   "info": [
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    },
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    },
+    {
+     "VERSION": 0,
+     "VENDOR": "NONE",
+     "MANUFACTURER": "NONE",
+     "MAIN_TYPE": "NONE",
+     "SUB_TYPE": "NONE",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4294967295,
+     "RGB_1": 16777215,
+     "RGB_2": 16777215,
+     "RGB_3": 16777215,
+     "RGB_4": 16777215,
+     "RGB_5": 16777215,
+     "DIAMETER": 0,
+     "WEIGHT": 0,
+     "LENGTH": 0,
+     "DRYING_TEMP": 0,
+     "DRYING_TIME": 0,
+     "HOTEND_MAX_TEMP": 0,
+     "HOTEND_MIN_TEMP": 0,
+     "BED_TYPE": 0,
+     "BED_TEMP": 0,
+     "FIRST_LAYER_TEMP": 0,
+     "OTHER_LAYER_TEMP": 0,
+     "SKU": 0,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": false,
+     "CARD_UID": 0
+    },
+    {
+     "VERSION": 1,
+     "VENDOR": "Snapmaker",
+     "MANUFACTURER": "Polymaker",
+     "MAIN_TYPE": "PLA",
+     "SUB_TYPE": "Matte",
+     "TRAY": 0,
+     "ALPHA": 255,
+     "MULTI_MODE": 0,
+     "COLOR_NUMS": 1,
+     "ARGB_COLOR": 4278190080,
+     "RGB_1": 0,
+     "RGB_2": 0,
+     "RGB_3": 0,
+     "RGB_4": 0,
+     "RGB_5": 0,
+     "DIAMETER": 175,
+     "WEIGHT": 1000,
+     "LENGTH": 300,
+     "DRYING_TEMP": 55,
+     "DRYING_TIME": 6,
+     "HOTEND_MAX_TEMP": 230,
+     "HOTEND_MIN_TEMP": 190,
+     "BED_TYPE": 1,
+     "BED_TEMP": 60,
+     "FIRST_LAYER_TEMP": 230,
+     "OTHER_LAYER_TEMP": 220,
+     "SKU": 34079,
+     "MF_DATE": "19700101",
+     "RSA_KEY_VERSION": 0,
+     "OFFICIAL": true,
+     "CARD_UID": [
+      0,
+      0,
+      0,
+      0
+     ]
+    }
+   ],
+   "state": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "config": {
+    "startup_stay": false
+   }
+  },
+  "resonance_tester": {
+   "state": "idle"
+  },
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PRESTART": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHOMING": {
+   "force_homing": true
+  },
+  "gcode_macro _DETECT_PLATE": {
+   "hole_x": 13,
+   "hole_y": 233,
+   "hole_z": 3,
+   "solid_x": 13,
+   "solid_y": 220,
+   "solid_z": 3,
+   "delta_z": 1.1,
+   "check_ok_lift_z": 5,
+   "check_fail_lift_z": 150,
+   "move_speed": 200
+  },
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PREHEAT": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_HEAT_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_AUTO_CLEAN_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_MANUAL_CLEAN_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_WAIT_COOL_T3": {},
+  "gcode_macro EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_ALL": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T0": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T1": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T2": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_PROBE_CALIBRATE_T3": {},
+  "gcode_macro _EXTRUDER_OFFSET_ACTION_EXIT": {},
+  "gcode_macro XYZ_OFFSET_CALIBRATE": {},
+  "gcode_macro XYZ_OFFSET_CALIBRATE_ALL": {},
+  "heaters": {
+   "available_heaters": [
+    "heater_bed",
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3"
+   ],
+   "available_sensors": [
+    "heater_bed",
+    "temperature_sensor cavity",
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3"
+   ],
+   "available_monitors": [
+    "tmc2240 stepper_x",
+    "tmc2240 stepper_y"
+   ]
+  },
+  "stepper_enable": {
+   "steppers": {
+    "stepper_x": true,
+    "stepper_y": true,
+    "stepper_z": true,
+    "extruder": false,
+    "extruder1": true,
+    "extruder2": true,
+    "extruder3": true
+   }
+  },
+  "tmc2240 stepper_x": {
+   "mcu_phase_offset": 1,
+   "phase_offset_position": 527.2062499961589,
+   "run_current": 1.1987669649803188,
+   "hold_current": 1.1987669649803188,
+   "drv_status": {
+    "sg_result": 116,
+    "cs_actual": 31
+   },
+   "temperature": 78
+  },
+  "tmc2240 stepper_y": {
+   "mcu_phase_offset": 255,
+   "phase_offset_position": -72.00624999999955,
+   "run_current": 1.1987669649803188,
+   "hold_current": 1.1987669649803188,
+   "drv_status": {
+    "sg_result": 135,
+    "cs_actual": 31
+   },
+   "temperature": 81
+  },
+  "tmc2209 stepper_z": {
+   "mcu_phase_offset": 61,
+   "phase_offset_position": 25.293750000032897,
+   "run_current": 0.8566870618221633,
+   "hold_current": 0.8566870618221633,
+   "drv_status": {
+    "cs_actual": 27
+   },
+   "temperature": null
+  },
+  "heater_bed": {
+   "temperature": 45,
+   "target": 45,
+   "power": 0.03050040709632798
+  },
+  "temperature_sensor cavity": {
+   "temperature": 31,
+   "measured_min_temp": 25,
+   "measured_max_temp": 47
+  },
+  "fan_generic cavity_fan": {
+   "speed": 0.6980392156862745,
+   "rpm": 2452.6420738572333
+  },
+  "led cavity_led": {
+   "color_data": [
+    [
+     0,
+     0,
+     0,
+     1
+    ]
+   ]
+  },
+  "purifier": {
+   "power_detected": false,
+   "power_det_value": 3.3,
+   "mode": 0,
+   "desired_chamber_temp": 0,
+   "critical_chamber_temp": 0,
+   "inner_fan_work_time": 0,
+   "inner_fan_rpm": 0,
+   "exhaust_fan": {
+    "speed": 0,
+    "delay": 180,
+    "speed_threshold": 0
+   },
+   "inner_fan": {
+    "speed": 0,
+    "delay": 180,
+    "speed_threshold": 0
+   }
+  },
+  "bed_mesh": {
+   "profile_name": "default",
+   "mesh_min": [
+    3,
+    3
+   ],
+   "mesh_max": [
+    267,
+    267
+   ],
+   "probed_matrix": [
+    [
+     -0.076917,
+     0.023917,
+     0.08475,
+     0.101417,
+     0.091,
+     0.066417,
+     0.055167,
+     0.020583,
+     -0.02525,
+     -0.04525,
+     -0.009833
+    ],
+    [
+     -0.081083,
+     0.018083,
+     0.088083,
+     0.121417,
+     0.131,
+     0.117667,
+     0.11725,
+     0.09225,
+     0.042667,
+     0.046417,
+     0.09975
+    ],
+    [
+     -0.03775,
+     0.016,
+     0.074333,
+     0.136,
+     0.148083,
+     0.1185,
+     0.131833,
+     0.126417,
+     0.081417,
+     0.11225,
+     0.181417
+    ],
+    [
+     0.045583,
+     0.092667,
+     0.13975,
+     0.171417,
+     0.182667,
+     0.134333,
+     0.140583,
+     0.117667,
+     0.096,
+     0.125583,
+     0.218917
+    ],
+    [
+     0.111833,
+     0.140583,
+     0.169333,
+     0.206833,
+     0.190167,
+     0.138083,
+     0.149333,
+     0.135167,
+     0.0935,
+     0.12225,
+     0.206
+    ],
+    [
+     0.13975,
+     0.18475,
+     0.196833,
+     0.201833,
+     0.198917,
+     0.136833,
+     0.151417,
+     0.122667,
+     0.085167,
+     0.115167,
+     0.161
+    ],
+    [
+     0.170167,
+     0.193917,
+     0.21475,
+     0.246833,
+     0.22725,
+     0.180167,
+     0.15975,
+     0.123917,
+     0.068917,
+     0.08225,
+     0.141
+    ],
+    [
+     0.18225,
+     0.20225,
+     0.226,
+     0.235583,
+     0.223917,
+     0.170167,
+     0.136417,
+     0.094333,
+     0.04725,
+     0.053917,
+     0.08475
+    ],
+    [
+     0.220583,
+     0.216417,
+     0.200583,
+     0.217667,
+     0.2185,
+     0.146417,
+     0.115167,
+     0.073083,
+     0.018917,
+     0.041833,
+     0.109333
+    ],
+    [
+     0.26475,
+     0.2535,
+     0.237667,
+     0.225583,
+     0.20975,
+     0.177667,
+     0.127667,
+     0.060583,
+     0.010583,
+     0.0535,
+     0.176833
+    ],
+    [
+     0.3285,
+     0.276833,
+     0.246417,
+     0.229333,
+     0.233083,
+     0.218917,
+     0.155583,
+     0.066,
+     -0.009,
+     0.056417,
+     0.272667
+    ]
+   ],
+   "mesh_matrix": [
+    [
+     -0.076917,
+     -0.050182,
+     -0.005522,
+     0.023917,
+     0.04333,
+     0.069077,
+     0.08475,
+     0.091275,
+     0.098059,
+     0.101417,
+     0.09942,
+     0.09483,
+     0.091,
+     0.08412,
+     0.073333,
+     0.066417,
+     0.063117,
+     0.05891,
+     0.055167,
+     0.046034,
+     0.031253,
+     0.020583,
+     0.007293,
+     -0.012608,
+     -0.02525,
+     -0.032614,
+     -0.041497,
+     -0.04525,
+     -0.036136,
+     -0.019836,
+     -0.009833
+    ],
+    [
+     -0.078701,
+     -0.051947,
+     -0.007228,
+     0.022349,
+     0.042443,
+     0.069339,
+     0.085867,
+     0.093528,
+     0.102066,
+     0.106682,
+     0.106251,
+     0.104011,
+     0.10171,
+     0.095862,
+     0.086455,
+     0.080451,
+     0.077973,
+     0.074932,
+     0.071966,
+     0.063572,
+     0.049822,
+     0.039719,
+     0.026107,
+     0.005586,
+     -0.00721,
+     -0.013002,
+     -0.019178,
+     -0.021102,
+     -0.010525,
+     0.007797,
+     0.018991
+    ],
+    [
+     -0.081225,
+     -0.054557,
+     -0.009939,
+     0.019744,
+     0.040913,
+     0.069654,
+     0.087577,
+     0.097181,
+     0.108735,
+     0.115503,
+     0.117671,
+     0.119313,
+     0.119531,
+     0.115339,
+     0.108135,
+     0.103596,
+     0.102502,
+     0.101442,
+     0.099802,
+     0.092681,
+     0.080713,
+     0.071596,
+     0.057468,
+     0.035937,
+     0.022904,
+     0.019775,
+     0.018177,
+     0.019343,
+     0.03238,
+     0.054101,
+     0.067296
+    ],
+    [
+     -0.081083,
+     -0.054941,
+     -0.01117,
+     0.018083,
+     0.039713,
+     0.06938,
+     0.088083,
+     0.099151,
+     0.113034,
+     0.121417,
+     0.125228,
+     0.129262,
+     0.131,
+     0.127636,
+     0.121475,
+     0.117667,
+     0.117528,
+     0.117907,
+     0.11725,
+     0.11112,
+     0.100565,
+     0.09225,
+     0.077864,
+     0.055775,
+     0.042667,
+     0.041435,
+     0.043074,
+     0.046417,
+     0.061145,
+     0.085188,
+     0.09975
+    ],
+    [
+     -0.070565,
+     -0.04778,
+     -0.00957,
+     0.016204,
+     0.036581,
+     0.065055,
+     0.083444,
+     0.096797,
+     0.114634,
+     0.125481,
+     0.129962,
+     0.134506,
+     0.136355,
+     0.131914,
+     0.123936,
+     0.119179,
+     0.119988,
+     0.122233,
+     0.122957,
+     0.11856,
+     0.110601,
+     0.103867,
+     0.089755,
+     0.067818,
+     0.055083,
+     0.056041,
+     0.061282,
+     0.066978,
+     0.083185,
+     0.109146,
+     0.124824
+    ],
+    [
+     -0.052157,
+     -0.034886,
+     -0.005814,
+     0.014213,
+     0.032357,
+     0.058573,
+     0.076213,
+     0.092961,
+     0.116737,
+     0.13125,
+     0.136454,
+     0.141296,
+     0.142969,
+     0.13648,
+     0.12513,
+     0.118562,
+     0.120711,
+     0.125712,
+     0.128497,
+     0.126713,
+     0.122688,
+     0.118373,
+     0.104839,
+     0.083398,
+     0.07137,
+     0.075547,
+     0.086043,
+     0.09517,
+     0.113519,
+     0.142255,
+     0.159546
+    ],
+    [
+     -0.03775,
+     -0.023883,
+     -0.00046,
+     0.016,
+     0.032667,
+     0.057315,
+     0.074333,
+     0.092784,
+     0.119605,
+     0.136,
+     0.141577,
+     0.146562,
+     0.148083,
+     0.140136,
+     0.126392,
+     0.1185,
+     0.121358,
+     0.127901,
+     0.131833,
+     0.13141,
+     0.129432,
+     0.126417,
+     0.113466,
+     0.092756,
+     0.081417,
+     0.087509,
+     0.101083,
+     0.11225,
+     0.13212,
+     0.162917,
+     0.181417
+    ],
+    [
+     -0.014608,
+     -0.001489,
+     0.02067,
+     0.036241,
+     0.052067,
+     0.075442,
+     0.091417,
+     0.107723,
+     0.131212,
+     0.145614,
+     0.151124,
+     0.156418,
+     0.157957,
+     0.148516,
+     0.132277,
+     0.122809,
+     0.125125,
+     0.131089,
+     0.134534,
+     0.132771,
+     0.128752,
+     0.124772,
+     0.113556,
+     0.095989,
+     0.086599,
+     0.092916,
+     0.106495,
+     0.117904,
+     0.139771,
+     0.17383,
+     0.194306
+    ],
+    [
+     0.021423,
+     0.034044,
+     0.055337,
+     0.070204,
+     0.084905,
+     0.106423,
+     0.120741,
+     0.133055,
+     0.150259,
+     0.160877,
+     0.16609,
+     0.171715,
+     0.173219,
+     0.161589,
+     0.141708,
+     0.129895,
+     0.13114,
+     0.135776,
+     0.138142,
+     0.133834,
+     0.125944,
+     0.120052,
+     0.111557,
+     0.098994,
+     0.092651,
+     0.098866,
+     0.111694,
+     0.123003,
+     0.147809,
+     0.186774,
+     0.210231
+    ],
+    [
+     0.045583,
+     0.05779,
+     0.078367,
+     0.092667,
+     0.106497,
+     0.126605,
+     0.13975,
+     0.149657,
+     0.163102,
+     0.171417,
+     0.176154,
+     0.181485,
+     0.182667,
+     0.16966,
+     0.147562,
+     0.134333,
+     0.134954,
+     0.138833,
+     0.140583,
+     0.134809,
+     0.124682,
+     0.117667,
+     0.110611,
+     0.100722,
+     0.096,
+     0.102083,
+     0.114389,
+     0.125583,
+     0.15204,
+     0.193775,
+     0.218917
+    ],
+    [
+     0.065796,
+     0.076582,
+     0.094766,
+     0.107417,
+     0.119667,
+     0.137528,
+     0.149389,
+     0.159588,
+     0.173763,
+     0.182247,
+     0.184882,
+     0.186655,
+     0.185617,
+     0.171968,
+     0.149321,
+     0.135849,
+     0.1367,
+     0.141072,
+     0.14321,
+     0.138114,
+     0.12899,
+     0.122389,
+     0.11407,
+     0.101962,
+     0.09587,
+     0.101752,
+     0.114021,
+     0.12517,
+     0.151248,
+     0.192378,
+     0.217154
+    ],
+    [
+     0.094083,
+     0.102676,
+     0.11717,
+     0.127278,
+     0.137068,
+     0.151446,
+     0.16138,
+     0.172512,
+     0.188602,
+     0.197799,
+     0.197049,
+     0.193002,
+     0.188364,
+     0.173953,
+     0.150889,
+     0.137327,
+     0.13871,
+     0.144081,
+     0.147003,
+     0.14333,
+     0.136313,
+     0.130611,
+     0.11984,
+     0.103405,
+     0.094648,
+     0.100208,
+     0.112508,
+     0.123571,
+     0.148508,
+     0.187778,
+     0.211429
+    ],
+    [
+     0.111833,
+     0.119287,
+     0.131852,
+     0.140583,
+     0.148759,
+     0.160769,
+     0.169333,
+     0.18071,
+     0.197475,
+     0.206833,
+     0.204148,
+     0.196833,
+     0.190167,
+     0.175231,
+     0.151778,
+     0.138083,
+     0.139833,
+     0.145898,
+     0.149333,
+     0.146401,
+     0.140451,
+     0.135167,
+     0.122901,
+     0.103858,
+     0.0935,
+     0.098904,
+     0.111272,
+     0.12225,
+     0.146056,
+     0.183472,
+     0.206
+    ],
+    [
+     0.120997,
+     0.129686,
+     0.144238,
+     0.153972,
+     0.160972,
+     0.170686,
+     0.177481,
+     0.186152,
+     0.198819,
+     0.205846,
+     0.203809,
+     0.198116,
+     0.192367,
+     0.176661,
+     0.151747,
+     0.13721,
+     0.139356,
+     0.146234,
+     0.15004,
+     0.146147,
+     0.13852,
+     0.132241,
+     0.120081,
+     0.101449,
+     0.091383,
+     0.097127,
+     0.109898,
+     0.120698,
+     0.141541,
+     0.174039,
+     0.19358
+    ],
+    [
+     0.132179,
+     0.143151,
+     0.161395,
+     0.173083,
+     0.178518,
+     0.185001,
+     0.189204,
+     0.193395,
+     0.199214,
+     0.202395,
+     0.201862,
+     0.199569,
+     0.19579,
+     0.178974,
+     0.151813,
+     0.135948,
+     0.138587,
+     0.146514,
+     0.150728,
+     0.145044,
+     0.134363,
+     0.126315,
+     0.114615,
+     0.09717,
+     0.087895,
+     0.094192,
+     0.107554,
+     0.118034,
+     0.134193,
+     0.158915,
+     0.173735
+    ],
+    [
+     0.13975,
+     0.151904,
+     0.172059,
+     0.18475,
+     0.189321,
+     0.19404,
+     0.196833,
+     0.198605,
+     0.200728,
+     0.201833,
+     0.202102,
+     0.20163,
+     0.198917,
+     0.181599,
+     0.153373,
+     0.136833,
+     0.139417,
+     0.147352,
+     0.151417,
+     0.144525,
+     0.131873,
+     0.122667,
+     0.111093,
+     0.09413,
+     0.085167,
+     0.091599,
+     0.105031,
+     0.115167,
+     0.128617,
+     0.148883,
+     0.161
+    ],
+    [
+     0.148735,
+     0.159412,
+     0.17715,
+     0.188448,
+     0.193271,
+     0.198809,
+     0.202392,
+     0.206144,
+     0.211373,
+     0.214185,
+     0.213425,
+     0.210861,
+     0.206991,
+     0.190756,
+     0.164501,
+     0.148821,
+     0.149006,
+     0.152717,
+     0.154108,
+     0.146386,
+     0.132913,
+     0.123077,
+     0.110188,
+     0.09116,
+     0.080787,
+     0.085821,
+     0.097279,
+     0.106355,
+     0.12045,
+     0.14206,
+     0.155019
+    ],
+    [
+     0.161886,
+     0.16982,
+     0.183073,
+     0.191812,
+     0.197292,
+     0.20466,
+     0.209914,
+     0.217482,
+     0.228664,
+     0.234759,
+     0.232129,
+     0.22572,
+     0.219713,
+     0.205403,
+     0.18267,
+     0.168568,
+     0.16471,
+     0.16128,
+     0.158188,
+     0.14933,
+     0.134902,
+     0.124265,
+     0.109185,
+     0.086656,
+     0.073889,
+     0.07654,
+     0.084651,
+     0.092006,
+     0.107747,
+     0.132546,
+     0.147481
+    ],
+    [
+     0.170167,
+     0.176367,
+     0.18679,
+     0.193917,
+     0.199855,
+     0.208441,
+     0.21475,
+     0.224451,
+     0.238929,
+     0.246833,
+     0.243114,
+     0.234488,
+     0.22725,
+     0.214068,
+     0.193386,
+     0.180167,
+     0.173707,
+     0.16571,
+     0.15975,
+     0.150139,
+     0.135065,
+     0.123917,
+     0.107583,
+     0.083065,
+     0.068917,
+     0.070071,
+     0.07604,
+     0.08225,
+     0.098747,
+     0.125096,
+     0.141
+    ],
+    [
+     0.173812,
+     0.179632,
+     0.189443,
+     0.196262,
+     0.202694,
+     0.212124,
+     0.218741,
+     0.226967,
+     0.238925,
+     0.245349,
+     0.241892,
+     0.234037,
+     0.227256,
+     0.213884,
+     0.192748,
+     0.179062,
+     0.171301,
+     0.161213,
+     0.153917,
+     0.143612,
+     0.127714,
+     0.11616,
+     0.100289,
+     0.076631,
+     0.062917,
+     0.063537,
+     0.068438,
+     0.073688,
+     0.087968,
+     0.110825,
+     0.124627
+    ],
+    [
+     0.178253,
+     0.183767,
+     0.19309,
+     0.199682,
+     0.206728,
+     0.217134,
+     0.223935,
+     0.229234,
+     0.236286,
+     0.239864,
+     0.237133,
+     0.231124,
+     0.22541,
+     0.211416,
+     0.188969,
+     0.174253,
+     0.164926,
+     0.152417,
+     0.143565,
+     0.132293,
+     0.115189,
+     0.10309,
+     0.088263,
+     0.06647,
+     0.053787,
+     0.053898,
+     0.05758,
+     0.061552,
+     0.072085,
+     0.088955,
+     0.099142
+    ],
+    [
+     0.18225,
+     0.18738,
+     0.196065,
+     0.20225,
+     0.20921,
+     0.219503,
+     0.226,
+     0.229503,
+     0.233654,
+     0.235583,
+     0.233466,
+     0.228849,
+     0.223917,
+     0.20934,
+     0.185725,
+     0.170167,
+     0.159948,
+     0.146117,
+     0.136417,
+     0.12458,
+     0.106762,
+     0.094333,
+     0.080083,
+     0.059333,
+     0.04725,
+     0.047225,
+     0.050478,
+     0.053917,
+     0.062565,
+     0.076398,
+     0.08475
+    ],
+    [
+     0.19246,
+     0.195932,
+     0.201781,
+     0.20583,
+     0.209617,
+     0.215118,
+     0.218818,
+     0.222443,
+     0.227519,
+     0.230222,
+     0.229316,
+     0.226523,
+     0.222463,
+     0.206399,
+     0.180092,
+     0.162898,
+     0.15266,
+     0.139169,
+     0.129716,
+     0.117973,
+     0.100257,
+     0.087818,
+     0.07303,
+     0.05142,
+     0.038966,
+     0.03985,
+     0.044794,
+     0.049593,
+     0.060659,
+     0.078227,
+     0.088821
+    ],
+    [
+     0.208948,
+     0.209736,
+     0.210989,
+     0.211559,
+     0.210051,
+     0.207549,
+     0.206617,
+     0.210764,
+     0.217897,
+     0.222176,
+     0.223106,
+     0.222993,
+     0.220194,
+     0.201873,
+     0.171489,
+     0.151852,
+     0.141786,
+     0.129144,
+     0.120275,
+     0.108757,
+     0.091276,
+     0.07884,
+     0.063033,
+     0.039783,
+     0.026608,
+     0.029111,
+     0.037094,
+     0.04438,
+     0.060085,
+     0.084847,
+     0.099762
+    ],
+    [
+     0.220583,
+     0.219676,
+     0.218028,
+     0.216417,
+     0.211701,
+     0.204355,
+     0.200583,
+     0.204784,
+     0.212725,
+     0.217667,
+     0.219469,
+     0.22066,
+     0.2185,
+     0.199231,
+     0.167111,
+     0.146417,
+     0.13634,
+     0.12391,
+     0.115167,
+     0.103509,
+     0.085759,
+     0.073083,
+     0.056651,
+     0.03246,
+     0.018917,
+     0.022593,
+     0.03275,
+     0.041833,
+     0.061012,
+     0.091173,
+     0.109333
+    ],
+    [
+     0.23288,
+     0.231422,
+     0.228858,
+     0.226654,
+     0.221729,
+     0.214096,
+     0.209864,
+     0.211993,
+     0.216537,
+     0.21925,
+     0.219444,
+     0.218571,
+     0.215596,
+     0.199049,
+     0.171656,
+     0.153667,
+     0.142653,
+     0.127971,
+     0.117549,
+     0.103942,
+     0.083299,
+     0.068948,
+     0.052596,
+     0.029006,
+     0.016083,
+     0.021118,
+     0.033578,
+     0.04463,
+     0.06809,
+     0.10495,
+     0.127142
+    ],
+    [
+     0.251324,
+     0.24924,
+     0.24565,
+     0.242855,
+     0.238279,
+     0.231237,
+     0.226867,
+     0.225517,
+     0.224195,
+     0.223037,
+     0.220377,
+     0.215815,
+     0.211377,
+     0.199671,
+     0.180689,
+     0.167528,
+     0.154934,
+     0.136391,
+     0.123099,
+     0.106205,
+     0.080697,
+     0.063534,
+     0.047378,
+     0.024891,
+     0.013028,
+     0.020107,
+     0.03601,
+     0.050037,
+     0.080136,
+     0.127404,
+     0.155858
+    ],
+    [
+     0.26475,
+     0.261901,
+     0.257052,
+     0.2535,
+     0.249006,
+     0.242198,
+     0.237667,
+     0.23412,
+     0.22913,
+     0.225583,
+     0.221361,
+     0.214861,
+     0.20975,
+     0.201228,
+     0.187707,
+     0.177667,
+     0.164006,
+     0.142883,
+     0.127667,
+     0.10854,
+     0.07971,
+     0.060583,
+     0.044256,
+     0.022022,
+     0.010583,
+     0.019037,
+     0.037343,
+     0.0535,
+     0.088574,
+     0.143667,
+     0.176833
+    ],
+    [
+     0.283531,
+     0.277648,
+     0.267758,
+     0.260994,
+     0.255103,
+     0.246689,
+     0.241164,
+     0.236814,
+     0.230801,
+     0.226846,
+     0.223803,
+     0.219448,
+     0.215886,
+     0.209242,
+     0.198465,
+     0.189898,
+     0.175367,
+     0.152353,
+     0.135688,
+     0.114644,
+     0.082854,
+     0.061698,
+     0.043221,
+     0.017949,
+     0.004969,
+     0.014674,
+     0.035732,
+     0.054645,
+     0.097352,
+     0.164599,
+     0.205099
+    ],
+    [
+     0.311682,
+     0.30092,
+     0.282924,
+     0.270988,
+     0.26278,
+     0.251684,
+     0.244568,
+     0.239388,
+     0.232512,
+     0.228423,
+     0.227707,
+     0.227378,
+     0.226559,
+     0.222326,
+     0.214889,
+     0.208074,
+     0.192335,
+     0.166759,
+     0.148117,
+     0.124386,
+     0.088423,
+     0.06433,
+     0.042305,
+     0.011899,
+     -0.003756,
+     0.007708,
+     0.032784,
+     0.05579,
+     0.11007,
+     0.195768,
+     0.247401
+    ],
+    [
+     0.3285,
+     0.31479,
+     0.291895,
+     0.276833,
+     0.267219,
+     0.254494,
+     0.246417,
+     0.240778,
+     0.233454,
+     0.229333,
+     0.230065,
+     0.232222,
+     0.233083,
+     0.23025,
+     0.224731,
+     0.218917,
+     0.202466,
+     0.175386,
+     0.155583,
+     0.130265,
+     0.091836,
+     0.066,
+     0.041821,
+     0.00829,
+     -0.009,
+     0.003503,
+     0.030969,
+     0.056417,
+     0.117623,
+     0.214367,
+     0.272667
+    ]
+   ],
+   "profiles": {
+    "default": {
+     "points": [
+      [
+       -0.076917,
+       0.023917,
+       0.08475,
+       0.101417,
+       0.091,
+       0.066417,
+       0.055167,
+       0.020583,
+       -0.02525,
+       -0.04525,
+       -0.009833
+      ],
+      [
+       -0.081083,
+       0.018083,
+       0.088083,
+       0.121417,
+       0.131,
+       0.117667,
+       0.11725,
+       0.09225,
+       0.042667,
+       0.046417,
+       0.09975
+      ],
+      [
+       -0.03775,
+       0.016,
+       0.074333,
+       0.136,
+       0.148083,
+       0.1185,
+       0.131833,
+       0.126417,
+       0.081417,
+       0.11225,
+       0.181417
+      ],
+      [
+       0.045583,
+       0.092667,
+       0.13975,
+       0.171417,
+       0.182667,
+       0.134333,
+       0.140583,
+       0.117667,
+       0.096,
+       0.125583,
+       0.218917
+      ],
+      [
+       0.111833,
+       0.140583,
+       0.169333,
+       0.206833,
+       0.190167,
+       0.138083,
+       0.149333,
+       0.135167,
+       0.0935,
+       0.12225,
+       0.206
+      ],
+      [
+       0.13975,
+       0.18475,
+       0.196833,
+       0.201833,
+       0.198917,
+       0.136833,
+       0.151417,
+       0.122667,
+       0.085167,
+       0.115167,
+       0.161
+      ],
+      [
+       0.170167,
+       0.193917,
+       0.21475,
+       0.246833,
+       0.22725,
+       0.180167,
+       0.15975,
+       0.123917,
+       0.068917,
+       0.08225,
+       0.141
+      ],
+      [
+       0.18225,
+       0.20225,
+       0.226,
+       0.235583,
+       0.223917,
+       0.170167,
+       0.136417,
+       0.094333,
+       0.04725,
+       0.053917,
+       0.08475
+      ],
+      [
+       0.220583,
+       0.216417,
+       0.200583,
+       0.217667,
+       0.2185,
+       0.146417,
+       0.115167,
+       0.073083,
+       0.018917,
+       0.041833,
+       0.109333
+      ],
+      [
+       0.26475,
+       0.2535,
+       0.237667,
+       0.225583,
+       0.20975,
+       0.177667,
+       0.127667,
+       0.060583,
+       0.010583,
+       0.0535,
+       0.176833
+      ],
+      [
+       0.3285,
+       0.276833,
+       0.246417,
+       0.229333,
+       0.233083,
+       0.218917,
+       0.155583,
+       0.066,
+       -0.009,
+       0.056417,
+       0.272667
+      ]
+     ],
+     "mesh_params": {
+      "x_count": 11,
+      "y_count": 11,
+      "mesh_x_pps": 2,
+      "mesh_y_pps": 2,
+      "algo": "bicubic",
+      "tension": 0.2,
+      "min_x": 3,
+      "max_x": 267,
+      "min_y": 3,
+      "max_y": 267
+     }
+    }
+   },
+   "progress": {
+    "current_point": 121,
+    "total_points": 121,
+    "probe_state": "completed",
+    "preheat_total_duration": 60,
+    "preheat_remaining_time": 0
+   }
+  },
+  "homing_precise_corexy": {
+   "c_a_full_phase": 12.625,
+   "c_b_full_phase": 0.625,
+   "use_calibration_origin": true,
+   "calibrated_origin": [
+    12.75,
+    0.75
+   ]
+  },
+  "heater_fan power_fan": {
+   "speed": 0.6,
+   "rpm": null
+  },
+  "adc_current_sensor I_AD": {
+   "current": 2.295,
+   "sense_resistor": 0.01,
+   "adc_reference": 3.3,
+   "voltage_offset": 0.0498,
+   "scale": 33.333
+  },
+  "power_loss_check": {
+   "initialized": 1,
+   "high_level_tick": 45,
+   "low_level_tick": 37,
+   "voltage_type": 0,
+   "power_loss_flag": 0,
+   "duty_percent": 0.5487804878048781
+  },
+  "auto_screws_tilt_adjust": {
+   "probe_step": "adjust_idle",
+   "screw_order": [
+    2,
+    3,
+    4,
+    1
+   ],
+   "probe_after_delay": 0,
+   "min_z": null,
+   "max_z": null,
+   "target_z": null,
+   "base_point1": null,
+   "base_point2": null,
+   "base_point3": null,
+   "base_point4": null,
+   "current_point": 0,
+   "need_adjusted_z": null,
+   "adjust_tolerance": 0.025,
+   "screw_adjust_threshold": 0.05
+  },
+  "gcode_macro AUTO_BED_MESH_CALIBRATE": {},
+  "gcode_macro SHAKE_Z": {},
+  "gcode_macro SENSORLESS_HOME_X": {},
+  "gcode_macro SENSORLESS_HOME_Y": {},
+  "gcode_macro SENSORLESS_HOME_Z": {},
+  "gcode_macro _HOMING_PRECISE_COREXY_ADVANCED": {},
+  "gcode_macro _CLIENT_VARIABLE": {
+   "use_custom_pos": false,
+   "custom_park_x": 30,
+   "custom_park_y": 30,
+   "custom_park_dz": 5,
+   "retract": 2,
+   "cancel_retract": 2,
+   "speed_retract": 35,
+   "unretract": 1.8,
+   "speed_unretract": 7,
+   "speed_hop": 15,
+   "speed_move": 500,
+   "park_at_cancel": false,
+   "park_at_cancel_x": 30,
+   "park_at_cancel_y": 30,
+   "move_z_max_heigh": 270.5
+  },
+  "tmc2209 extruder": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": null,
+   "temperature": null
+  },
+  "fan": {
+   "speed": 1,
+   "rpm": 8982.040500172156
+  },
+  "heater_fan e0_nozzle_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "output_pin e0_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e0_filament": {
+   "filament_detected": false,
+   "enabled": true
+  },
+  "filament_entangle_detect e0_filament": {
+   "detect_factor": 1
+  },
+  "extruder_offset_calibration": {
+   "calibration_step": "idle",
+   "bed_plate_check": false,
+   "is_prehoming": false,
+   "extruder_last_xyz_result": null,
+   "extruder1_last_xyz_result": null,
+   "extruder2_last_xyz_result": null,
+   "extruder3_last_xyz_result": null,
+   "extruder_nozzle_clean": false,
+   "extruder1_nozzle_clean": false,
+   "extruder2_nozzle_clean": false,
+   "extruder3_nozzle_clean": false
+  },
+  "probe": {
+   "name": "inductance_coil extruder",
+   "last_query": false,
+   "last_z_result": 0.07750000003163038,
+   "status": "idle"
+  },
+  "sensor_accelerometer_identify e0_accelerometer": {
+   "sensor": "lis2dw e0_lis2dw"
+  },
+  "power_loss_check e0": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "tmc2209 extruder1": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": {
+    "cs_actual": 4,
+    "stst": 1
+   },
+   "temperature": null
+  },
+  "fan_generic e1_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "heater_fan e1_nozzle_fan": {
+   "speed": 0.4,
+   "rpm": 10274.610707855942
+  },
+  "output_pin e1_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e1_filament": {
+   "filament_detected": true,
+   "enabled": true
+  },
+  "filament_entangle_detect e1_filament": {
+   "detect_factor": 1
+  },
+  "power_loss_check e1": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "tmc2209 extruder2": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": {
+    "cs_actual": 18
+   },
+   "temperature": null
+  },
+  "fan_generic e2_fan": {
+   "speed": 1,
+   "rpm": 8982.040500172156
+  },
+  "heater_fan e2_nozzle_fan": {
+   "speed": 0.7,
+   "rpm": 15472.268174937804
+  },
+  "output_pin e2_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e2_filament": {
+   "filament_detected": true,
+   "enabled": true
+  },
+  "filament_entangle_detect e2_filament": {
+   "detect_factor": 1
+  },
+  "power_loss_check e2": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "tmc2209 extruder3": {
+   "mcu_phase_offset": 62,
+   "phase_offset_position": 0.09590625,
+   "run_current": 0.7902958142673179,
+   "hold_current": 0.20797258270192576,
+   "drv_status": {
+    "cs_actual": 4,
+    "stst": 1
+   },
+   "temperature": null
+  },
+  "fan_generic e3_fan": {
+   "speed": 0,
+   "rpm": 0
+  },
+  "heater_fan e3_nozzle_fan": {
+   "speed": 0.4,
+   "rpm": 9829.945268554877
+  },
+  "output_pin e3_heat_sw": {
+   "value": 1
+  },
+  "filament_motion_sensor e3_filament": {
+   "filament_detected": true,
+   "enabled": true
+  },
+  "filament_entangle_detect e3_filament": {
+   "detect_factor": 1
+  },
+  "power_loss_check e3": {
+   "initialized": 0,
+   "high_level_tick": 4294967295,
+   "low_level_tick": 4294967295,
+   "voltage_type": 255,
+   "power_loss_flag": 0,
+   "duty_percent": 0
+  },
+  "filament_feed left": {
+   "extruder1": {
+    "module_exist": true,
+    "filament_detected": true,
+    "disable_auto": false,
+    "channel_state": "load_finish",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "load_finish"
+   },
+   "extruder0": {
+    "module_exist": true,
+    "filament_detected": false,
+    "disable_auto": false,
+    "channel_state": "wait_insert",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "unload_finish"
+   }
+  },
+  "filament_feed right": {
+   "extruder2": {
+    "module_exist": true,
+    "filament_detected": true,
+    "disable_auto": false,
+    "channel_state": "load_finish",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "load_finish"
+   },
+   "extruder3": {
+    "module_exist": true,
+    "filament_detected": true,
+    "disable_auto": false,
+    "channel_state": "load_finish",
+    "channel_error": "ok",
+    "channel_error_state": "none",
+    "channel_action_state": "load_finish"
+   }
+  },
+  "gcode_macro _FILAMENT_FEED_VARIABLE": {
+   "module_sequence": [
+    "left",
+    "left",
+    "right",
+    "right"
+   ],
+   "channel_sequence": [
+    1,
+    0,
+    0,
+    1
+   ]
+  },
+  "idle_timeout": {
+   "state": "Printing",
+   "printing_time": 34906.88197268598
+  },
+  "filament_parameters": {},
+  "defect_detection": {
+   "main_enable": true,
+   "sen_high_factor": 0.2,
+   "sen_low_factor": 0.5,
+   "clean_bed": {
+    "enable": true,
+    "check_window": 3,
+    "sensitivity": "low"
+   },
+   "noodle": {
+    "enable": true,
+    "check_window": 10,
+    "sensitivity": "low"
+   },
+   "residue": {
+    "enable": false,
+    "check_window": 10,
+    "sensitivity": "low"
+   },
+   "nozzle": {
+    "enable": false,
+    "sensitivity": "low"
+   }
+  },
+  "motion_report": {
+   "live_position": [
+    153.51154401029456,
+    212.74676874386438,
+    18.80786701673114,
+    130288.92849337487
+   ],
+   "live_velocity": 68.29842541628759,
+   "live_extruder_velocity": 2.0989629781774957,
+   "steppers": [
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3",
+    "stepper_x",
+    "stepper_y",
+    "stepper_z"
+   ],
+   "trapq": [
+    "extruder",
+    "extruder1",
+    "extruder2",
+    "extruder3",
+    "toolhead"
+   ]
+  },
+  "query_endstops": {
+   "last_query": {}
+  },
+  "system_stats": {
+   "sysload": 0.85546875,
+   "cputime": 93908.385418411,
+   "memavail": 671532
+  },
+  "manual_probe": {
+   "is_active": false,
+   "z_position": null,
+   "z_position_lower": null,
+   "z_position_upper": null
+  },
+  "machine_state_manager": {
+   "main_state": 1,
+   "action_code": 0
+  },
+  "toolhead": {
+   "homed_axes": "xyz",
+   "axis_minimum": [
+    0,
+    0,
+    -6,
+    0
+   ],
+   "axis_maximum": [
+    271,
+    335,
+    275,
+    0
+   ],
+   "print_time": 429194.1640379298,
+   "stalls": 28,
+   "estimated_print_time": 429192.15220900835,
+   "extruder": "extruder2",
+   "position": [
+    174.82932893715218,
+    204.81999377833597,
+    18.784159844068373,
+    130293.12441387313
+   ],
+   "max_velocity": 500,
+   "max_accel": 10000,
+   "minimum_cruise_ratio": 0.5,
+   "square_corner_velocity": 8
+  },
+  "extruder": {
+   "temperature": 29,
+   "target": 0,
+   "power": 0,
+   "can_extrude": false,
+   "extruder_index": 0,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": -10,
+   "activating_move": false,
+   "state": "PARKED",
+   "park_pin": true,
+   "active_pin": false,
+   "grab_valid_pin": false,
+   "real_extruder_stats": [
+    "extruder2",
+    0
+   ],
+   "extruder_offset": [
+    0.11943823106831175,
+    -0.03414734381490803,
+    0
+   ],
+   "switch_count": 7796,
+   "retry_count": 58,
+   "error_count": 0,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.02,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  },
+  "extruder1": {
+   "temperature": 65,
+   "target": 65,
+   "power": 0.006420762622813943,
+   "can_extrude": false,
+   "extruder_index": 1,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": -10,
+   "activating_move": false,
+   "state": "PARKED",
+   "park_pin": true,
+   "active_pin": false,
+   "grab_valid_pin": false,
+   "real_extruder_stats": [
+    "extruder2",
+    0
+   ],
+   "extruder_offset": [
+    -0.1924731499919261,
+    0.0448290211800213,
+    -0.20849999999749969
+   ],
+   "switch_count": 9622,
+   "retry_count": 0,
+   "error_count": 1,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.023353,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  },
+  "extruder2": {
+   "temperature": 215,
+   "target": 215,
+   "power": 0.19342077168757593,
+   "can_extrude": true,
+   "extruder_index": 2,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": 0,
+   "activating_move": false,
+   "state": "ACTIVATE",
+   "park_pin": false,
+   "active_pin": true,
+   "grab_valid_pin": true,
+   "real_extruder_stats": [
+    "extruder2",
+    0
+   ],
+   "extruder_offset": [
+    -0.05417622167208336,
+    -0.05538125924738324,
+    -0.16599999999499992
+   ],
+   "switch_count": 7784,
+   "retry_count": 0,
+   "error_count": 0,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.027077,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  },
+  "extruder3": {
+   "temperature": 65,
+   "target": 65,
+   "power": 0.05926357302341572,
+   "can_extrude": false,
+   "extruder_index": 3,
+   "nozzle_diameter": 0.4,
+   "nozzle_volume_type": "standard",
+   "printing_e_pos": -10,
+   "activating_move": false,
+   "state": "PARKED",
+   "park_pin": true,
+   "active_pin": false,
+   "grab_valid_pin": false,
+   "real_extruder_stats": [
+    "extruder2",
+    0
+   ],
+   "extruder_offset": [
+    0.1924731499919261,
+    0.05538125924738324,
+    -0.07633333332577807
+   ],
+   "switch_count": 6336,
+   "retry_count": 0,
+   "error_count": 2,
+   "last_maintenance_count": 0,
+   "pressure_advance": 0.022592,
+   "smooth_time": 0.04,
+   "motion_queue": null
+  }
+ }
+}

@@ -1,6 +1,6 @@
 // remote-access/Ed25519Identity.js — per-installation Ed25519 keypair
 // generation, encoding, and request signing for the Milestone B backend
-// contract (see D:\code\scbe\snapcon-api\docs\CLIENT_INTEGRATION.md, which
+// contract (see the provisioning backend's docs/CLIENT_INTEGRATION.md, which
 // this module implements exactly). Pure crypto: no filesystem/store
 // knowledge, same narrow-utility shape as redact.js/serialize.js.
 const nodeCrypto = require("node:crypto");

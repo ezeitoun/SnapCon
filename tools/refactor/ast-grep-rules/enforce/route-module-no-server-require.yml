@@ -1,0 +1,11 @@
+id: route-module-no-server-require
+language: javascript
+severity: error
+message: A route module must not require server.js; inject what it needs (register<Area>Routes(app, deps)).
+files: ["**/routes/**"]
+ignores: ["test/**", "tools/**", "**/test/**", "**/tools/**", "**/node_modules/**"]
+rule:
+  pattern: require($P)
+constraints:
+  P:
+    regex: "^['\"](\\./|\\.\\./)+server(\\.js)?['\"]$"

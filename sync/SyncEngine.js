@@ -17,6 +17,14 @@ const { createSyncStore } = require("./SyncStore");
 
 const ROOTS = new Set(["logs", "camera", "gcodes"]);
 
+// What a new run resets. lastSyncAt is deliberately absent: it keeps showing
+// the previous run's time until this one finishes.
+const RUN_RESET = {
+  total: 0, completed: 0,
+  downloaded: 0, skipped: 0, failed: 0,
+  currentFile: null, lastError: null, deletedFromSource: 0
+};
+
 // Filesystem-safe per-printer subfolder name — same reasoning as SnapSync's
 // own sanitize_filename: strip characters illegal on Windows, trim trailing
 // dots/spaces (a Windows-only quirk that silently mangles paths otherwise),
@@ -55,15 +63,10 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
   const key = (printerId, root) => printerId + "|" + root;
 
   function getStatus(printerId, root) {
-    return statuses.get(key(printerId, root)) || {
-      phase: "idle", total: 0, completed: 0,
-      downloaded: 0, skipped: 0, failed: 0,
-      currentFile: null, lastError: null, lastSyncAt: null, deletedFromSource: 0
-    };
+    return statuses.get(key(printerId, root)) || { phase: "idle", ...RUN_RESET, lastSyncAt: null };
   }
   function setStatus(printerId, root, patch) {
-    const k = key(printerId, root);
-    statuses.set(k, { ...getStatus(printerId, root), ...patch });
+    statuses.set(key(printerId, root), { ...getStatus(printerId, root), ...patch });
   }
 
   // Retention cleanup: delete a file from the PRINTER only when every one of
@@ -112,11 +115,7 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
     const k = key(p.id, root);
     if (locks.has(k)) throw new Error("A sync is already running for this printer");
     locks.add(k);
-    setStatus(p.id, root, {
-      phase: "listing", total: 0, completed: 0,
-      downloaded: 0, skipped: 0, failed: 0,
-      currentFile: null, lastError: null, deletedFromSource: 0
-    });
+    setStatus(p.id, root, { phase: "listing", ...RUN_RESET });
     let releaseNetwork = null;
     try {
       if (fileIO.isNetworkPath(destRootFolder)) {
@@ -142,6 +141,7 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
         if (destinationDown(destDir)) throw new Error("The sync folder " + destRootFolder + " stopped answering");
         setStatus(p.id, root, { currentFile: f.path, completed: i });
         const localPath = path.join(destDir, ...f.path.split("/"));
+        const record = { printerId: p.id, root, remotePath: f.path, remoteSize: f.size, remoteModified: f.modified };
 
         const existing = store.getEntry(p.id, root, f.path);
         let alreadyValid = false;
@@ -165,19 +165,11 @@ function createSyncEngine({ baseDir, getConnector, fileIO = defaultFileIO }) {
           await fileIO.mkdir(path.dirname(localPath), { recursive: true });
           try { await c.downloadSyncFile(p, root, f.path, localPath, f.size); }
           catch (e) { fileIO.noteError(localPath, e); throw e; }
-          store.recordSynced({
-            printerId: p.id, root, remotePath: f.path,
-            remoteSize: f.size, remoteModified: f.modified,
-            localPath, status: "downloaded"
-          });
+          store.recordSynced({ ...record, localPath, status: "downloaded" });
           downloaded++;
           setStatus(p.id, root, { downloaded });
         } catch (e) {
-          store.recordSynced({
-            printerId: p.id, root, remotePath: f.path,
-            remoteSize: f.size, remoteModified: f.modified,
-            localPath: null, status: "failed", errorMessage: e.message
-          });
+          store.recordSynced({ ...record, localPath: null, status: "failed", errorMessage: e.message });
           failed++;
           setStatus(p.id, root, { failed, lastError: e.message });
         }

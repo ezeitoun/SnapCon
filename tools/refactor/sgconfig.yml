@@ -1,0 +1,7 @@
+# ast-grep project for SnapCon refactoring (docs/refactoring-policy.md).
+# Enforcement rules gate a refactor only after their tests pass (sg test) and
+# their hits on the real repository have been reviewed.
+ruleDirs:
+  - ast-grep-rules/enforce
+testConfigs:
+  - testDir: ast-grep-rules/tests

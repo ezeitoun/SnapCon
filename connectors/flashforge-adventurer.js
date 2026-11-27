@@ -35,7 +35,11 @@ exports.brand = "FlashForge";
 // the advanced override, and is authoritative under a pin.
 exports.address = { scheme: "http", defaultPort: null, portEditable: true, required: true };
 exports.capabilities = {
-  camera: true, cameraSnapshot: true, filamentHeads: false, excludeObject: false, autoLevel: false,
+  camera: true, cameraSnapshot: true, filamentHeads: false, excludeObject: false,
+  // The native start's levelingBeforePrint flag (verified live on a 5M PRO,
+  // docs/TODO.md §40). Moonraker mode does not send it, so moonrakerCaps
+  // turns this back off.
+  autoLevel: true,
   unloadFilament: false, firmwareInfo: false, inventory: false, discovery: false,
   // The 8898 JSON API has no browsable dashboard at all (confirmed live —
   // its root path 404s), unlike Klipper/Moonraker printers which commonly
@@ -219,7 +223,17 @@ const moonrakerOnly = (what, fn) => async (p, ...args) => {
   return fn(asMoon(p), ...args);
 };
 
-exports.uploadFile = byMode(ff.uploadFile, http.uploadFile);
+// Confirmed live on a 5M Pro (stock firmware, native API, 2026-10-20): every
+// upload SnapCon cut off part-way leaves "failed to download model" on the
+// printer's screen until someone dismisses it there (docs/TODO.md §28), and
+// SnapCon cannot see it. The error says so, so the page can tell the operator.
+// Only on this connector's native transport: the AD5X has not been checked
+// (§33), and nothing is known about an upload the printer received in full.
+async function nativeUploadFile(p, ...args) {
+  try { return await ff.uploadFile(p, ...args); }
+  catch (e) { if (e && e.abortedMidBody) e.printerPrompt = true; throw e; }
+}
+exports.uploadFile = byMode(nativeUploadFile, http.uploadFile);
 // Ordinary print-control commands get an explicit bound, not moonrakerPost's
 // 8s fast-command default. /printer/gcode/script BLOCKS until the script
 // finishes, and CANCEL_PRINT runs the printer's whole end-of-print routine --
@@ -257,6 +271,9 @@ exports.estop = async p => {
 exports.bedTemp = byMode(ff.bedTemp, (p, t) => http.sendGcode(p, "M140 S" + Math.round(t), CONTROL_TIMEOUT_MS));
 
 exports.listFiles = byMode(ff.listFiles, http.listFiles);
+// Read back after an upload (docs/TODO.md §37 P2): by name on the stock API,
+// by content over Moonraker.
+exports.verifyUpload = byMode(ff.verifyUpload, http.verifyUpload);
 exports.getThumbnail = byMode(ff.getThumbnail, http.getThumbnail);
 exports.getFileMetadata = byMode(ff.getFileMetadata, http.getFileMetadata);
 // Native derives its stream URL from the printer's own host already
@@ -281,7 +298,19 @@ exports.getCameraSnapshot = async p => {
 // UI offers a control the backend then refuses as "not supported".
 exports.getPlate = moonrakerOnly("Exclude-object", http.getPlate);
 exports.excludeObject = moonrakerOnly("Exclude-object", http.excludeObject);
-exports.getHealth = moonrakerOnly("Health", http.queryHealth);
+// Health (docs/TODO.md §50) answers expected states instead of throwing —
+// a throw here left GET /api/health unanswered. Offline first, before any
+// transport detection (an unreachable printer has nothing to detect, and the
+// detection's fallback would otherwise call it "stock firmware"); then stock
+// firmware, which has no Health data; then ZMOD's Moonraker Health as before.
+// The offline answer is queryHealth()'s own, plus a reasonCode.
+exports.getHealth = async (p, st) => {
+  if (!st || !st.online) return { online: false, skipped: true, reason: (st && st.error) || "offline", reasonCode: "offline" };
+  if ((await currentMode(p)) !== "moonraker") {
+    return { online: true, skipped: true, reason: "Health is not available on this printer's stock firmware", reasonCode: "unsupported_firmware" };
+  }
+  return http.queryHealth(asMoon(p), st);
+};
 exports.getFirmwareInfo = moonrakerOnly("Firmware info", http.queryFirmwareInfo);
 exports.querySyncFiles = moonrakerOnly("File sync", http.querySyncFiles);
 exports.downloadSyncFile = moonrakerOnly("File sync", http.downloadSyncFile);
@@ -295,8 +324,8 @@ exports.deleteFile = moonrakerOnly("Deleting files", http.deleteFile);
 // NOT byMode, for the same reason as getCameraSnapshot above: this reads the
 // profile, and byMode would hand it a url-rewritten printer that invalidates
 // the cache entry on lookup.
-exports.startPrintFile = async (p, filename) => {
-  if ((await currentMode(p)) !== "moonraker") return ff.startPrintFile(asNative(p), filename);
+exports.startPrintFile = async (p, filename, opts = {}) => {
+  if ((await currentMode(p)) !== "moonraker") return ff.startPrintFile(asNative(p), filename, opts);
   // Only POSITIVE evidence that the firmware leaves the built-in command alone
   // permits a print start. An absent profile means "not looked at yet", not
   // "safe", so resolve it through the established profile-building path first.
